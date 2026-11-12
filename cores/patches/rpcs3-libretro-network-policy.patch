@@ -1,0 +1,107 @@
+diff --git a/rpcs3/Emu/System.cpp b/rpcs3/Emu/System.cpp
+index 5710048..0c387a2 100644
+--- a/rpcs3/Emu/System.cpp
++++ b/rpcs3/Emu/System.cpp
+@@ -289,6 +289,10 @@ void init_fxo_for_exec(utils::serial* ar, bool full = false)
+ }
+ 
+ // Some settings are not allowed with certain conditions
++#ifdef LIBRETRO_CORE
++extern void apply_anyps5_network_policy();
++#endif
++
+ static void fixup_settings(const psf::registry* _psf)
+ {
+ 	// Disable some incompatible settings in headless mode
+@@ -385,6 +389,11 @@ static void fixup_settings(const psf::registry* _psf)
+ 		}
+ 	}
+ 
++#ifdef LIBRETRO_CORE
++	// Global, title and database settings may have just been overlaid.
++	apply_anyps5_network_policy();
++#endif
++
+ 	if (g_cfg.net.net_active == np_internet_status::disabled && g_cfg.net.psn_status != np_psn_status::disabled)
+ 	{
+ 		sys_log.warning("Net status was set to disconnected so PSN status was disabled.");
+diff --git a/rpcs3/libretro/libretro_core.cpp b/rpcs3/libretro/libretro_core.cpp
+index e0dd588..fc7f4d4 100644
+--- a/rpcs3/libretro/libretro_core.cpp
++++ b/rpcs3/libretro/libretro_core.cpp
+@@ -192,6 +192,59 @@ bool g_libretro_vulkan_hw = false;
+ // Core state
+ static bool core_initialized = false;
+ static bool game_loaded = false;
++
++// The launcher opts in before retro_init. Other libretro frontends keep their
++// standard network options and configuration precedence.
++struct anyps5_network_policy
++{
++    bool online;
++    xfloat_accuracy xfloat;
++    std::string dns;
++    bool upnp;
++};
++static std::optional<anyps5_network_policy> anyps5_policy;
++
++void apply_anyps5_network_policy()
++{
++    if (!anyps5_policy)
++        return;
++    const auto& policy = *anyps5_policy;
++    g_cfg.net.net_active.set(policy.online ? np_internet_status::enabled : np_internet_status::disabled);
++    g_cfg.net.psn_status.set(policy.online ? np_psn_status::psn_rpcn : np_psn_status::disabled);
++    g_cfg.net.upnp_enabled.set(policy.online && policy.upnp);
++    if (policy.online)
++    {
++        g_cfg.net.dns.from_string(policy.dns);
++        g_cfg.core.spu_xfloat_accuracy.set(policy.xfloat);
++        g_cfg.vfs.host_root.set(false);
++    }
++}
++
++extern "C" RETRO_API bool retro_anyps5_ps3_network_policy_v1(unsigned mode, const char* accuracy,
++                                                            const char* dns, bool upnp)
++{
++    if (core_initialized || mode > 1)
++        return false;
++    if (mode == 0)
++    {
++        anyps5_policy = anyps5_network_policy{false, xfloat_accuracy::approximate, {}, false};
++        return true;
++    }
++    if (!accuracy || !dns)
++        return false;
++    const std::string_view address(dns);
++    if (address != "8.8.8.8" && address != "1.1.1.1" && address != "208.67.222.222")
++        return false;
++    const std::string_view precision(accuracy);
++    xfloat_accuracy xfloat;
++    if (precision == "accurate") xfloat = xfloat_accuracy::accurate;
++    else if (precision == "approximate") xfloat = xfloat_accuracy::approximate;
++    else if (precision == "relaxed") xfloat = xfloat_accuracy::relaxed;
++    else if (precision == "inaccurate") xfloat = xfloat_accuracy::inaccurate;
++    else return false;
++    anyps5_policy = anyps5_network_policy{true, xfloat, std::string(address), upnp};
++    return true;
++}
+ static bool pending_game_boot = false;
+ static std::string game_path;
+ // The disc image a game was loaded from, empty for anything else: a reset
+@@ -1041,6 +1094,7 @@ static void libretro_apply_core_options()
+             : psn == "rpcn" ? np_psn_status::psn_rpcn : np_psn_status::disabled);
+         g_cfg.net.upnp_enabled.set(get_option_value("rpcs3_upnp", "disabled") == "enabled");
+         g_cfg.net.dns.from_string(get_option_value("rpcs3_dns", "8.8.8.8"));
++        apply_anyps5_network_policy();
+     }
+     g_cfg.misc.show_rpcn_popups.set(get_option_value("rpcs3_show_rpcn_popups", "enabled") == "enabled");
+     g_cfg.misc.show_trophy_popups.set(get_option_value("rpcs3_show_trophy_popups", "enabled") == "enabled");
+@@ -2108,6 +2162,7 @@ void retro_deinit(void)
+     Emulator::CleanUp();
+     core_initialized = false;
+     game_loaded = false;
++    anyps5_policy.reset();
+ 
+     // Last, once nothing is logging any more: unlink both listeners, and let
+     // the file logger flush and join its writer thread here rather than in a

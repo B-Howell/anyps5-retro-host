@@ -1,0 +1,148 @@
+diff --git a/rpcs3/Emu/NP/np_handler.cpp b/rpcs3/Emu/NP/np_handler.cpp
+--- a/rpcs3/Emu/NP/np_handler.cpp
++++ b/rpcs3/Emu/NP/np_handler.cpp
+@@ -1,4 +1,7 @@
+ #include "stdafx.h"
++#ifdef LIBRETRO_CORE
++#include "libretro/anyps5_provider_status.h"
++#endif
+ #include "Emu/system_config.h"
+ #include "Emu/NP/np_handler.h"
+ #include "Emu/Cell/PPUCallback.h"
+@@ -804,7 +807,13 @@
+ 		case np_psn_status::psn_rpcn:
+ 		{
+ 			if (!is_psn_active)
++			{
++#ifdef LIBRETRO_CORE
++				auto expected = anyps5::provider_status::waiting;
++				anyps5::ps3_provider_status.compare_exchange_strong(expected, anyps5::provider_status::connection_failed);
++#endif
+ 				break;
++			}
+ 
+ 			std::lock_guard lock(mutex_rpcn);
+ 
+@@ -816,12 +825,19 @@
+ 				was_already_started = false;
+ 			}
+ 
++#ifdef LIBRETRO_CORE
++			anyps5::ps3_provider_status = anyps5::provider_status::connecting;
++#endif
++
+ 			// Make sure we're connected
+ 
+ 			if (auto state = rpcn->wait_for_connection(); state != rpcn::rpcn_state::failure_no_failure)
+ 			{
+ 				rsx::overlays::queue_message(rpcn::rpcn_state_to_localized_string_id(state));
+ 				rpcn_log.error("Connection to RPCN Failed!");
++#ifdef LIBRETRO_CORE
++				anyps5::ps3_provider_status = anyps5::provider_status::connection_failed;
++#endif
+ 				is_psn_active = false;
+ 				return;
+ 			}
+@@ -830,6 +846,22 @@
+ 			{
+ 				rsx::overlays::queue_message(rpcn::rpcn_state_to_localized_string_id(state));
+ 				rpcn_log.error("RPCN login attempt failed!");
++#ifdef LIBRETRO_CORE
++				using rpcn::rpcn_state;
++				switch (state)
++				{
++				case rpcn_state::failure_id:
++				case rpcn_state::failure_id_already_logged_in:
++				case rpcn_state::failure_id_username:
++				case rpcn_state::failure_id_password:
++				case rpcn_state::failure_id_token:
++					anyps5::ps3_provider_status = anyps5::provider_status::login_rejected;
++					break;
++				default:
++					anyps5::ps3_provider_status = anyps5::provider_status::connection_failed;
++					break;
++				}
++#endif
+ 				is_psn_active = false;
+ 				return;
+ 			}
+@@ -839,12 +871,18 @@
+ 
+ 			string_to_online_name(rpcn->get_online_name(), online_name);
+ 			string_to_avatar_url(rpcn->get_avatar_url(), avatar_url);
++#ifdef LIBRETRO_CORE
++			anyps5::ps3_provider_status = anyps5::provider_status::signaling;
++#endif
+ 			public_ip_addr = rpcn->get_addr_sig();
+ 
+ 			if (!public_ip_addr)
+ 			{
+ 				rsx::overlays::queue_message(rpcn::rpcn_state_to_localized_string_id(rpcn::rpcn_state::failure_other));
+ 				rpcn_log.error("Failed to get a reply from RPCN signaling!");
++#ifdef LIBRETRO_CORE
++				anyps5::ps3_provider_status = anyps5::provider_status::signaling_failed;
++#endif
+ 				is_psn_active = false;
+ 				rpcn->terminate_connection();
+ 				return;
+@@ -852,6 +890,9 @@
+ 
+ 			local_ip_addr  = std::bit_cast<u32, be_t<u32>>(rpcn->get_addr_local());
+ 
++#ifdef LIBRETRO_CORE
++			anyps5::ps3_provider_status = anyps5::provider_status::ready;
++#endif
+ 			break;
+ 		}
+ 		default:
+diff --git a/rpcs3/libretro/anyps5_provider_status.h b/rpcs3/libretro/anyps5_provider_status.h
+new file mode 100644
+--- /dev/null
++++ b/rpcs3/libretro/anyps5_provider_status.h
+@@ -0,0 +1,20 @@
++#pragma once
++
++#include <atomic>
++#include <cstdint>
++
++namespace anyps5
++{
++enum class provider_status : std::int32_t
++{
++    waiting = 0,
++    connecting = 1,
++    signaling = 2,
++    ready = 3,
++    connection_failed = 4,
++    login_rejected = 5,
++    signaling_failed = 6,
++};
++
++inline std::atomic<provider_status> ps3_provider_status{provider_status::waiting};
++}
+diff --git a/rpcs3/libretro/libretro_core.cpp b/rpcs3/libretro/libretro_core.cpp
+--- a/rpcs3/libretro/libretro_core.cpp
++++ b/rpcs3/libretro/libretro_core.cpp
+@@ -9,6 +9,7 @@
+ #include "libretro_core.h"
+ #include "libretro_core_options.h"
+ #include "anyps5_patch_attestation.h"
++#include "anyps5_provider_status.h"
+ #include "libretro_patch_manager.h"
+ #include "Loader/PSF.h"
+ 
+@@ -2775,8 +2776,14 @@
+ static bool s_pkg_install_only = false;
+ static u32 s_pkg_install_frames = 0;
+ 
++extern "C" RETRO_API std::int32_t retro_anyps5_ps3_provider_status_v1()
++{
++    return static_cast<std::int32_t>(anyps5::ps3_provider_status.load());
++}
++
+ bool retro_load_game(const struct retro_game_info* game)
+ {
++    anyps5::ps3_provider_status = anyps5::provider_status::waiting;
+ 
+ 
+     if (!game || !game->path)

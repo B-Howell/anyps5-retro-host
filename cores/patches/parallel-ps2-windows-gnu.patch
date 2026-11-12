@@ -1,0 +1,16 @@
+diff --git a/cmake/BuildParameters.cmake b/cmake/BuildParameters.cmake
+--- a/cmake/BuildParameters.cmake
++++ b/cmake/BuildParameters.cmake
+@@ -4,5 +4,6 @@
+ execute_process(
+     COMMAND git rev-parse --short HEAD
++    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+     OUTPUT_VARIABLE GIT_VERSION
+     OUTPUT_STRIP_TRAILING_WHITESPACE
+ )
+diff --git a/pcsx2/CMakeLists.txt b/pcsx2/CMakeLists.txt
+--- a/pcsx2/CMakeLists.txt
++++ b/pcsx2/CMakeLists.txt
+@@ -582 +582 @@
+-	if(WIN32)
++	if(MSVC)

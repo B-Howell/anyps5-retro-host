@@ -1,0 +1,13 @@
+diff --git a/src/core/spu.cpp b/src/core/spu.cpp
+index 2149a33..ae5ba69 100644
+--- a/src/core/spu.cpp
++++ b/src/core/spu.cpp
+@@ -193,6 +193,7 @@ bool SPU::DoState(StateWrapper& sw)
+       }
+     }
+
+-    UpdateEventInterval();
++    // The always-active sample event is restored by TimingEvents::DoState.
++    // Updating it here can execute ticks from the timeline being discarded.
+     UpdateTransferEvent();
+   }

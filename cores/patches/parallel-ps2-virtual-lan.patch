@@ -1,0 +1,110 @@
+diff --git a/pcsx2/DEV9/anyps5_virtual_lan.h b/pcsx2/DEV9/anyps5_virtual_lan.h
+new file mode 100644
+index 0000000..c9de99e
+--- /dev/null
++++ b/pcsx2/DEV9/anyps5_virtual_lan.h
+@@ -0,0 +1,27 @@
++/* SPDX-License-Identifier: LGPL-3.0-or-later */
++#pragma once
++
++#include <libretro.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++/* Bind before retro_load_game and unbind after retro_unload_game. The core
++ * copies the descriptor. Keep opaque and the callbacks alive until unbind.
++ * Callbacks run on the emulator's transmit and receive threads. They may not
++ * block, and send must copy any frame it keeps after returning. recv returns
++ * the frame length or zero for an empty queue. Frames have no FCS. */
++struct retro_anyps5_dev9_transport_v1
++{
++	void* opaque;
++	uint8_t mac[6];
++	bool (RETRO_CALLCONV *send)(void* opaque, const void* bytes, size_t size);
++	size_t (RETRO_CALLCONV *recv)(void* opaque, void* bytes, size_t capacity);
++};
++
++RETRO_API bool retro_anyps5_dev9_bind_v1(const struct retro_anyps5_dev9_transport_v1* transport);
++
++#ifdef __cplusplus
++}
++#endif
+diff --git a/pcsx2/DEV9/net.cpp b/pcsx2/DEV9/net.cpp
+index e423e1a..5aa1167 100644
+--- a/pcsx2/DEV9/net.cpp
++++ b/pcsx2/DEV9/net.cpp
+@@ -25,6 +25,7 @@
+ #include <retro_timers.h>
+ #include "net.h"
+ #include "DEV9.h"
++#include "anyps5_virtual_lan.h"
+ #ifdef _WIN32
+ #endif
+ #ifdef HAVE_PCAP
+@@ -189,8 +190,64 @@ void ad_reset()
+ 		nif->reset();
+ }
+ 
++static retro_anyps5_dev9_transport_v1 s_virtual_lan{};
++
++RETRO_API bool retro_anyps5_dev9_bind_v1(const retro_anyps5_dev9_transport_v1* transport)
++{
++	if (nif)
++		return false;
++	if (!transport)
++	{
++		s_virtual_lan = {};
++		return true;
++	}
++	const uint8_t zero_mac[6] = {};
++	if (!transport->send || !transport->recv || (transport->mac[0] & 1) ||
++		memcmp(transport->mac, zero_mac, sizeof(zero_mac)) == 0)
++		return false;
++	s_virtual_lan = *transport;
++	return true;
++}
++
++class AnyPs5VirtualLan final : public NetAdapter
++{
++	static constexpr size_t MIN_FRAME = 14;
++	static constexpr size_t MAX_FRAME = 1514;
++	const retro_anyps5_dev9_transport_v1 m_transport;
++
++public:
++	explicit AnyPs5VirtualLan(const retro_anyps5_dev9_transport_v1& transport)
++		: m_transport(transport)
++	{
++		PacketReader::MAC_Address mac{};
++		memcpy(&mac, m_transport.mac, sizeof(m_transport.mac));
++		SetMACAddress(&mac);
++	}
++
++	bool isInitialised() override { return true; }
++	void reloadSettings() override {}
++
++	bool recv(NetPacket* pkt) override
++	{
++		const size_t size = m_transport.recv(m_transport.opaque, pkt->buffer, MAX_FRAME);
++		if (size < MIN_FRAME || size > MAX_FRAME)
++			return false;
++		pkt->size = static_cast<int>(size);
++		return true;
++	}
++
++	bool send(NetPacket* pkt) override
++	{
++		return pkt->size >= static_cast<int>(MIN_FRAME) && pkt->size <= static_cast<int>(MAX_FRAME) &&
++			m_transport.send(m_transport.opaque, pkt->buffer, static_cast<size_t>(pkt->size));
++	}
++};
++
+ NetAdapter* GetNetAdapter()
+ {
++	if (s_virtual_lan.send)
++		return new AnyPs5VirtualLan(s_virtual_lan);
++
+ 	NetAdapter* na = nullptr;
+ 
+ 	switch (EmuConfig.DEV9.EthApi)

@@ -1,0 +1,186 @@
+diff --git a/rpcs3/Emu/NP/rpcn_client.cpp b/rpcs3/Emu/NP/rpcn_client.cpp
+index 885b29f..259cef0 100644
+--- a/rpcs3/Emu/NP/rpcn_client.cpp
++++ b/rpcs3/Emu/NP/rpcn_client.cpp
+@@ -1,4 +1,8 @@
+ #include "stdafx.h"
++#ifdef LIBRETRO_CORE
++#include "Crypto/utils.h"
++#include "libretro/anyps5_patch_attestation.h"
++#endif
+ #include "Emu/Cell/lv2/sys_net/sys_net_helpers.h"
+ #include "Emu/NP/ip_address.h"
+ #include <string>
+@@ -987,6 +991,15 @@ namespace rpcn
+ 
+ 		state = rpcn_state::failure_no_failure;
+ 
++#ifdef LIBRETRO_CORE
++		const auto* identity = anyps5_ps3::required_rpcn_identity();
++		if (identity && identity->host != host)
++		{
++			rpcn_log.error("connect: RPCN host does not match the AnyPS5 provider policy");
++			state = rpcn_state::failure_input;
++			return false;
++		}
++#endif
+ 		const auto hostname_and_port = parse_rpcn_host(host);
+ 
+ 		if (!hostname_and_port)
+@@ -1147,6 +1160,25 @@ namespace rpcn
+ 				return false;
+ 			}
+ 
++#ifdef LIBRETRO_CORE
++			if (identity)
++			{
++				std::unique_ptr<WOLFSSL_X509, decltype(&wolfSSL_X509_free)> peer{
++					wolfSSL_get_peer_certificate(read_wssl), wolfSSL_X509_free};
++				int size = 0;
++				const auto* der = peer ? wolfSSL_X509_get_der(peer.get(), &size) : nullptr;
++				if (!der || size <= 0 || sha256_get_hash(reinterpret_cast<const char*>(der),
++					static_cast<usz>(size), true) != identity->certificate_sha256)
++				{
++					rpcn_log.error("connect: RPCN certificate does not match the AnyPS5 provider policy");
++					peer.reset();
++					disconnect();
++					state = rpcn_state::failure_wolfssl;
++					return false;
++				}
++				rpcn_log.notice("connect: AnyPS5 provider certificate verified");
++			}
++#endif
+ 			rpcn_log.notice("connect: Handshake successful");
+ 
+ 			if ((write_wssl = wolfSSL_write_dup(read_wssl)) == NULL)
+diff --git a/rpcs3/libretro/anyps5_patch_attestation.h b/rpcs3/libretro/anyps5_patch_attestation.h
+index 685f54f..f58901a 100644
+--- a/rpcs3/libretro/anyps5_patch_attestation.h
++++ b/rpcs3/libretro/anyps5_patch_attestation.h
+@@ -62,6 +62,30 @@ inline std::optional<patch_requirement> make_patch_requirement(
+     return result;
+ }
+ 
++struct rpcn_identity
++{
++    std::string host;
++    std::string certificate_sha256;
++};
++
++inline std::optional<rpcn_identity> make_rpcn_identity(const char* host, const char* certificate)
++{
++    if (!host || !certificate)
++        return std::nullopt;
++    const std::string_view endpoint(host), digest(certificate);
++    const auto endpoint_char = [](char c)
++    {
++        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
++            (c >= '0' && c <= '9') || c == '.' || c == '-' || c == ':';
++    };
++    const auto hex = [](char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'); };
++    if (endpoint.empty() || endpoint.size() > 255 || !std::ranges::all_of(endpoint, endpoint_char) ||
++        digest.size() != 64 || !std::ranges::all_of(digest, hex))
++        return std::nullopt;
++    return rpcn_identity{host, certificate};
++}
++
++const rpcn_identity* required_rpcn_identity();
+ const patch_requirement* required_patch();
+ void begin_patch_verification();
+ void finish_patch_verification();
+diff --git a/rpcs3/libretro/libretro_core.cpp b/rpcs3/libretro/libretro_core.cpp
+index e6d28e7..3933041 100644
+--- a/rpcs3/libretro/libretro_core.cpp
++++ b/rpcs3/libretro/libretro_core.cpp
+@@ -206,6 +206,12 @@ struct anyps5_network_policy
+ static std::optional<anyps5_network_policy> anyps5_policy;
+ 
+ static std::optional<anyps5_ps3::patch_requirement> anyps5_required_patch;
++static std::optional<anyps5_ps3::rpcn_identity> anyps5_rpcn_identity;
++
++const anyps5_ps3::rpcn_identity* anyps5_ps3::required_rpcn_identity()
++{
++    return anyps5_rpcn_identity ? &*anyps5_rpcn_identity : nullptr;
++}
+ static std::atomic<bool> anyps5_patch_verified{false};
+ 
+ const anyps5_ps3::patch_requirement* anyps5_ps3::required_patch()
+@@ -242,17 +248,23 @@ void anyps5_ps3::finish_patch_verification()
+     apply_anyps5_network_policy();
+ }
+ 
+-extern "C" RETRO_API bool retro_anyps5_ps3_network_policy_v1(unsigned mode, const char* accuracy,
+-                                                            const char* dns, bool upnp)
++extern "C" RETRO_API bool retro_anyps5_ps3_network_policy_v1(unsigned mode, const char*, const char*, bool)
+ {
+-    if (core_initialized || anyps5_required_patch || mode > 1)
++    if (core_initialized || anyps5_required_patch || mode != 0)
+         return false;
+-    if (mode == 0)
+-    {
+-        anyps5_policy = anyps5_network_policy{false, xfloat_accuracy::approximate, {}, false};
+-        return true;
+-    }
+-    if (!accuracy || !dns)
++    anyps5_policy = anyps5_network_policy{false, xfloat_accuracy::approximate, {}, false};
++    return true;
++}
++
++static bool select_anyps5_protected_policy(
++    std::optional<anyps5_ps3::rpcn_identity> identity, const char* accuracy, const char* dns, bool upnp,
++    const char* title, const char* version, const char* sha256, const char* ppu_hash,
++    unsigned count, const char* const* names, const unsigned* writes)
++{
++    if (core_initialized || anyps5_required_patch || !accuracy || !dns)
++        return false;
++    auto required = anyps5_ps3::make_patch_requirement(title, version, sha256, ppu_hash, count, names, writes);
++    if (!required)
+         return false;
+     const std::string_view address(dns);
+     if (address != "8.8.8.8" && address != "1.1.1.1" && address != "208.67.222.222")
+@@ -264,7 +276,9 @@ extern "C" RETRO_API bool retro_anyps5_ps3_network_policy_v1(unsigned mode, cons
+     else if (precision == "relaxed") xfloat = xfloat_accuracy::relaxed;
+     else if (precision == "inaccurate") xfloat = xfloat_accuracy::inaccurate;
+     else return false;
+-    anyps5_policy = anyps5_network_policy{true, xfloat, std::string(address), upnp};
++    anyps5_policy = anyps5_network_policy{identity.has_value(), xfloat, std::string(address), upnp};
++    anyps5_rpcn_identity = std::move(identity);
++    anyps5_required_patch = std::move(required);
+     return true;
+ }
+ 
+@@ -273,12 +287,20 @@ extern "C" RETRO_API bool retro_anyps5_ps3_network_policy_v2(
+     const char* title, const char* version, const char* sha256, const char* ppu_hash,
+     unsigned count, const char* const* names, const unsigned* writes)
+ {
+-    auto required = anyps5_ps3::make_patch_requirement(title, version, sha256, ppu_hash, count, names, writes);
+-    if (!required || !retro_anyps5_ps3_network_policy_v1(1, accuracy, dns, upnp))
+-        return false;
+-    anyps5_required_patch = std::move(required);
+-    anyps5_policy->online = connect;
+-    return true;
++    // Older clients can still run a disconnected verification probe.
++    return !connect && select_anyps5_protected_policy(std::nullopt, accuracy, dns, upnp, title, version,
++        sha256, ppu_hash, count, names, writes);
++}
++
++extern "C" RETRO_API bool retro_anyps5_ps3_network_policy_v3(
++    const char* accuracy, const char* dns, bool upnp,
++    const char* host, const char* certificate_sha256,
++    const char* title, const char* version, const char* sha256, const char* ppu_hash,
++    unsigned count, const char* const* names, const unsigned* writes)
++{
++    auto identity = anyps5_ps3::make_rpcn_identity(host, certificate_sha256);
++    return identity && select_anyps5_protected_policy(std::move(identity), accuracy, dns, upnp, title,
++        version, sha256, ppu_hash, count, names, writes);
+ }
+ 
+ static void report_anyps5_protected_boot_failure()
+@@ -2211,6 +2233,7 @@ void retro_deinit(void)
+     game_loaded = false;
+     anyps5_policy.reset();
+     anyps5_required_patch.reset();
++    anyps5_rpcn_identity.reset();
+     anyps5_patch_verified.store(false);
+ 
+     // Last, once nothing is logging any more: unlink both listeners, and let

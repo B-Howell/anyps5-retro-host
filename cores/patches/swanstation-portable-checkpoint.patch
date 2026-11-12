@@ -1,0 +1,114 @@
+diff --git a/src/core/system.cpp b/src/core/system.cpp
+index 5adc67f..4cde501 100644
+--- a/src/core/system.cpp
++++ b/src/core/system.cpp
+@@ -1126,7 +1126,7 @@ bool DoLoadState(ByteStream* state, bool force_software_renderer, bool update_di
+   return true;
+ }
+ 
+-bool SaveState(ByteStream* state)
++bool SaveState(ByteStream* state, bool include_media_path)
+ {
+   if (IsShutdown())
+     return false;
+@@ -1140,10 +1140,11 @@ bool SaveState(ByteStream* state)
+   // fill in header
+   header.magic = SAVE_STATE_MAGIC;
+   header.version = SAVE_STATE_VERSION;
+-  strlcpy(header.title, s_running_game_title.c_str(), sizeof(header.title));
++  if (include_media_path)
++    strlcpy(header.title, s_running_game_title.c_str(), sizeof(header.title));
+   strlcpy(header.game_code, s_running_game_code.c_str(), sizeof(header.game_code));
+ 
+-  if (g_cdrom.HasMedia())
++  if (include_media_path && g_cdrom.HasMedia())
+   {
+     const std::string& media_filename = g_cdrom.GetMediaFileName();
+     header.offset_to_media_filename = static_cast<uint32_t>(state->GetPosition());
+diff --git a/src/core/system.h b/src/core/system.h
+index dca5e57..bf22034 100644
+--- a/src/core/system.h
++++ b/src/core/system.h
+@@ -96,7 +96,7 @@ void Shutdown();
+ /// media_path, when set, replaces the media named in the state.
+ bool LoadState(ByteStream* state, bool is_memory_state = false, bool restore_on_failure = false,
+                const char* media_path = nullptr, uint32_t media_subimage_index = 0);
+-bool SaveState(ByteStream* state);
++bool SaveState(ByteStream* state, bool include_media_path = true);
+ 
+ /// Recreates the GPU component, saving/loading the state so it is preserved. Call when the GPU renderer changes.
+ bool RecreateGPU(GPURenderer renderer, bool update_display = true);
+diff --git a/src/libretro/libretro_host_interface.cpp b/src/libretro/libretro_host_interface.cpp
+index 6f97a84..ad6df47 100644
+--- a/src/libretro/libretro_host_interface.cpp
++++ b/src/libretro/libretro_host_interface.cpp
+@@ -44,6 +44,9 @@ constexpr uint32_t DISK_STATE_VERSION = 1;
+ constexpr uint32_t DISK_STATE_EJECTED = 1;
+ constexpr uint32_t DISK_STATE_NO_DISC = 2;
+ constexpr uint32_t DISK_STATE_CONTAINER = 4;
++constexpr std::array<uint8_t, 8> PORTABLE_CHECKPOINT_V1 = {'A', 'P', '5', 'C', 'K', 'P', 'T', 1};
++constexpr size_t CHECKPOINT_DISC_HASH_SIZE = 32;
++constexpr size_t CHECKPOINT_PREFIX_SIZE = PORTABLE_CHECKPOINT_V1.size() + CHECKPOINT_DISC_HASH_SIZE;
+ 
+ struct DiskStateHeader
+ {
+@@ -160,6 +163,59 @@ RETRO_API bool retro_unserialize(const void* data, size_t size)
+   return g_host_interface_storage.retro_unserialize(data, size);
+ }
+ 
++// The frontend passes the 32-byte SHA-256 of its verified, currently mounted disc.
++extern "C" RETRO_API size_t retro_anyps5_export_checkpoint_v1(void* data, size_t capacity,
++                                                             const uint8_t* disc_hash)
++{
++  if (!data || !disc_hash || capacity <= CHECKPOINT_PREFIX_SIZE ||
++      capacity - CHECKPOINT_PREFIX_SIZE > System::MAX_SAVE_STATE_SIZE || !System::HasMedia() ||
++      System::GetRunningCode().empty())
++    return 0;
++
++  auto* bytes = static_cast<uint8_t*>(data);
++  auto stream = ByteStream_CreateMemoryStream(bytes + CHECKPOINT_PREFIX_SIZE,
++                                             static_cast<uint32_t>(capacity - CHECKPOINT_PREFIX_SIZE));
++  if (!System::SaveState(stream.get(), false))
++    return 0;
++
++  std::memcpy(bytes, PORTABLE_CHECKPOINT_V1.data(), PORTABLE_CHECKPOINT_V1.size());
++  std::memcpy(bytes + PORTABLE_CHECKPOINT_V1.size(), disc_hash, CHECKPOINT_DISC_HASH_SIZE);
++  return CHECKPOINT_PREFIX_SIZE + static_cast<size_t>(stream->GetPosition());
++}
++
++extern "C" RETRO_API bool retro_anyps5_import_checkpoint_v1(const void* data, size_t size,
++                                                           const uint8_t* disc_hash)
++{
++  const size_t prefix = CHECKPOINT_PREFIX_SIZE;
++  if (!data || !disc_hash || size <= prefix + sizeof(SAVE_STATE_HEADER) || size - prefix > System::MAX_SAVE_STATE_SIZE ||
++      !System::HasMedia())
++    return false;
++
++  const auto* bytes = static_cast<const uint8_t*>(data);
++  if (std::memcmp(bytes, PORTABLE_CHECKPOINT_V1.data(), PORTABLE_CHECKPOINT_V1.size()) != 0 ||
++      std::memcmp(bytes + PORTABLE_CHECKPOINT_V1.size(), disc_hash, CHECKPOINT_DISC_HASH_SIZE) != 0)
++    return false;
++
++  SAVE_STATE_HEADER header;
++  std::memcpy(&header, bytes + prefix, sizeof(header));
++  const std::string& code = System::GetRunningCode();
++  char expected_code[sizeof(header.game_code)] = {};
++  if (code.empty() || code.size() >= sizeof(expected_code))
++    return false;
++  std::memcpy(expected_code, code.data(), code.size());
++  if (header.magic != SAVE_STATE_MAGIC || header.version != SAVE_STATE_VERSION || header.media_filename_length ||
++      header.offset_to_media_filename || header.media_subimage_index || header.data_compression_type ||
++      header.offset_to_data != sizeof(header) || header.data_uncompressed_size != size - prefix - sizeof(header) ||
++      std::memcmp(header.game_code, expected_code, sizeof(expected_code)) != 0)
++    return false;
++
++  const std::string local_media = System::GetMediaFileName();
++  if (local_media.empty())
++    return false;
++  auto stream = ByteStream_CreateReadOnlyMemoryStream(bytes + prefix, static_cast<uint32_t>(size - prefix));
++  return System::LoadState(stream.get(), false, true, local_media.c_str(), System::GetMediaSubImageIndex());
++}
++
+ RETRO_API void retro_cheat_reset(void)
+ {
+   g_host_interface_storage.retro_cheat_reset();

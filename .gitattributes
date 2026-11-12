@@ -1,2 +1,9 @@
-* text=auto eol=lf
-*.cmd text eol=crlf
+cores/build-rpcs3-preview.sh text eol=lf
+cores/ps3_refresh_probe.sh text eol=lf
+cores/patches/rpcs3-libretro-frontend.patch text eol=lf
+cores/patches/swanstation-spu-checkpoint.patch text eol=lf
+cores/patches/rpcs3-libretro-network-policy.patch text eol=lf whitespace=-blank-at-eol,-space-before-tab
+cores/patches/rpcs3-libretro-patch-attestation.patch text eol=lf whitespace=-blank-at-eol,-space-before-tab
+cores/patches/rpcs3-libretro-rpcn-identity.patch text eol=lf whitespace=-blank-at-eol,-space-before-tab
+cores/patches/rpcs3-libretro-provider-status.patch text eol=lf whitespace=-blank-at-eol,-space-before-tab
+cores/patches/parallel-ps2-portable-gif-state.patch text eol=lf whitespace=-blank-at-eol,-space-before-tab

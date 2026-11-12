@@ -1,0 +1,249 @@
+diff --git a/src/core/memory_card.cpp b/src/core/memory_card.cpp
+index 27368c8..9fa859b 100644
+--- a/src/core/memory_card.cpp
++++ b/src/core/memory_card.cpp
+@@ -50,6 +50,24 @@ void MemoryCard::Reset()
+   m_FLAG.no_write_yet = true;
+ }
+
++bool MemoryCard::CanExportBlank() const
++{
++  return m_state == State::Idle && !m_save_event->IsActive();
++}
++
++bool MemoryCard::DoBlankState(StateWrapper& sw) const
++{
++  if (!sw.IsWriting() || !CanExportBlank())
++    return false;
++
++  // Preserve the status that the console sees when it selects this slot.
++  // Use a clean data image and transfer fields with no card contents.
++  auto blank = Create();
++  blank->m_FLAG = m_FLAG;
++  blank->m_changed = m_changed;
++  return blank->DoState(sw);
++}
++
+ bool MemoryCard::DoState(StateWrapper& sw)
+ {
+   if (sw.IsReading())
+diff --git a/src/core/memory_card.h b/src/core/memory_card.h
+index 96f5486..865935c 100644
+--- a/src/core/memory_card.h
++++ b/src/core/memory_card.h
+@@ -27,6 +27,8 @@ public:
+
+   void Reset();
+   bool DoState(StateWrapper& sw);
++  bool CanExportBlank() const;
++  bool DoBlankState(StateWrapper& sw) const;
+
+   void ResetTransferState();
+   bool Transfer(const uint8_t data_in, uint8_t* data_out);
+diff --git a/src/core/pad.cpp b/src/core/pad.cpp
+index 6cc1285..5f248b3 100644
+--- a/src/core/pad.cpp
++++ b/src/core/pad.cpp
+@@ -85,7 +85,7 @@ bool Pad::DoStateController(StateWrapper& sw, uint32_t i)
+   return true;
+ }
+
+-bool Pad::DoStateMemcard(StateWrapper& sw, uint32_t i)
++bool Pad::DoStateMemcard(StateWrapper& sw, uint32_t i, bool blank_cards)
+ {
+   bool card_present_in_state = static_cast<bool>(m_memory_cards[i]);
+
+@@ -101,7 +101,7 @@ bool Pad::DoStateMemcard(StateWrapper& sw, uint32_t i)
+
+   if (card_present_in_state)
+   {
+-    if (!sw.DoMarker("MemoryCard") || !card_ptr->DoState(sw))
++    if (!sw.DoMarker("MemoryCard") || !(blank_cards ? card_ptr->DoBlankState(sw) : card_ptr->DoState(sw)))
+       return false;
+   }
+
+@@ -139,7 +139,23 @@ bool Pad::DoStateMemcard(StateWrapper& sw, uint32_t i)
+   return true;
+ }
+
+-bool Pad::DoState(StateWrapper& sw)
++bool Pad::CanExportBlankCards()
++{
++  // An unread response can outlive the card transaction that supplied it.
++  if (m_receive_buffer_full || m_active_device == ActiveDevice::MemoryCard ||
++      (m_active_device == ActiveDevice::Multitap && m_multitaps[m_JOY_CTRL.SLOT].IsReadingMemoryCard()))
++    return false;
++
++  for (const auto& card : m_memory_cards)
++  {
++    if (card && !card->CanExportBlank())
++      return false;
++  }
++
++  return true;
++}
++
++bool Pad::DoState(StateWrapper& sw, bool blank_cards)
+ {
+   for (uint32_t i = 0; i < NUM_CONTROLLER_AND_CARD_PORTS; i++)
+   {
+@@ -162,7 +178,7 @@ bool Pad::DoState(StateWrapper& sw)
+     if (!DoStateController(sw, i))
+       return false;
+
+-    if (!DoStateMemcard(sw, i))
++    if (!DoStateMemcard(sw, i, blank_cards))
+       return false;
+   }
+
+@@ -180,7 +196,16 @@ bool Pad::DoState(StateWrapper& sw)
+   sw.Do(&m_JOY_STAT.bits);
+   sw.Do(&m_JOY_MODE.bits);
+   sw.Do(&m_JOY_BAUD);
+-  sw.Do(&m_receive_buffer);
++  if (blank_cards)
++  {
++    // An empty receive buffer can retain the last card response.
++    uint8_t empty_receive_buffer = 0;
++    sw.Do(&empty_receive_buffer);
++  }
++  else
++  {
++    sw.Do(&m_receive_buffer);
++  }
+   sw.Do(&m_transmit_buffer);
+   sw.Do(&m_receive_buffer_full);
+   sw.Do(&m_transmit_buffer_full);
+diff --git a/src/core/pad.h b/src/core/pad.h
+index 8241894..ed6d460 100644
+--- a/src/core/pad.h
++++ b/src/core/pad.h
+@@ -21,7 +21,8 @@ public:
+   void Initialize();
+   void Shutdown();
+   void Reset();
+-  bool DoState(StateWrapper& sw);
++  bool DoState(StateWrapper& sw, bool blank_cards = false);
++  bool CanExportBlankCards();
+
+   Controller* GetController(uint32_t slot) const { return m_controllers[slot].get(); }
+   void SetController(uint32_t slot, std::unique_ptr<Controller> dev);
+@@ -111,7 +112,7 @@ private:
+   void ResetDeviceTransferState();
+
+   bool DoStateController(StateWrapper& sw, uint32_t i);
+-  bool DoStateMemcard(StateWrapper& sw, uint32_t i);
++  bool DoStateMemcard(StateWrapper& sw, uint32_t i, bool blank_cards);
+
+   std::array<std::unique_ptr<Controller>, NUM_CONTROLLER_AND_CARD_PORTS> m_controllers;
+   std::array<std::unique_ptr<MemoryCard>, NUM_CONTROLLER_AND_CARD_PORTS> m_memory_cards;
+diff --git a/src/core/system.cpp b/src/core/system.cpp
+index 4cde501..a8ca2a2 100644
+--- a/src/core/system.cpp
++++ b/src/core/system.cpp
+@@ -80,7 +80,8 @@ static void UpdatePerGameMemoryCards();
+
+ static bool DoLoadState(ByteStream* stream, bool force_software_renderer, bool update_display, bool is_memory_state,
+                         const char* media_path = nullptr, uint32_t media_subimage_index = 0);
+-static bool DoState(StateWrapper& sw, HostDisplayTexture** host_texture, bool update_display, bool is_memory_state);
++static bool DoState(StateWrapper& sw, HostDisplayTexture** host_texture, bool update_display, bool is_memory_state,
++                    bool blank_cards = false);
+ static void DoRunFrame();
+ static bool CreateGPU(GPURenderer renderer);
+
+@@ -845,7 +846,8 @@ bool CreateGPU(GPURenderer renderer)
+   return true;
+ }
+
+-bool DoState(StateWrapper& sw, HostDisplayTexture** host_texture, bool update_display, bool is_memory_state)
++bool DoState(StateWrapper& sw, HostDisplayTexture** host_texture, bool update_display, bool is_memory_state,
++             bool blank_cards)
+ {
+   if (!sw.DoMarker("System"))
+     return false;
+@@ -888,7 +890,7 @@ bool DoState(StateWrapper& sw, HostDisplayTexture** host_texture, bool update_di
+   if (!sw.DoMarker("CDROM") || !g_cdrom.DoState(sw))
+     return false;
+
+-  if (!sw.DoMarker("Pad") || !g_pad.DoState(sw))
++  if (!sw.DoMarker("Pad") || !g_pad.DoState(sw, blank_cards))
+     return false;
+
+   if (!sw.DoMarker("Timers") || !g_timers.DoState(sw))
+@@ -1126,9 +1128,9 @@ bool DoLoadState(ByteStream* state, bool force_software_renderer, bool update_di
+   return true;
+ }
+
+-bool SaveState(ByteStream* state, bool include_media_path)
++bool SaveState(ByteStream* state, bool include_media_path, bool blank_cards)
+ {
+-  if (IsShutdown())
++  if (IsShutdown() || (blank_cards && !g_pad.CanExportBlankCards()))
+     return false;
+
+   SAVE_STATE_HEADER header = {};
+@@ -1161,7 +1163,7 @@ bool SaveState(ByteStream* state, bool include_media_path)
+     g_gpu->RestoreGraphicsAPIState();
+
+     StateWrapper sw(state, StateWrapper::Mode::Write, SAVE_STATE_VERSION);
+-    const bool result = DoState(sw, nullptr, false, false);
++    const bool result = DoState(sw, nullptr, false, false, blank_cards);
+
+     g_gpu->ResetGraphicsAPIState();
+
+diff --git a/src/core/system.h b/src/core/system.h
+index bf22034..6dc0fce 100644
+--- a/src/core/system.h
++++ b/src/core/system.h
+@@ -96,7 +96,7 @@ void Shutdown();
+ /// media_path, when set, replaces the media named in the state.
+ bool LoadState(ByteStream* state, bool is_memory_state = false, bool restore_on_failure = false,
+                const char* media_path = nullptr, uint32_t media_subimage_index = 0);
+-bool SaveState(ByteStream* state, bool include_media_path = true);
++bool SaveState(ByteStream* state, bool include_media_path = true, bool blank_cards = false);
+
+ /// Recreates the GPU component, saving/loading the state so it is preserved. Call when the GPU renderer changes.
+ bool RecreateGPU(GPURenderer renderer, bool update_display = true);
+diff --git a/src/libretro/libretro_host_interface.cpp b/src/libretro/libretro_host_interface.cpp
+index ad6df47..4744eeb 100644
+--- a/src/libretro/libretro_host_interface.cpp
++++ b/src/libretro/libretro_host_interface.cpp
+@@ -164,8 +164,7 @@ RETRO_API bool retro_unserialize(const void* data, size_t size)
+ }
+
+ // The frontend passes the 32-byte SHA-256 of its verified, currently mounted disc.
+-extern "C" RETRO_API size_t retro_anyps5_export_checkpoint_v1(void* data, size_t capacity,
+-                                                             const uint8_t* disc_hash)
++static size_t ExportPortableCheckpoint(void* data, size_t capacity, const uint8_t* disc_hash, bool blank_cards)
+ {
+   if (!data || !disc_hash || capacity <= CHECKPOINT_PREFIX_SIZE ||
+       capacity - CHECKPOINT_PREFIX_SIZE > System::MAX_SAVE_STATE_SIZE || !System::HasMedia() ||
+@@ -175,7 +174,7 @@ extern "C" RETRO_API size_t retro_anyps5_export_checkpoint_v1(void* data, size_t
+   auto* bytes = static_cast<uint8_t*>(data);
+   auto stream = ByteStream_CreateMemoryStream(bytes + CHECKPOINT_PREFIX_SIZE,
+                                              static_cast<uint32_t>(capacity - CHECKPOINT_PREFIX_SIZE));
+-  if (!System::SaveState(stream.get(), false))
++  if (!System::SaveState(stream.get(), false, blank_cards))
+     return 0;
+
+   std::memcpy(bytes, PORTABLE_CHECKPOINT_V1.data(), PORTABLE_CHECKPOINT_V1.size());
+@@ -183,6 +182,19 @@ extern "C" RETRO_API size_t retro_anyps5_export_checkpoint_v1(void* data, size_t
+   return CHECKPOINT_PREFIX_SIZE + static_cast<size_t>(stream->GetPosition());
+ }
+
++extern "C" RETRO_API size_t retro_anyps5_export_checkpoint_v1(void* data, size_t capacity,
++                                                             const uint8_t* disc_hash)
++{
++  return ExportPortableCheckpoint(data, capacity, disc_hash, false);
++}
++
++// Used only for starting a match from local play. Never fall back to a full-card export.
++extern "C" RETRO_API size_t retro_anyps5_export_blank_card_checkpoint_v1(void* data, size_t capacity,
++                                                                        const uint8_t* disc_hash)
++{
++  return ExportPortableCheckpoint(data, capacity, disc_hash, true);
++}
++
+ extern "C" RETRO_API bool retro_anyps5_import_checkpoint_v1(const void* data, size_t size,
+                                                            const uint8_t* disc_hash)
+ {

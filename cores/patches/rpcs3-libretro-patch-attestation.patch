@@ -1,0 +1,502 @@
+diff --git a/Utilities/bin_patch.cpp b/Utilities/bin_patch.cpp
+index 61d1743..149eb9a 100644
+--- a/Utilities/bin_patch.cpp
++++ b/Utilities/bin_patch.cpp
+@@ -9,6 +9,10 @@
+ #include "Emu/System.h"
+ #include "Emu/VFS.h"
+ 
++#ifdef LIBRETRO_CORE
++#include "Crypto/utils.h"
++#endif
++
+ #include "util/types.hpp"
+ #include "util/asm.hpp"
+ #include "util/cctype.hpp"
+@@ -908,6 +912,60 @@ void patch_engine::append_title_patches(std::string_view title_id)
+ 	load(m_map, fmt::format("%s%s_patch.yml", get_patches_path(), title_id));
+ }
+ 
++#ifdef LIBRETRO_CORE
++bool patch_engine::load_verified_title_patch(const std::string& title, const std::string& version,
++	const std::string& sha256, const std::string& hash, const std::map<std::string, unsigned>& expected)
++{
++	const std::string path = fmt::format("%s%s_patch.yml", get_patches_path(), title);
++	const fs::file file{path};
++	if (!file)
++		return false;
++
++	const u64 size = file.size();
++	if (!size || size > 1024 * 1024)
++		return false;
++	std::string content(size, '\0');
++	if (file.read(content.data(), size) != size || file.size() != size ||
++		sha256_get_hash(content.data(), content.size(), true) != sha256)
++		return false;
++
++	// Ignore user configuration and base/imported definitions for this boot.
++	patch_map reviewed;
++	if (!load(reviewed, path, std::move(content), true) || reviewed.size() != 1 || !reviewed.contains(hash))
++		return false;
++	auto& patches = reviewed.at(hash).patch_info_map;
++	if (patches.size() != expected.size())
++		return false;
++
++	for (auto& [description, patch] : patches)
++	{
++		if (!expected.contains(description))
++			return false;
++		bool found = false;
++		for (auto& [game, serials] : patch.titles)
++		{
++			for (auto& [serial, versions] : serials)
++			{
++				for (auto& [revision, settings] : versions)
++				{
++					const bool exact = serial == title && revision == version;
++					if (exact && found)
++						return false;
++					settings.enabled = exact;
++					found |= exact;
++				}
++			}
++		}
++		if (!found)
++			return false;
++	}
++
++	m_map = std::move(reviewed);
++	m_applied_groups.clear();
++	return true;
++}
++#endif
++
+ void unmap_vm_area(std::shared_ptr<vm::block_t>& ptr)
+ {
+ 	if (ptr && ptr->flags & (1ull << 62))
+@@ -1457,7 +1515,7 @@ static usz apply_modification(std::vector<u32>& applied, patch_engine::patch_inf
+ 	return old_applied_size;
+ }
+ 
+-void patch_engine::apply(std::vector<u32>& applied_total, const std::string& name, std::function<u8*(u32, u32)> mem_translate, u32 filesz, u32 min_addr)
++void patch_engine::apply(std::vector<u32>& applied_total, const std::string& name, std::function<u8*(u32, u32)> mem_translate, u32 filesz, u32 min_addr, std::map<std::string, unsigned>* counts)
+ {
+ 	// applied_total may be non-empty, do not clear it
+ 
+@@ -1603,6 +1661,8 @@ void patch_engine::apply(std::vector<u32>& applied_total, const std::string& nam
+ 
+ 				if (applied_total.size() != old_size)
+ 				{
++					if (counts)
++						(*counts)[patch->description] += static_cast<unsigned>(applied_total.size() - old_size);
+ 					patch_log.success("Applied patch (hash='%s', description='%s', author='%s', patch_version='%s', file_version='%s') (<- %u)",
+ 						patch->hash, patch->description, patch->author, patch->patch_version, patch->version, applied_total.size() - old_size);
+ 				}
+diff --git a/Utilities/bin_patch.h b/Utilities/bin_patch.h
+index 1e06c54..b17de77 100644
+--- a/Utilities/bin_patch.h
++++ b/Utilities/bin_patch.h
+@@ -214,8 +214,14 @@ public:
+ 	// Load from title relevant files and append to member patches map
+ 	void append_title_patches(std::string_view title_id);
+ 
++#ifdef LIBRETRO_CORE
++	bool load_verified_title_patch(const std::string& title, const std::string& version,
++		const std::string& sha256, const std::string& hash, const std::map<std::string, unsigned>& expected);
++#endif
++
+ 	// Apply patch (returns the number of entries applied)
+-	void apply(std::vector<u32>& applied_total, const std::string& name, std::function<u8*(u32, u32)> mem_translate, u32 filesz = -1, u32 min_addr = 0);
++	void apply(std::vector<u32>& applied_total, const std::string& name, std::function<u8*(u32, u32)> mem_translate, u32 filesz = -1, u32 min_addr = 0,
++		std::map<std::string, unsigned>* counts = nullptr);
+ 
+ 	// Deallocate memory used by patches
+ 	void unload(const std::string& name);
+diff --git a/rpcs3/Emu/Cell/PPUModule.cpp b/rpcs3/Emu/Cell/PPUModule.cpp
+index eeda8bd..75e467f 100644
+--- a/rpcs3/Emu/Cell/PPUModule.cpp
++++ b/rpcs3/Emu/Cell/PPUModule.cpp
+@@ -1,4 +1,9 @@
+ #include "stdafx.h"
++
++#ifdef LIBRETRO_CORE
++#include "libretro/anyps5_patch_attestation.h"
++#endif
++
+ #include "Emu/Cell/PPUModule.h"
+ 
+ #include "Utilities/bin_patch.h"
+@@ -2469,12 +2474,33 @@ bool ppu_load_exec(const ppu_exec_object& elf, bool virtual_load, const std::str
+ 
+ 	// Apply the patch
+ 	std::vector<u32> applied;
+-	g_fxo->get<patch_engine>().apply(applied, !ar ? hash : std::string{}, [&](u32 addr, u32 size) { return _main.get_ptr<u8>(addr, size);  });
++	auto& patches = g_fxo->get<patch_engine>();
++	const auto translate = [&](u32 addr, u32 size) { return _main.get_ptr<u8>(addr, size); };
++#ifdef LIBRETRO_CORE
++	const auto* required = virtual_load ? nullptr : anyps5_ps3::required_patch();
++	if (required)
++	{
++		if (ar || !required->matches_executable(Emu.GetTitleID(), Emu.GetAppVersion(), hash) ||
++			!patches.load_verified_title_patch(required->title, required->version, required->sha256, hash, required->writes))
++		{
++			ppu_loader.error("AnyPS5: PS3 online protection identity could not be verified");
++			return false;
++		}
+ 
+-	if (!ar && !Emu.GetTitleID().empty())
++		anyps5_ps3::patch_writes actual;
++		patches.apply(applied, hash, translate, -1, 0, &actual);
++		if (actual != required->writes)
++		{
++			ppu_loader.error("AnyPS5: PS3 online protection operations did not match");
++			return false;
++		}
++	}
++	else if (!anyps5_ps3::required_patch())
++#endif
+ 	{
+-		// Alternative patch
+-		g_fxo->get<patch_engine>().apply(applied, Emu.GetTitleID() + '-' + hash, [&](u32 addr, u32 size) { return _main.get_ptr<u8>(addr, size); });
++		patches.apply(applied, !ar ? hash : std::string{}, translate);
++		if (!ar && !Emu.GetTitleID().empty())
++			patches.apply(applied, Emu.GetTitleID() + '-' + hash, translate);
+ 	}
+ 
+ 	if (!applied.empty() || ar)
+@@ -2744,6 +2770,13 @@ bool ppu_load_exec(const ppu_exec_object& elf, bool virtual_load, const std::str
+ 			ensure(g_fxo->init<lv2_memory_container>(mem_size));
+ 		}
+ 
++#ifdef LIBRETRO_CORE
++		if (required)
++		{
++			anyps5_ps3::finish_patch_verification();
++			ppu_loader.notice("AnyPS5: verified PS3 online protection");
++		}
++#endif
+ 		void init_fxo_for_exec(utils::serial* ar, bool full);
+ 		init_fxo_for_exec(ar, false);
+ 
+diff --git a/rpcs3/Emu/System.cpp b/rpcs3/Emu/System.cpp
+index 0c387a2..d235ea0 100644
+--- a/rpcs3/Emu/System.cpp
++++ b/rpcs3/Emu/System.cpp
+@@ -1,4 +1,9 @@
+ #include "stdafx.h"
++
++#ifdef LIBRETRO_CORE
++#include "libretro/anyps5_patch_attestation.h"
++#endif
++
+ #include "VFS.h"
+ #include "Utilities/bin_patch.h"
+ #include "Emu/Memory/vm.h"
+@@ -1209,6 +1214,11 @@ game_boot_result Emulator::Load(const std::string& title_id, bool is_disc_patch,
+ 		return game_boot_result::still_running;
+ 	}
+ 
++#ifdef LIBRETRO_CORE
++	if (anyps5_ps3::required_patch())
++		anyps5_ps3::begin_patch_verification();
++#endif
++
+ 	struct cleanup_t
+ 	{
+ 		Emulator* _this;
+@@ -1266,6 +1276,11 @@ game_boot_result Emulator::Load(const std::string& title_id, bool is_disc_patch,
+ 		}
+ 	}
+ 
++#ifdef LIBRETRO_CORE
++	if (m_ar && anyps5_ps3::required_patch())
++		return game_boot_result::currently_restricted;
++#endif
++
+ 	if (!title_id.empty())
+ 	{
+ 		m_title_id = title_id;
+@@ -1895,8 +1910,13 @@ game_boot_result Emulator::Load(const std::string& title_id, bool is_disc_patch,
+ 			g_fxo->need<patch_engine>();
+ 
+ 			// Load patches from different locations
+-			g_fxo->get<patch_engine>().append_global_patches();
+-			g_fxo->get<patch_engine>().append_title_patches(m_title_id);
++#ifdef LIBRETRO_CORE
++			if (!anyps5_ps3::required_patch())
++#endif
++			{
++				g_fxo->get<patch_engine>().append_global_patches();
++				g_fxo->get<patch_engine>().append_title_patches(m_title_id);
++			}
+ 		}
+ 
+ 		// Set bdvd_dir
+@@ -1936,6 +1956,10 @@ game_boot_result Emulator::Load(const std::string& title_id, bool is_disc_patch,
+ 		// Special boot mode (directory scan)
+ 		if (!launching_from_disc_archive && fs::is_dir(m_path))
+ 		{
++#ifdef LIBRETRO_CORE
++			if (anyps5_ps3::required_patch())
++				return game_boot_result::invalid_file_or_folder;
++#endif
+ 			m_state = system_state::ready;
+ 			g_emu_callbacks.on_ready();
+ 			ensure(g_fxo->init<main_ppu_module<lv2_obj>>());
+@@ -2616,6 +2640,11 @@ game_boot_result Emulator::Load(const std::string& title_id, bool is_disc_patch,
+ 			}
+ 		}
+ 
++#ifdef LIBRETRO_CORE
++		if (anyps5_ps3::required_patch() && (m_ar || ppu_exec != elf_error::ok))
++			return game_boot_result::invalid_file_or_folder;
++#endif
++
+ 		m_state = system_state::ready;
+ 
+ 		ppu_prx_object ppu_prx;
+@@ -2766,6 +2795,13 @@ game_boot_result Emulator::Load(const std::string& title_id, bool is_disc_patch,
+ 			// Overlay (OVL) executable (only load it)
+ 			else
+ 			{
++#ifdef LIBRETRO_CORE
++				if (anyps5_ps3::required_patch())
++				{
++					Kill(false);
++					return game_boot_result::invalid_file_or_folder;
++				}
++#endif
+ 				g_emu_callbacks.on_ready();
+ 				g_fxo->init(false);
+ 
+diff --git a/rpcs3/libretro/anyps5_patch_attestation.h b/rpcs3/libretro/anyps5_patch_attestation.h
+new file mode 100644
+index 0000000..685f54f
+--- /dev/null
++++ b/rpcs3/libretro/anyps5_patch_attestation.h
+@@ -0,0 +1,68 @@
++#pragma once
++
++#include <algorithm>
++#include <map>
++#include <optional>
++#include <string>
++#include <string_view>
++#include <utility>
++
++namespace anyps5_ps3
++{
++using patch_writes = std::map<std::string, unsigned>;
++
++struct patch_requirement
++{
++    std::string title;
++    std::string version;
++    std::string sha256;
++    std::string ppu_hash;
++    patch_writes writes;
++
++    bool matches_executable(std::string_view serial, std::string_view revision, std::string_view hash) const
++    {
++        return title == serial && version == revision && ppu_hash == hash;
++    }
++};
++
++inline std::optional<patch_requirement> make_patch_requirement(
++    const char* title, const char* version, const char* sha256, const char* ppu_hash,
++    unsigned count, const char* const* names, const unsigned* writes)
++{
++    if (!title || !version || !sha256 || !ppu_hash || !count || count > 8 || !names || !writes)
++        return std::nullopt;
++
++    const std::string_view serial(title), revision(version), digest(sha256), hash(ppu_hash);
++    const auto digit = [](char c) { return c >= '0' && c <= '9'; };
++    const auto letter = [](char c) { return c >= 'A' && c <= 'Z'; };
++    const auto hex = [&](char c) { return digit(c) || (c >= 'a' && c <= 'f'); };
++    if (serial.size() != 9 || !std::ranges::all_of(serial.substr(0, 4), letter) ||
++        !std::ranges::all_of(serial.substr(4), digit) ||
++        revision.size() != 5 || revision[2] != '.' || !std::ranges::all_of(revision.substr(0, 2), digit) ||
++        !std::ranges::all_of(revision.substr(3), digit) ||
++        digest.size() != 64 || !std::ranges::all_of(digest, hex) ||
++        hash.size() != 44 || !hash.starts_with("PPU-") || !std::ranges::all_of(hash.substr(4), hex))
++        return std::nullopt;
++
++    patch_requirement result{title, version, sha256, ppu_hash, {}};
++    const auto name_character = [&](char c)
++    {
++        return digit(c) || letter(c) || (c >= 'a' && c <= 'z') ||
++            std::string_view{" ._()-"}.find(c) != std::string_view::npos;
++    };
++    for (unsigned i = 0; i < count; ++i)
++    {
++        if (!names[i] || !writes[i] || writes[i] > 4096)
++            return std::nullopt;
++        const std::string_view name(names[i]);
++        if (name.empty() || name.size() > 96 || !std::ranges::all_of(name, name_character) ||
++            !result.writes.emplace(name, writes[i]).second)
++            return std::nullopt;
++    }
++    return result;
++}
++
++const patch_requirement* required_patch();
++void begin_patch_verification();
++void finish_patch_verification();
++}
+diff --git a/rpcs3/libretro/libretro_core.cpp b/rpcs3/libretro/libretro_core.cpp
+index 594508f..e6d28e7 100644
+--- a/rpcs3/libretro/libretro_core.cpp
++++ b/rpcs3/libretro/libretro_core.cpp
+@@ -8,6 +8,7 @@
+ #include "libretro.h"
+ #include "libretro_core.h"
+ #include "libretro_core_options.h"
++#include "anyps5_patch_attestation.h"
+ #include "libretro_patch_manager.h"
+ #include "Loader/PSF.h"
+ 
+@@ -204,15 +205,24 @@ struct anyps5_network_policy
+ };
+ static std::optional<anyps5_network_policy> anyps5_policy;
+ 
++static std::optional<anyps5_ps3::patch_requirement> anyps5_required_patch;
++static std::atomic<bool> anyps5_patch_verified{false};
++
++const anyps5_ps3::patch_requirement* anyps5_ps3::required_patch()
++{
++    return anyps5_required_patch ? &*anyps5_required_patch : nullptr;
++}
++
+ void apply_anyps5_network_policy()
+ {
+     if (!anyps5_policy)
+         return;
+     const auto& policy = *anyps5_policy;
+-    g_cfg.net.net_active.set(policy.online ? np_internet_status::enabled : np_internet_status::disabled);
+-    g_cfg.net.psn_status.set(policy.online ? np_psn_status::psn_rpcn : np_psn_status::disabled);
+-    g_cfg.net.upnp_enabled.set(policy.online && policy.upnp);
+-    if (policy.online)
++    const bool online = policy.online && (!anyps5_required_patch || anyps5_patch_verified.load());
++    g_cfg.net.net_active.set(online ? np_internet_status::enabled : np_internet_status::disabled);
++    g_cfg.net.psn_status.set(online ? np_psn_status::psn_rpcn : np_psn_status::disabled);
++    g_cfg.net.upnp_enabled.set(online && policy.upnp);
++    if (policy.online || anyps5_required_patch)
+     {
+         g_cfg.net.dns.from_string(policy.dns);
+         g_cfg.core.spu_xfloat_accuracy.set(policy.xfloat);
+@@ -220,10 +230,22 @@ void apply_anyps5_network_policy()
+     }
+ }
+ 
++void anyps5_ps3::begin_patch_verification()
++{
++    anyps5_patch_verified.store(false);
++    apply_anyps5_network_policy();
++}
++
++void anyps5_ps3::finish_patch_verification()
++{
++    anyps5_patch_verified.store(true);
++    apply_anyps5_network_policy();
++}
++
+ extern "C" RETRO_API bool retro_anyps5_ps3_network_policy_v1(unsigned mode, const char* accuracy,
+                                                             const char* dns, bool upnp)
+ {
+-    if (core_initialized || mode > 1)
++    if (core_initialized || anyps5_required_patch || mode > 1)
+         return false;
+     if (mode == 0)
+     {
+@@ -245,6 +267,31 @@ extern "C" RETRO_API bool retro_anyps5_ps3_network_policy_v1(unsigned mode, cons
+     anyps5_policy = anyps5_network_policy{true, xfloat, std::string(address), upnp};
+     return true;
+ }
++
++extern "C" RETRO_API bool retro_anyps5_ps3_network_policy_v2(
++    bool connect, const char* accuracy, const char* dns, bool upnp,
++    const char* title, const char* version, const char* sha256, const char* ppu_hash,
++    unsigned count, const char* const* names, const unsigned* writes)
++{
++    auto required = anyps5_ps3::make_patch_requirement(title, version, sha256, ppu_hash, count, names, writes);
++    if (!required || !retro_anyps5_ps3_network_policy_v1(1, accuracy, dns, upnp))
++        return false;
++    anyps5_required_patch = std::move(required);
++    anyps5_policy->online = connect;
++    return true;
++}
++
++static void report_anyps5_protected_boot_failure()
++{
++    const char* text = anyps5_patch_verified.load()
++        ? "RPCS3 could not start the protected PS3 session."
++        : "PS3 online protection could not be verified. Check the game update and patch, then try again.";
++    retro_message_ext error{text, 5000, 3, RETRO_LOG_ERROR, RETRO_MESSAGE_TARGET_ALL,
++                            RETRO_MESSAGE_TYPE_NOTIFICATION, -1};
++    environ_cb(RETRO_ENVIRONMENT_SET_MESSAGE_EXT, &error);
++    environ_cb(RETRO_ENVIRONMENT_SHUTDOWN, nullptr);
++}
++
+ static bool pending_game_boot = false;
+ static std::string game_path;
+ // The disc image a game was loaded from, empty for anything else: a reset
+@@ -2163,6 +2210,8 @@ void retro_deinit(void)
+     core_initialized = false;
+     game_loaded = false;
+     anyps5_policy.reset();
++    anyps5_required_patch.reset();
++    anyps5_patch_verified.store(false);
+ 
+     // Last, once nothing is logging any more: unlink both listeners, and let
+     // the file logger flush and join its writer thread here rather than in a
+@@ -2219,6 +2268,8 @@ static void context_reset()
+             start_pause_watchdog();
+         }
+         pending_game_boot = false;
++        if (!game_loaded && anyps5_required_patch)
++            report_anyps5_protected_boot_failure();
+     }
+ 
+ 
+@@ -2558,6 +2609,8 @@ static void vk_context_reset()
+             start_pause_watchdog();
+         }
+         pending_game_boot = false;
++        if (!game_loaded && anyps5_required_patch)
++            report_anyps5_protected_boot_failure();
+     }
+ }
+ 
+@@ -3061,6 +3114,9 @@ static bool do_boot_game()
+     }
+ #endif
+ 
++    if (anyps5_required_patch)
++        anyps5_ps3::begin_patch_verification();
++
+     game_boot_result result = game_boot_result::generic_error;
+     try
+     {
+@@ -3114,6 +3170,14 @@ static bool do_boot_game()
+     }
+ 
+ 
++    if (anyps5_required_patch && !anyps5_patch_verified.load())
++    {
++        if (log_cb)
++            log_cb(RETRO_LOG_ERROR, "AnyPS5: PS3 boot did not verify the required protection\n");
++        stop_failed_boot();
++        return false;
++    }
++
+     // Wait for emulator to transition out of loading/starting states
+     // Poll for up to 30 seconds
+     constexpr int max_wait_ms = 30000;
+@@ -3280,6 +3344,7 @@ void retro_run(void)
+         // it runs, as they were at its start.
+         if (!s_database_config.empty())
+             g_cfg.from_string(s_database_config);
++        apply_anyps5_network_policy();
+     }
+ 
+     // Poll input

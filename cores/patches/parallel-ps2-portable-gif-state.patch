@@ -1,0 +1,26 @@
+diff --git a/pcsx2/Gif_Unit.cpp b/pcsx2/Gif_Unit.cpp
+index fbced92..423682f 100644
+--- a/pcsx2/Gif_Unit.cpp
++++ b/pcsx2/Gif_Unit.cpp
+@@ -14,6 +14,7 @@
+  */
+ 
+ #include <rthreads/rthreads.h>
++#include <cstddef>
+ #include "Common.h"
+ 
+ #include "Gif_Unit.h"
+@@ -196,7 +197,13 @@ bool gifPathFreeze(SaveStateBase *s, u32 path)
+ 	const u32 realBuffLimit = gifPath.buffLimit;
+ 
+ 	SaveState_Freeze(s, gifPath.mtvu.fakePackets);
++	const int pathStateOffset = s->idx;
+ 	SaveState_FreezeMem(s, &gifPath, sizeof(gifPath) - sizeof(gifPath.mtvu));
++	/* The host allocation is never restored from a state. Write a stable
++	 * placeholder instead of an address that differs between processes.
++	 * Preserve the block layout and the live buffer pointer. */
++	if (SaveState_IsSaving(s) && SaveState_IsOkay(s))
++		memset(s->memory + pathStateOffset + offsetof(Gif_Path, buffer), 0, sizeof(gifPath.buffer));
+ 
+ 	gifPath.buffer    = bufferPtr;
+ 	gifPath.buffSize  = realBuffSize;
