@@ -10,6 +10,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace anyps5::retro_host {
 
@@ -82,6 +83,9 @@ class ChannelSurface final : public Surface {
   retro_ipc::Channel& channel_;
   mutable std::mutex mutex_;
   std::unique_ptr<retro_ipc::FrameRingWriter> ring_;
+  // Rings already announced stay mapped, so a handle the launcher has not
+  // duplicated yet is never closed under it. Rings only grow.
+  std::vector<std::unique_ptr<retro_ipc::FrameRingWriter>> announced_;
   int64_t requested_ = -1;
   int64_t active_ = -1;
   uint32_t epoch_ = 1;

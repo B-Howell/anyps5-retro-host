@@ -142,6 +142,14 @@ side ever waits for the other, and a pinned frame is never overwritten.
 Starting or releasing a game clears `latest` and bumps `epoch`, so a new game
 never shows the previous game's last picture.
 
+The launcher holds one pin at a time: a pin lasts until its next copy. Both
+Flutter embedders upload a pixel buffer and release it before they ask for the
+next one, so a pinned slot is never in use when it is replaced.
+
+Rings only grow. The host keeps every ring it has announced mapped for its
+lifetime, so a Windows handle the launcher has not duplicated yet is never
+closed under it.
+
 | OS | Memory object | Handoff |
 | --- | --- | --- |
 | Windows | Unnamed pagefile-backed `CreateFileMapping` | handle duplicated by the launcher from the host process |
@@ -177,7 +185,13 @@ Audio planned on macOS). Per-process capture finds it through
   sends `shutdown`, waits up to 15 s for the host to save and exit, then kills
   it.
 - If the launcher disappears the host sees end-of-stream, stops its game the
-  same way and exits; it exits by itself if that takes more than 20 s.
+  same way and exits. The reader thread arms a 20 s forced exit the moment it
+  sees end-of-stream, so a method handler that never returns cannot keep an
+  orphaned host alive.
+- On Windows the launcher keeps private duplicates of the host's pipe ends
+  until the host says hello. If the host exits before that, the launcher
+  closes any end the host never took (checked with `CompareObjectHandles`),
+  so the start fails at once instead of waiting for a timeout.
 - The host runs without a console window. It suppresses the Windows error
   dialogs (`SEM_NOGPFAULTERRORBOX`, no abort message box), so a crashing core
   shows nothing on the desktop.

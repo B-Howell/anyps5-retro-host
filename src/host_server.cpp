@@ -30,6 +30,15 @@ std::optional<int64_t> IntegerField(const Map& map, const char* key) {
     return std::nullopt;
   return value->LongValue();
 }
+void ExitAfterGrace() {
+  static std::once_flag armed;
+  std::call_once(armed, [] {
+    std::thread([] {
+      std::this_thread::sleep_for(kShutdownGrace);
+      std::_Exit(3);
+    }).detach();
+  });
+}
 }  // namespace
 
 int64_t ChannelSurface::Register() {
@@ -76,6 +85,7 @@ void ChannelSurface::Publish(int64_t texture, const uint8_t* rgba, size_t width,
 #else
     if (!channel_.Send(retro_ipc::EncodeJson(Envelope(std::move(event))), ring->memory().handle())) return;
 #endif
+    if (ring_) announced_.push_back(std::move(ring_));
     ring_ = std::move(ring);
   }
   if (!ring_->Write(rgba, width, height, visible)) return;
@@ -100,9 +110,12 @@ int RunHost(std::unique_ptr<retro_ipc::Channel> channel, const HostOptions& opti
       inbox.push_back(std::move(decoded));
       ready.notify_one();
     }
-    std::lock_guard<std::mutex> lock(mutex);
-    inbox.push_back(std::nullopt);
-    ready.notify_one();
+    {
+      std::lock_guard<std::mutex> lock(mutex);
+      inbox.push_back(std::nullopt);
+      ready.notify_one();
+    }
+    ExitAfterGrace();
   });
   channel->Send(retro_ipc::EncodeJson(Envelope(Map{{Value("event"), Value("hello")},
                                                    {Value("protocol"), Value(static_cast<int32_t>(retro_ipc::kProtocolVersion))},
@@ -160,10 +173,7 @@ int RunHost(std::unique_ptr<retro_ipc::Channel> channel, const HostOptions& opti
     }
     if (!channel->Send(retro_ipc::EncodeJson(Envelope(std::move(reply))))) break;
   }
-  std::thread([] {
-    std::this_thread::sleep_for(kShutdownGrace);
-    std::_Exit(3);
-  }).detach();
+  ExitAfterGrace();
   backend->Shutdown();
   backend.reset();
   channel->CloseWrite();

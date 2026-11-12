@@ -455,6 +455,18 @@ void TestHang(const Fixture& fixture) {
   }
   std::cout << "A hung core or host is closed after its timeout and reported as ended." << std::endl;
 }
+void TestEarlyExit(const Fixture& fixture, const std::filesystem::path& self) {
+  Platform platform;
+  auto broken = fixture;
+  broken.host = self;
+  Client client(broken, platform, {});
+  const auto started = Clock::now();
+  const auto result = client.Call("start", Value(Game(fixture, fixture.frames_core, "frames.cue")));
+  Check(result.kind == ProxyResult::Kind::kError && result.message == "The emulator closed unexpectedly.",
+        "a host that exited before connecting was not reported as closed");
+  Check(Clock::now() - started < std::chrono::seconds(5), "a host that never connected was not noticed promptly");
+  std::cout << "A host that exits before connecting fails the start at once." << std::endl;
+}
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -472,6 +484,7 @@ int main(int argc, char** argv) {
     TestCheckpoint(fixture);
     TestCrash(fixture);
     TestHang(fixture);
+    TestEarlyExit(fixture, std::filesystem::absolute(std::filesystem::u8path(argv[0])));
     std::error_code ignored;
     std::filesystem::remove_all(fixture.root, ignored);
   } catch (const std::exception& error) {

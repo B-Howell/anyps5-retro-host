@@ -322,7 +322,11 @@ class RetroHostProxy::Impl : public std::enable_shared_from_this<Impl> {
       if (events_ == host->channel) ring_ = std::move(reader);
       return true;
     }
-    if (*name == "hello") return IntegerField(*envelope, "protocol") == static_cast<int64_t>(kProtocolVersion);
+    if (*name == "hello") {
+      if (IntegerField(*envelope, "protocol") != static_cast<int64_t>(kProtocolVersion)) return false;
+      host->process->Connected();
+      return true;
+    }
     return false;
   }
 
@@ -408,6 +412,7 @@ class RetroHostProxy::Impl : public std::enable_shared_from_this<Impl> {
 
   void Retire(const std::shared_ptr<Host>& host) {
     if (host->reader.joinable()) {
+      host->process->Abandon();
 #if defined(_WIN32)
       if (!host->finished) CancelSynchronousIo(host->reader.native_handle());
 #endif
@@ -443,12 +448,7 @@ class RetroHostProxy::Impl : public std::enable_shared_from_this<Impl> {
         }
         host->process->Kill();
       }
-#if defined(_WIN32)
-      if (!host->finished && host->process->Wait(std::chrono::milliseconds(0)) && host->reader.joinable()) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(200));
-        if (!host->finished) CancelSynchronousIo(host->reader.native_handle());
-      }
-#endif
+      if (!host->finished && host->process->Wait(std::chrono::milliseconds(0))) host->process->Abandon();
     }
   }
 

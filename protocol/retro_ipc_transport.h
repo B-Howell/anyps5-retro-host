@@ -64,17 +64,28 @@ class ChildProcess {
   int64_t pid() const { return pid_; }
   bool Wait(std::chrono::milliseconds timeout);
   void Kill();
-  std::optional<int> exit_code() const { return exit_code_; }
+  std::optional<int> exit_code() const;
+  // The host has taken its ends of the channel (it said hello).
+  void Connected();
+  // The host exited: release any channel end it never took, so the reader
+  // sees the end of the stream.
+  void Abandon();
 #if defined(_WIN32)
   NativeHandle Duplicate(uint64_t remote_handle) const;
 #endif
 
  private:
   ChildProcess() = default;
+  bool Poll();
   int64_t pid_ = 0;
+  mutable std::mutex mutex_;
   std::optional<int> exit_code_;
 #if defined(_WIN32)
   NativeHandle process_ = nullptr;
+  // The host's channel ends as handle values in this process, and private
+  // duplicates that tell whether a value still names the same pipe.
+  NativeHandle child_ends_[2] = {nullptr, nullptr};
+  NativeHandle kept_ends_[2] = {nullptr, nullptr};
 #endif
 };
 

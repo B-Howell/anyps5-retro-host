@@ -212,7 +212,34 @@ std::wstring Wide(const std::string& text) {
 }  // namespace
 
 ChildProcess::~ChildProcess() {
+  Abandon();
   if (process_) CloseHandle(process_);
+}
+
+std::optional<int> ChildProcess::exit_code() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return exit_code_;
+}
+
+void ChildProcess::Connected() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  for (auto& kept : kept_ends_) {
+    if (kept) CloseHandle(kept);
+    kept = nullptr;
+  }
+}
+
+void ChildProcess::Abandon() {
+  using Compare = BOOL(WINAPI*)(HANDLE, HANDLE);
+  static const auto compare = reinterpret_cast<Compare>(
+      reinterpret_cast<void*>(GetProcAddress(GetModuleHandleW(L"kernelbase.dll"), "CompareObjectHandles")));
+  std::lock_guard<std::mutex> lock(mutex_);
+  for (size_t index = 0; index < 2; ++index) {
+    if (!kept_ends_[index]) continue;
+    if (compare && compare(child_ends_[index], kept_ends_[index])) CloseHandle(child_ends_[index]);
+    CloseHandle(kept_ends_[index]);
+    kept_ends_[index] = nullptr;
+  }
 }
 
 std::unique_ptr<ChildProcess> ChildProcess::Spawn(const std::filesystem::path& executable,
@@ -242,21 +269,26 @@ std::unique_ptr<ChildProcess> ChildProcess::Spawn(const std::filesystem::path& e
   auto child = std::unique_ptr<ChildProcess>(new ChildProcess());
   child->process_ = information.hProcess;
   child->pid_ = information.dwProcessId;
+  child->child_ends_[0] = to_host_read;
+  child->child_ends_[1] = from_host_write;
+  for (size_t index = 0; index < 2; ++index) {
+    DuplicateHandle(GetCurrentProcess(), child->child_ends_[index], GetCurrentProcess(), &child->kept_ends_[index], 0,
+                    FALSE, DUPLICATE_SAME_ACCESS);
+  }
   channel = std::make_unique<Channel>(from_host_read, to_host_write);
   return child;
 }
 
 bool ChildProcess::Wait(std::chrono::milliseconds timeout) {
-  if (exit_code_) return true;
   if (WaitForSingleObject(process_, static_cast<DWORD>(timeout.count())) != WAIT_OBJECT_0) return false;
   DWORD code = 0;
   GetExitCodeProcess(process_, &code);
-  exit_code_ = static_cast<int>(code);
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (!exit_code_) exit_code_ = static_cast<int>(code);
   return true;
 }
 
 void ChildProcess::Kill() {
-  if (exit_code_) return;
   TerminateProcess(process_, 0xDEAD);
   Wait(std::chrono::milliseconds(5000));
 }
@@ -300,6 +332,14 @@ int64_t CurrentProcessId() { return GetCurrentProcessId(); }
 
 ChildProcess::~ChildProcess() = default;
 
+std::optional<int> ChildProcess::exit_code() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return exit_code_;
+}
+
+void ChildProcess::Connected() {}
+void ChildProcess::Abandon() {}
+
 std::unique_ptr<ChildProcess> ChildProcess::Spawn(const std::filesystem::path& executable,
                                                   const std::vector<std::string>& arguments,
                                                   std::unique_ptr<Channel>& channel) {
@@ -333,28 +373,37 @@ std::unique_ptr<ChildProcess> ChildProcess::Spawn(const std::filesystem::path& e
   return child;
 }
 
-bool ChildProcess::Wait(std::chrono::milliseconds timeout) {
+bool ChildProcess::Poll() {
+  std::lock_guard<std::mutex> lock(mutex_);
   if (exit_code_) return true;
+  int status = 0;
+  const auto done = waitpid(static_cast<pid_t>(pid_), &status, WNOHANG);
+  if (done == pid_) {
+    exit_code_ = WIFEXITED(status) ? WEXITSTATUS(status) : 128 + (WIFSIGNALED(status) ? WTERMSIG(status) : 0);
+    return true;
+  }
+  if (done < 0 && errno != EINTR) {
+    exit_code_ = -1;
+    return true;
+  }
+  return false;
+}
+
+bool ChildProcess::Wait(std::chrono::milliseconds timeout) {
   const auto deadline = std::chrono::steady_clock::now() + timeout;
-  while (true) {
-    int status = 0;
-    const auto done = waitpid(static_cast<pid_t>(pid_), &status, WNOHANG);
-    if (done == pid_) {
-      exit_code_ = WIFEXITED(status) ? WEXITSTATUS(status) : 128 + (WIFSIGNALED(status) ? WTERMSIG(status) : 0);
-      return true;
-    }
-    if (done < 0 && errno != EINTR) {
-      exit_code_ = -1;
-      return true;
-    }
+  while (!Poll()) {
     if (std::chrono::steady_clock::now() >= deadline) return false;
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
   }
+  return true;
 }
 
 void ChildProcess::Kill() {
-  if (exit_code_) return;
-  kill(static_cast<pid_t>(pid_), SIGKILL);
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (exit_code_) return;
+    kill(static_cast<pid_t>(pid_), SIGKILL);
+  }
   Wait(std::chrono::milliseconds(5000));
 }
 
