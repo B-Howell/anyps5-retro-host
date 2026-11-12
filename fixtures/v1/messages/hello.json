@@ -1,0 +1,13 @@
+{
+  "description": "The launcher opens the connection.",
+  "from": "launcher",
+  "message": {
+    "type": "hello",
+    "minVersion": 1,
+    "maxVersion": 1,
+    "pixelFormats": [
+      "rgba8",
+      "bgra8"
+    ]
+  }
+}

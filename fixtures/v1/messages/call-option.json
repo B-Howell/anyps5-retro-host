@@ -1,0 +1,18 @@
+{
+  "description": "Change a core option the status lists.",
+  "from": "launcher",
+  "message": {
+    "type": "call",
+    "id": 6,
+    "method": "option",
+    "args": {
+      "key": "swanstation_GPU_ResolutionScale",
+      "value": "2"
+    }
+  },
+  "reply": {
+    "type": "reply",
+    "id": 6,
+    "result": true
+  }
+}

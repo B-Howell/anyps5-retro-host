@@ -1,0 +1,12 @@
+{
+  "description": "The host speaks no version or pixel format the launcher offered, then exits.",
+  "from": "host",
+  "message": {
+    "type": "unsupported",
+    "minVersion": 1,
+    "maxVersion": 1,
+    "pixelFormats": [
+      "rgba8"
+    ]
+  }
+}

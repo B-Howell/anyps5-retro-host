@@ -1,0 +1,117 @@
+{
+  "description": "A frame wider than 8192 pixels.",
+  "tests": [
+    "launcher"
+  ],
+  "steps": [
+    {
+      "from": "launcher",
+      "message": {
+        "type": "hello",
+        "minVersion": 1,
+        "maxVersion": 1,
+        "pixelFormats": [
+          "rgba8",
+          "bgra8"
+        ]
+      }
+    },
+    {
+      "from": "host",
+      "message": {
+        "type": "welcome",
+        "version": 1,
+        "pid": 4242,
+        "hostVersion": "1.0.0",
+        "capabilities": [
+          "ps1"
+        ],
+        "pixelFormat": "rgba8"
+      },
+      "anyValueFor": [
+        "pid",
+        "hostVersion"
+      ]
+    },
+    {
+      "from": "launcher",
+      "message": {
+        "type": "call",
+        "id": 1,
+        "method": "start",
+        "args": {
+          "core": "/home/p/.local/share/anyps5/cores/swanstation_libretro.so",
+          "disc": "/home/p/Games/PS1/Crash Team Racing/Crash Team Racing.cue",
+          "system": "/home/p/.local/share/anyps5/retro/system",
+          "saves": "/home/p/.local/share/anyps5/retro/saves/ps1",
+          "internalResolution": "4",
+          "options": {
+            "swanstation_GPU_TextureFilter": "Bilinear"
+          }
+        }
+      }
+    },
+    {
+      "from": "host",
+      "message": {
+        "type": "reply",
+        "id": 1,
+        "result": {
+          "epoch": 1
+        }
+      }
+    },
+    {
+      "from": "host",
+      "message": {
+        "type": "ring",
+        "bytes": 3690496
+      },
+      "descriptors": 1,
+      "ring": {
+        "memoryBytes": 3690496,
+        "sealed": true,
+        "header": {
+          "magic": 1179792705,
+          "version": 1,
+          "slotCount": 3,
+          "headerBytes": 4096,
+          "slotBytes": 1228800,
+          "latest": 0,
+          "reading": 4294967295,
+          "pixelFormat": 1,
+          "slots": [
+            {
+              "width": 8193,
+              "height": 1,
+              "visible": 1,
+              "epoch": 1,
+              "sequence": 1
+            },
+            {
+              "width": 0,
+              "height": 0,
+              "visible": 0,
+              "epoch": 0,
+              "sequence": 0
+            },
+            {
+              "width": 0,
+              "height": 0,
+              "visible": 0,
+              "epoch": 0,
+              "sequence": 0
+            }
+          ]
+        }
+      }
+    },
+    {
+      "from": "host",
+      "message": {
+        "type": "frame"
+      }
+    }
+  ],
+  "outcome": "protocolError"
+}

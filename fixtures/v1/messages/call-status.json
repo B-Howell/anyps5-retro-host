@@ -1,0 +1,53 @@
+{
+  "description": "Status of a running multi-disc game.",
+  "from": "launcher",
+  "message": {
+    "type": "call",
+    "id": 2,
+    "method": "status"
+  },
+  "reply": {
+    "type": "reply",
+    "id": 2,
+    "result": {
+      "ready": true,
+      "ended": false,
+      "error": "",
+      "aspect": 1.3333333333333333,
+      "hardware": true,
+      "resolutionError": "",
+      "graphicsPending": false,
+      "progressLabel": null,
+      "progressPercent": null,
+      "options": {
+        "swanstation_GPU_ResolutionScale": {
+          "title": "Internal Resolution",
+          "values": [
+            "1",
+            "2",
+            "4"
+          ],
+          "labels": [
+            "1x",
+            "2x",
+            "4x"
+          ],
+          "selected": 2,
+          "activeValue": "4",
+          "restart": false
+        }
+      },
+      "discs": {
+        "labels": [
+          "Disc 1",
+          "Disc 2"
+        ],
+        "inserted": 0,
+        "insertedDiscPath": "/home/p/Games/PS1/FF7/FF7 (Disc 1).cue",
+        "playedDiscPath": "/home/p/Games/PS1/FF7/FF7 (Disc 1).cue",
+        "busy": false,
+        "failed": false
+      }
+    }
+  }
+}

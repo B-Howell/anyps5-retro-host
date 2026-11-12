@@ -1,0 +1,7 @@
+{
+  "description": "A new frame is in the ring.",
+  "from": "host",
+  "message": {
+    "type": "frame"
+  }
+}

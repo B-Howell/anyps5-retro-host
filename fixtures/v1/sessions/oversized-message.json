@@ -1,0 +1,43 @@
+{
+  "description": "A length of 1 MiB + 1 is refused before any of the body is read.",
+  "tests": [
+    "host",
+    "launcher"
+  ],
+  "steps": [
+    {
+      "from": "launcher",
+      "message": {
+        "type": "hello",
+        "minVersion": 1,
+        "maxVersion": 1,
+        "pixelFormats": [
+          "rgba8",
+          "bgra8"
+        ]
+      }
+    },
+    {
+      "from": "host",
+      "message": {
+        "type": "welcome",
+        "version": 1,
+        "pid": 4242,
+        "hostVersion": "1.0.0",
+        "capabilities": [
+          "ps1"
+        ],
+        "pixelFormat": "rgba8"
+      },
+      "anyValueFor": [
+        "pid",
+        "hostVersion"
+      ]
+    },
+    {
+      "from": "host",
+      "bytes": "01001000"
+    }
+  ],
+  "outcome": "protocolError"
+}

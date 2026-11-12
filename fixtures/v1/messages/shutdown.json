@@ -1,0 +1,7 @@
+{
+  "description": "The launcher is quitting.",
+  "from": "launcher",
+  "message": {
+    "type": "shutdown"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "description": "New frame memory for 640x480 frames; the launcher duplicates the handle.",
+  "from": "host",
+  "message": {
+    "type": "ring",
+    "bytes": 3690496,
+    "handle": 1234
+  },
+  "anyValueFor": [
+    "handle"
+  ],
+  "os": "windows"
+}

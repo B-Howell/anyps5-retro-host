@@ -1,0 +1,15 @@
+{
+  "description": "Pause the game.",
+  "from": "launcher",
+  "message": {
+    "type": "call",
+    "id": 3,
+    "method": "pause",
+    "args": true
+  },
+  "reply": {
+    "type": "reply",
+    "id": 3,
+    "result": null
+  }
+}

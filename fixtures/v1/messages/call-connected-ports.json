@@ -1,0 +1,15 @@
+{
+  "description": "A second player joined.",
+  "from": "launcher",
+  "message": {
+    "type": "call",
+    "id": 4,
+    "method": "connectedPorts",
+    "args": 2
+  },
+  "reply": {
+    "type": "reply",
+    "id": 4,
+    "result": true
+  }
+}

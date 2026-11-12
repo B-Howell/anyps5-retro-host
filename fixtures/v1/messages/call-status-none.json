@@ -1,0 +1,14 @@
+{
+  "description": "Status with no game loaded.",
+  "from": "launcher",
+  "message": {
+    "type": "call",
+    "id": 2,
+    "method": "status"
+  },
+  "reply": {
+    "type": "reply",
+    "id": 2,
+    "result": null
+  }
+}

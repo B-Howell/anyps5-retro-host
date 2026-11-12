@@ -1,0 +1,12 @@
+{
+  "description": "The launcher checks the host still answers.",
+  "from": "launcher",
+  "message": {
+    "type": "ping",
+    "id": 1
+  },
+  "reply": {
+    "type": "pong",
+    "id": 1
+  }
+}

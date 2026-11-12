@@ -1,0 +1,18 @@
+{
+  "description": "Set the host volume.",
+  "from": "launcher",
+  "message": {
+    "type": "call",
+    "id": 7,
+    "method": "volume",
+    "args": {
+      "level": 0.5,
+      "muted": false
+    }
+  },
+  "reply": {
+    "type": "reply",
+    "id": 7,
+    "result": null
+  }
+}

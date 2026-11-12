@@ -1,0 +1,80 @@
+{
+  "description": "Messages and fields from a later version are skipped.",
+  "tests": [
+    "host",
+    "launcher"
+  ],
+  "steps": [
+    {
+      "from": "launcher",
+      "message": {
+        "type": "hello",
+        "minVersion": 1,
+        "maxVersion": 1,
+        "pixelFormats": [
+          "rgba8",
+          "bgra8"
+        ]
+      }
+    },
+    {
+      "from": "host",
+      "message": {
+        "type": "welcome",
+        "version": 1,
+        "pid": 4242,
+        "hostVersion": "1.0.0",
+        "capabilities": [
+          "ps1"
+        ],
+        "pixelFormat": "rgba8"
+      },
+      "anyValueFor": [
+        "pid",
+        "hostVersion"
+      ]
+    },
+    {
+      "from": "launcher",
+      "message": {
+        "type": "laterMessage",
+        "value": 1
+      }
+    },
+    {
+      "from": "host",
+      "message": {
+        "type": "laterEvent",
+        "value": 1
+      }
+    },
+    {
+      "from": "launcher",
+      "message": {
+        "type": "call",
+        "id": 1,
+        "method": "status",
+        "laterField": true
+      }
+    },
+    {
+      "from": "host",
+      "message": {
+        "type": "reply",
+        "id": 1,
+        "result": null,
+        "laterField": true
+      }
+    },
+    {
+      "from": "launcher",
+      "message": {
+        "type": "shutdown"
+      }
+    },
+    {
+      "hostExits": 0
+    }
+  ],
+  "outcome": "clean"
+}

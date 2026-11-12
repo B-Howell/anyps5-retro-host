@@ -1,0 +1,9 @@
+{
+  "description": "New frame memory for 640x480 frames; the descriptor comes with the message.",
+  "from": "host",
+  "message": {
+    "type": "ring",
+    "bytes": 3690496
+  },
+  "os": "posix"
+}

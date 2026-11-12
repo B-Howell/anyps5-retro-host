@@ -1,0 +1,15 @@
+{
+  "description": "Insert the second disc.",
+  "from": "launcher",
+  "message": {
+    "type": "call",
+    "id": 5,
+    "method": "changeDisc",
+    "args": 1
+  },
+  "reply": {
+    "type": "reply",
+    "id": 5,
+    "result": true
+  }
+}

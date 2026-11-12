@@ -1,0 +1,18 @@
+{
+  "description": "The host accepts version 1 and RGBA frames.",
+  "from": "host",
+  "message": {
+    "type": "welcome",
+    "version": 1,
+    "pid": 4242,
+    "hostVersion": "1.0.0",
+    "capabilities": [
+      "ps1"
+    ],
+    "pixelFormat": "rgba8"
+  },
+  "anyValueFor": [
+    "pid",
+    "hostVersion"
+  ]
+}

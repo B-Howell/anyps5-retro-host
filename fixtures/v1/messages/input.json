@@ -1,0 +1,13 @@
+{
+  "description": "Port 1 holds Select and Start (bits 2 and 3) and pushes the left stick fully up.",
+  "from": "launcher",
+  "message": {
+    "type": "input",
+    "port": 0,
+    "buttons": 12,
+    "leftX": 0,
+    "leftY": -32768,
+    "rightX": 0,
+    "rightY": 0
+  }
+}

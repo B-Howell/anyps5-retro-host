@@ -1,0 +1,34 @@
+{
+  "description": "The launcher offers only a pixel format no host has.",
+  "tests": [
+    "host"
+  ],
+  "steps": [
+    {
+      "from": "launcher",
+      "message": {
+        "type": "hello",
+        "minVersion": 1,
+        "maxVersion": 1,
+        "pixelFormats": [
+          "rgb565"
+        ]
+      }
+    },
+    {
+      "from": "host",
+      "message": {
+        "type": "unsupported",
+        "minVersion": 1,
+        "maxVersion": 1
+      },
+      "anyValueFor": [
+        "pixelFormats"
+      ]
+    },
+    {
+      "hostExits": 0
+    }
+  ],
+  "outcome": "unsupported"
+}

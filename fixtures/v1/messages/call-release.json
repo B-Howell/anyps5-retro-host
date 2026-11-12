@@ -1,0 +1,14 @@
+{
+  "description": "Forget the ended game.",
+  "from": "launcher",
+  "message": {
+    "type": "call",
+    "id": 10,
+    "method": "release"
+  },
+  "reply": {
+    "type": "reply",
+    "id": 10,
+    "result": null
+  }
+}

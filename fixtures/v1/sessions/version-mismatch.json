@@ -1,0 +1,34 @@
+{
+  "description": "The launcher speaks only version 2.",
+  "tests": [
+    "host"
+  ],
+  "steps": [
+    {
+      "from": "launcher",
+      "message": {
+        "type": "hello",
+        "minVersion": 2,
+        "maxVersion": 2,
+        "pixelFormats": [
+          "rgba8"
+        ]
+      }
+    },
+    {
+      "from": "host",
+      "message": {
+        "type": "unsupported",
+        "minVersion": 1,
+        "maxVersion": 1
+      },
+      "anyValueFor": [
+        "pixelFormats"
+      ]
+    },
+    {
+      "hostExits": 0
+    }
+  ],
+  "outcome": "unsupported"
+}

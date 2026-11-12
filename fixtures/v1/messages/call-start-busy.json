@@ -1,0 +1,27 @@
+{
+  "description": "Start while a game is running.",
+  "from": "launcher",
+  "message": {
+    "type": "call",
+    "id": 9,
+    "method": "start",
+    "args": {
+      "core": "/home/p/.local/share/anyps5/cores/swanstation_libretro.so",
+      "disc": "/home/p/Games/PS1/Crash Team Racing/Crash Team Racing.cue",
+      "system": "/home/p/.local/share/anyps5/retro/system",
+      "saves": "/home/p/.local/share/anyps5/retro/saves/ps1",
+      "internalResolution": "4",
+      "options": {
+        "swanstation_GPU_TextureFilter": "Bilinear"
+      }
+    }
+  },
+  "reply": {
+    "type": "reply",
+    "id": 9,
+    "error": {
+      "code": "busy",
+      "message": "A game is already running."
+    }
+  }
+}

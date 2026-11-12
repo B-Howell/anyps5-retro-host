@@ -1,0 +1,14 @@
+{
+  "description": "Ask the game to end.",
+  "from": "launcher",
+  "message": {
+    "type": "call",
+    "id": 8,
+    "method": "stop"
+  },
+  "reply": {
+    "type": "reply",
+    "id": 8,
+    "result": null
+  }
+}

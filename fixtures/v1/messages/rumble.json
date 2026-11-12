@@ -1,0 +1,10 @@
+{
+  "description": "The large motor of port 1 runs at full strength.",
+  "from": "host",
+  "message": {
+    "type": "rumble",
+    "port": 0,
+    "strong": 65535,
+    "weak": 0
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "description": "A method this host does not have.",
+  "from": "launcher",
+  "message": {
+    "type": "call",
+    "id": 11,
+    "method": "ps2LanReset"
+  },
+  "reply": {
+    "type": "reply",
+    "id": 11,
+    "error": {
+      "code": "unknownMethod",
+      "message": "Unknown method ps2LanReset."
+    }
+  }
+}
