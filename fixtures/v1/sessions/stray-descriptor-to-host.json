@@ -1,0 +1,52 @@
+{
+  "description": "The launcher attaches a descriptor to a ping.",
+  "tests": [
+    "host"
+  ],
+  "os": "posix",
+  "steps": [
+    {
+      "from": "launcher",
+      "message": {
+        "type": "hello",
+        "minVersion": 1,
+        "maxVersion": 1,
+        "pixelFormats": [
+          "rgba8",
+          "bgra8"
+        ]
+      },
+      "anyValueFor": [
+        "pixelFormats"
+      ]
+    },
+    {
+      "from": "host",
+      "message": {
+        "type": "welcome",
+        "version": 1,
+        "pid": 4242,
+        "hostVersion": "1.0.0",
+        "capabilities": [
+          "ps1"
+        ],
+        "pixelFormat": "rgba8"
+      },
+      "anyValueFor": [
+        "pid",
+        "hostVersion",
+        "pixelFormat"
+      ]
+    },
+    {
+      "from": "launcher",
+      "message": {
+        "type": "ping",
+        "id": 1
+      },
+      "descriptors": 1,
+      "invalid": "descriptors only on ring"
+    }
+  ],
+  "outcome": "protocolError"
+}

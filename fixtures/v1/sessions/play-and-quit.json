@@ -15,7 +15,10 @@
           "rgba8",
           "bgra8"
         ]
-      }
+      },
+      "anyValueFor": [
+        "pixelFormats"
+      ]
     },
     {
       "from": "host",
@@ -31,7 +34,8 @@
       },
       "anyValueFor": [
         "pid",
-        "hostVersion"
+        "hostVersion",
+        "pixelFormat"
       ]
     },
     {
@@ -41,16 +45,19 @@
         "id": 1,
         "method": "start",
         "args": {
-          "core": "/home/p/.local/share/anyps5/cores/swanstation_libretro.so",
-          "disc": "/home/p/Games/PS1/Crash Team Racing/Crash Team Racing.cue",
-          "system": "/home/p/.local/share/anyps5/retro/system",
-          "saves": "/home/p/.local/share/anyps5/retro/saves/ps1",
+          "core": "${core}",
+          "disc": "${disc}",
+          "system": "${system}",
+          "saves": "${saves}",
           "internalResolution": "4",
           "options": {
             "swanstation_GPU_TextureFilter": "Bilinear"
           }
         }
-      }
+      },
+      "anyValueFor": [
+        "id"
+      ]
     },
     {
       "from": "host",
@@ -60,19 +67,10 @@
         "result": {
           "epoch": 1
         }
-      }
-    },
-    {
-      "from": "launcher",
-      "message": {
-        "type": "input",
-        "port": 0,
-        "buttons": 0,
-        "leftX": 0,
-        "leftY": 0,
-        "rightX": 0,
-        "rightY": 0
-      }
+      },
+      "anyValueFor": [
+        "id"
+      ]
     },
     {
       "from": "host",
@@ -131,7 +129,10 @@
         "type": "call",
         "id": 2,
         "method": "status"
-      }
+      },
+      "anyValueFor": [
+        "id"
+      ]
     },
     {
       "from": "host",
@@ -167,7 +168,10 @@
             }
           }
         }
-      }
+      },
+      "anyValueFor": [
+        "id"
+      ]
     },
     {
       "from": "launcher",
@@ -175,7 +179,10 @@
         "type": "call",
         "id": 3,
         "method": "stop"
-      }
+      },
+      "anyValueFor": [
+        "id"
+      ]
     },
     {
       "from": "host",
@@ -183,7 +190,10 @@
         "type": "reply",
         "id": 3,
         "result": null
-      }
+      },
+      "anyValueFor": [
+        "id"
+      ]
     },
     {
       "from": "launcher",
@@ -191,7 +201,13 @@
         "type": "call",
         "id": 4,
         "method": "status"
-      }
+      },
+      "anyValueFor": [
+        "id"
+      ]
+    },
+    {
+      "pollWithin": 5
     },
     {
       "from": "host",
@@ -227,7 +243,10 @@
             }
           }
         }
-      }
+      },
+      "anyValueFor": [
+        "id"
+      ]
     },
     {
       "from": "launcher",
@@ -235,7 +254,10 @@
         "type": "call",
         "id": 5,
         "method": "release"
-      }
+      },
+      "anyValueFor": [
+        "id"
+      ]
     },
     {
       "from": "host",
@@ -243,7 +265,10 @@
         "type": "reply",
         "id": 5,
         "result": null
-      }
+      },
+      "anyValueFor": [
+        "id"
+      ]
     },
     {
       "from": "launcher",

@@ -43,8 +43,8 @@
           "Disc 2"
         ],
         "inserted": 0,
-        "insertedDiscPath": "/home/p/Games/PS1/FF7/FF7 (Disc 1).cue",
-        "playedDiscPath": "/home/p/Games/PS1/FF7/FF7 (Disc 1).cue",
+        "insertedDiscPath": "${disc1}",
+        "playedDiscPath": "${disc1}",
         "busy": false,
         "failed": false
       }

@@ -1,8 +1,7 @@
 {
-  "description": "Messages and fields from a later version are skipped.",
+  "description": "The host skips a later message type and a later call field.",
   "tests": [
-    "host",
-    "launcher"
+    "host"
   ],
   "steps": [
     {
@@ -15,7 +14,10 @@
           "rgba8",
           "bgra8"
         ]
-      }
+      },
+      "anyValueFor": [
+        "pixelFormats"
+      ]
     },
     {
       "from": "host",
@@ -31,20 +33,14 @@
       },
       "anyValueFor": [
         "pid",
-        "hostVersion"
+        "hostVersion",
+        "pixelFormat"
       ]
     },
     {
       "from": "launcher",
       "message": {
         "type": "laterMessage",
-        "value": 1
-      }
-    },
-    {
-      "from": "host",
-      "message": {
-        "type": "laterEvent",
         "value": 1
       }
     },
@@ -62,8 +58,7 @@
       "message": {
         "type": "reply",
         "id": 1,
-        "result": null,
-        "laterField": true
+        "result": null
       }
     },
     {

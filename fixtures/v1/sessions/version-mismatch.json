@@ -20,7 +20,10 @@
       "message": {
         "type": "unsupported",
         "minVersion": 1,
-        "maxVersion": 1
+        "maxVersion": 1,
+        "pixelFormats": [
+          "rgba8"
+        ]
       },
       "anyValueFor": [
         "pixelFormats"

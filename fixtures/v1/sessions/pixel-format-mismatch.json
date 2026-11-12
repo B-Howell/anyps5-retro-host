@@ -13,14 +13,18 @@
         "pixelFormats": [
           "rgb565"
         ]
-      }
+      },
+      "invalid": "pixelFormats must be a non-empty list of rgba8 and bgra8"
     },
     {
       "from": "host",
       "message": {
         "type": "unsupported",
         "minVersion": 1,
-        "maxVersion": 1
+        "maxVersion": 1,
+        "pixelFormats": [
+          "rgba8"
+        ]
       },
       "anyValueFor": [
         "pixelFormats"

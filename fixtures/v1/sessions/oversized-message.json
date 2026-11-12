@@ -1,7 +1,6 @@
 {
-  "description": "A length of 1 MiB + 1 is refused before any of the body is read.",
+  "description": "The host sends a length of 1 MiB + 1.",
   "tests": [
-    "host",
     "launcher"
   ],
   "steps": [
@@ -15,7 +14,10 @@
           "rgba8",
           "bgra8"
         ]
-      }
+      },
+      "anyValueFor": [
+        "pixelFormats"
+      ]
     },
     {
       "from": "host",
@@ -31,12 +33,14 @@
       },
       "anyValueFor": [
         "pid",
-        "hostVersion"
+        "hostVersion",
+        "pixelFormat"
       ]
     },
     {
       "from": "host",
-      "bytes": "01001000"
+      "bytes": "01001000",
+      "invalid": "length at most 1 MiB"
     }
   ],
   "outcome": "protocolError"

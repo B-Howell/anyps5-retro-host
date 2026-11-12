@@ -1,0 +1,47 @@
+{
+  "description": "The launcher sends a length of 1 MiB + 1.",
+  "tests": [
+    "host"
+  ],
+  "steps": [
+    {
+      "from": "launcher",
+      "message": {
+        "type": "hello",
+        "minVersion": 1,
+        "maxVersion": 1,
+        "pixelFormats": [
+          "rgba8",
+          "bgra8"
+        ]
+      },
+      "anyValueFor": [
+        "pixelFormats"
+      ]
+    },
+    {
+      "from": "host",
+      "message": {
+        "type": "welcome",
+        "version": 1,
+        "pid": 4242,
+        "hostVersion": "1.0.0",
+        "capabilities": [
+          "ps1"
+        ],
+        "pixelFormat": "rgba8"
+      },
+      "anyValueFor": [
+        "pid",
+        "hostVersion",
+        "pixelFormat"
+      ]
+    },
+    {
+      "from": "launcher",
+      "bytes": "01001000",
+      "invalid": "length at most 1 MiB"
+    }
+  ],
+  "outcome": "protocolError"
+}

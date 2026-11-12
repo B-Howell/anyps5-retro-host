@@ -15,7 +15,10 @@
           "rgba8",
           "bgra8"
         ]
-      }
+      },
+      "anyValueFor": [
+        "pixelFormats"
+      ]
     },
     {
       "from": "host",
@@ -31,7 +34,8 @@
       },
       "anyValueFor": [
         "pid",
-        "hostVersion"
+        "hostVersion",
+        "pixelFormat"
       ]
     },
     {
@@ -41,16 +45,19 @@
         "id": 1,
         "method": "start",
         "args": {
-          "core": "/home/p/.local/share/anyps5/cores/swanstation_libretro.so",
-          "disc": "/home/p/Games/PS1/Crash Team Racing/Crash Team Racing.cue",
-          "system": "/home/p/.local/share/anyps5/retro/system",
-          "saves": "/home/p/.local/share/anyps5/retro/saves/ps1",
+          "core": "${core}",
+          "disc": "${disc}",
+          "system": "${system}",
+          "saves": "${saves}",
           "internalResolution": "4",
           "options": {
             "swanstation_GPU_TextureFilter": "Bilinear"
           }
         }
-      }
+      },
+      "anyValueFor": [
+        "id"
+      ]
     },
     {
       "from": "host",
@@ -60,7 +67,10 @@
         "result": {
           "epoch": 1
         }
-      }
+      },
+      "anyValueFor": [
+        "id"
+      ]
     },
     {
       "from": "host",
@@ -105,7 +115,8 @@
             }
           ]
         }
-      }
+      },
+      "invalid": "Linux rings are sealed"
     }
   ],
   "outcome": "protocolError"
