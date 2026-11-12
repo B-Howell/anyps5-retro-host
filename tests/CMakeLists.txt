@@ -40,3 +40,7 @@ else()
   target_compile_options(ps3_package_batch_test PRIVATE -UNDEBUG)
 endif()
 add_test(NAME ps3_package_batch COMMAND ps3_package_batch_test)
+
+add_executable(host_boot_check host_boot_check.cpp)
+target_link_libraries(host_boot_check PRIVATE anyps5_retro_ipc)
+target_compile_features(host_boot_check PRIVATE cxx_std_17)
