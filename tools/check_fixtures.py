@@ -84,7 +84,8 @@ def status_result(value, name=None):
     boolean(value.get('ready'), 'status.ready')
     boolean(value.get('ended'), 'status.ended')
     string(value.get('error'), 'status.error')
-    if len(value) == 3:
+    if 'aspect' not in value:
+        need(value['ended'] and not value['ready'], 'only a lost game has a status without aspect')
         return
     need(isinstance(value.get('aspect'), (int, float)) and not isinstance(value.get('aspect'), bool),
          'status.aspect must be a number')
@@ -255,6 +256,26 @@ def check_messages():
         check_entry(path, 'file', run)
 
 
+SENDERS = {'hello': 'launcher', 'call': 'launcher', 'input': 'launcher', 'ping': 'launcher', 'shutdown': 'launcher',
+           'welcome': 'host', 'unsupported': 'host', 'reply': 'host', 'pong': 'host', 'ring': 'host',
+           'frame': 'host', 'rumble': 'host'}
+
+
+def order(message, sender, calls, state):
+    kind = message.get('type')
+    need(SENDERS.get(kind, sender) == sender, f'{kind} is sent by the {SENDERS.get(kind)}')
+    if kind == 'welcome':
+        state['welcomed'] = True
+    elif kind not in ('hello', 'unsupported'):
+        need(state['welcomed'], 'nothing but hello and its answer before welcome')
+    if kind == 'call':
+        need(message.get('id') not in calls, 'call ids are unique')
+        state['pending'].append(message.get('id'))
+    elif kind == 'reply':
+        need(state['pending'] and state['pending'][0] == message.get('id'), 'one reply per call, in call order')
+        state['pending'].pop(0)
+
+
 def check_sessions():
     for path in sorted((FIXTURES / 'sessions').glob('*.json')):
         data = json.loads(path.read_text(encoding='utf-8'))
@@ -267,12 +288,15 @@ def check_sessions():
             need(isinstance(data.get('steps'), list) and data['steps'], 'steps')
         check_entry(path, 'file', head)
         calls = {}
+        state = {'welcomed': False, 'pending': []}
         for index, step in enumerate(data.get('steps', [])):
             def run():
                 if 'from' not in step:
                     need(len(step) == 1 and next(iter(step)) in STEPS, f'unknown step {sorted(step)}')
                     return
                 need(step['from'] in ('launcher', 'host'), 'from is launcher or host')
+                if 'message' in step:
+                    order(obj(step['message'], 'message'), step['from'], calls, state)
                 if 'bytes' in step:
                     need(re.fullmatch(r'(?:[0-9a-f]{2})+', step['bytes']), 'bytes is lowercase hex')
                     length = int.from_bytes(bytes.fromhex(step['bytes'])[:4], 'little')

@@ -235,7 +235,7 @@ The launcher calls a [method](#methods):
 
 | Field | Type | Meaning |
 | --- | --- | --- |
-| `id` | integer, 1 to 2147483647 | Unique for the connection; the launcher counts up from 1 |
+| `id` | integer, 1 to 2147483647 | Unique for the connection; the launcher counts up from 1. Calls and pings count separately. A launcher about to run out shuts the host down once no game is loaded, and starts a new one for the next game |
 | `method` | string | The method name |
 | `args` | any | The method's argument; `null` when the method takes none. May be absent, which means `null` |
 
@@ -544,10 +544,12 @@ one pin at a time, until its next read. It draws a frame only when the slot's
     bytes;
   - on Linux, `fstat` gives exactly `bytes`, and `F_GET_SEALS` includes
     `F_SEAL_SHRINK` and `F_SEAL_SEAL`;
-  - on macOS, `fstat` gives exactly `bytes`, and `ftruncate(fd, bytes)`
-    fails. A POSIX shared memory object on macOS takes only its first
-    `ftruncate` and refuses every later one, so this shows the object cannot
-    be shrunk. A regular file would accept the call;
+  - on macOS, `fcntl(fd, F_GETFL)` shows `O_RDWR`; `fstat` gives at least
+    `bytes` and less than `bytes` plus one page (macOS rounds a shared memory
+    object up to whole pages); and `ftruncate(fd, bytes)` fails. A POSIX
+    shared memory object on macOS takes only its first `ftruncate` and
+    refuses every later one. A writable regular file would accept the call,
+    so this shows the object's size cannot change;
   - `magic`, `version`, `slotCount`, `headerBytes` and `pixelFormat` have the
     values above;
   - `slotBytes` is in range, and `bytes` equals `4096 + 3 × slotBytes`.
@@ -567,11 +569,16 @@ one pin at a time, until its next read. It draws a frame only when the slot's
 | macOS | `shm_open(name, O_RDWR \| O_CREAT \| O_EXCL, 0600)` with a random name of at most 30 characters, such as `/a5r-` and 12 random letters; `shm_unlink` at once; one `ftruncate` to the ring's size | The size is fixed after that `ftruncate`; the launcher checks it as above, and the host's macOS CI tests it |
 
 A ring only grows. When a frame needs more room, the host makes a new ring,
-sends `ring`, and publishes into the new one. The new `slotBytes` is at least
-twice the old one, but never above the limit, so all of a host's rings
-together are always smaller than twice its largest ring. The host keeps
-every ring it has announced until it exits, so on Windows the launcher can always still
-duplicate the handle. The launcher unmaps the old ring once it holds no pin
+sends `ring`, and publishes into the new one. The new `slotBytes` is the
+larger of twice the old one and what the frame needs, capped at the limit.
+So a host never has more than 27 rings, and their slots together take less
+than twice the largest ring's. The host keeps every ring it has announced
+until it exits, so on Windows the launcher can always still duplicate the
+handle.
+
+Both sides map the whole ring for reading and writing, shared:
+`MapViewOfFile(…, FILE_MAP_READ | FILE_MAP_WRITE, …)` on Windows, and
+`mmap(…, PROT_READ | PROT_WRITE, MAP_SHARED, …)` elsewhere. The launcher unmaps the old ring once it holds no pin
 in it.
 
 A zero-copy GPU path (a D3D11 shared texture, a dmabuf) may be added later
