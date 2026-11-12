@@ -126,6 +126,14 @@ every ordinary PS1 game, as before, and a launcher talking to an older host
 gets `notImplemented` and leaves it at that. Adding the method did not raise
 the protocol version, since neither side's existing calls changed.
 
+`input` drives the core's RetroPad on one port (the console's port 1 when the
+port is omitted): `mask` holds the sixteen RetroPad buttons and the four axes
+are the left and right sticks from -32768 to 32767. An ordinary PS1 game always
+has a DualShock (`RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_ANALOG, 0)`) in port 1,
+and in port 2 as `connectedPorts` says. SwanStation reads the sticks only from
+an analog controller: a port left as a plain RetroPad runs as a digital pad and
+drops the axes.
+
 The launcher answers one method itself: `hostProcessId` returns the host's pid
 (0 when none runs). The UI reports it as the running game's pid, so per-process
 capture works for embedded games.

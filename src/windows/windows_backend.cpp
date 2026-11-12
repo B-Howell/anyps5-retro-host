@@ -2558,8 +2558,10 @@ class RetroCoreSession {
         lan_ready_ = lan_ && loaded;
         if (loaded && !netplay_ && ps1_) {
           ports_changed_ = false;
-          if (const auto controller = Symbol<void (*)(unsigned, unsigned)>(dll, "retro_set_controller_port_device", false))
+          if (const auto controller = Symbol<void (*)(unsigned, unsigned)>(dll, "retro_set_controller_port_device", false)) {
+            controller(0, kPs1DualShockDevice);
             controller(1, SecondPortDevice());
+          }
         }
         if (loaded && netplay_) {
           const auto controller = Symbol<void (*)(unsigned, unsigned)>(dll, "retro_set_controller_port_device");

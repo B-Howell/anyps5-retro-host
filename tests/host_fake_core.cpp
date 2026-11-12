@@ -26,7 +26,8 @@ struct AvInfo {
 };
 
 constexpr unsigned kWidth = 8, kHeight = 4, kPorts = 4;
-constexpr unsigned kJoypad = 1, kMask = 256, kBitmasks = 51 | 0x10000, kPixelFormat = 10;
+constexpr unsigned kJoypad = 1, kAnalog = 5, kMask = 256, kBitmasks = 51 | 0x10000, kPixelFormat = 10;
+constexpr unsigned kDualShock = (1u << 8) | kAnalog;
 
 bool (*environment)(unsigned, void*);
 void (*video)(const void*, unsigned, unsigned, std::size_t);
@@ -56,7 +57,10 @@ uint16_t Buttons(unsigned port) {
 }  // namespace
 
 extern "C" TEST_EXPORT unsigned retro_api_version() { return 1; }
-extern "C" TEST_EXPORT void retro_init() { frames = 0; }
+extern "C" TEST_EXPORT void retro_init() {
+  frames = 0;
+  for (auto& device : devices) device = kNeverSet;
+}
 extern "C" TEST_EXPORT void retro_deinit() {}
 extern "C" TEST_EXPORT void retro_set_environment(decltype(environment) callback) { environment = callback; }
 extern "C" TEST_EXPORT void retro_set_video_refresh(decltype(video) callback) { video = callback; }
@@ -116,6 +120,9 @@ extern "C" TEST_EXPORT void retro_run() {
     const auto buttons = Buttons(port);
     pixels[port] = 0x00000080u | (static_cast<uint32_t>(buttons & 0xFF) << 16) |
                    (static_cast<uint32_t>(buttons >> 8) << 8);
+    const bool dualshock = devices[port] == kDualShock;
+    const auto left_x = dualshock ? static_cast<uint16_t>(input(port, kAnalog, 0, 0)) : uint16_t{0};
+    pixels[kWidth * 2 + port] = (dualshock ? 0x00010000u : 0u) | left_x;
   }
   pixels[kWidth] = 0x00800000u | (frame & 0xFFFF);
   // Each port's device: red is its low byte, green its high byte.

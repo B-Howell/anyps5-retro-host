@@ -1145,8 +1145,10 @@ class Session::Impl {
         loaded = load(&game);
         if (loaded && !match_timeline_ && console_ == Console::kPs1) {
           ports_changed_ = false;
-          if (const auto controller = core.Get<void (*)(unsigned, unsigned)>("retro_set_controller_port_device", false))
+          if (const auto controller = core.Get<void (*)(unsigned, unsigned)>("retro_set_controller_port_device", false)) {
+            controller(0, kPs1DualShockDevice);
             controller(1, SecondPortDevice());
+          }
         }
         if (loaded && match_timeline_) {
           const auto controller = core.Get<void (*)(unsigned, unsigned)>("retro_set_controller_port_device");

@@ -337,6 +337,7 @@ void TestPs1Ports(const Fixture& fixture) {
     return frame ? PortDevice(*frame, port) : -2;
   };
   client.Wait([&] { return device(1) == kDualShock; }, "port 2 did not start with a DualShock, as before");
+  Check(device(0) == kDualShock, "port 1 is not a DualShock, so the core ignores its sticks");
   Check(std::get<bool>(client.Success("connectedPorts", Value(1))), "a PS1 game refused connectedPorts");
   client.Wait([&] { return device(1) == 0; }, "port 2 kept its controller with one player");
   Check(!std::get<bool>(client.Success("connectedPorts", Value(0))), "no connected port was accepted");
@@ -355,6 +356,31 @@ void TestPs1Ports(const Fixture& fixture) {
   client.Success("release");
   client.proxy().Shutdown();
   std::cout << "A PS1 game's second port has a controller only while a second player is connected." << std::endl;
+}
+
+void TestPs1Sticks(const Fixture& fixture) {
+  Platform platform;
+  Client client(fixture, platform, {});
+  const auto texture = client.Start(Game(fixture, fixture.ps1_core, "frames.cue"));
+  client.Wait([&] {
+    const auto status = client.Status();
+    Check(!Flag(status, "ended"), "the PS1 game ended: " + Text(status, "error"));
+    return platform.marks(texture) > 3 && client.proxy().Acquire(texture);
+  }, "no PS1 frames reached the launcher texture");
+  client.WaitStatus([](const Map& status) { return Flag(status, "presented"); }, "the PS1 game never presented");
+  client.Success("input", Value(List{Value(0), Value(0x1234), Value(0), Value(0), Value(0)}));
+  client.Success("input", Value(List{Value(1), Value(0), Value(-0x2000), Value(0), Value(0), Value(0)}));
+  const auto stick = [](const ProxyFrame& frame, unsigned port) { return frame.pixels + (8 * 2 + port) * 4; };
+  client.Wait([&] {
+    const auto latest = client.proxy().Acquire(texture);
+    return latest && stick(*latest, 0)[0] == 1 && stick(*latest, 0)[1] == 0x12 && stick(*latest, 0)[2] == 0x34 &&
+           stick(*latest, 1)[0] == 1 && stick(*latest, 1)[1] == 0xE0 && stick(*latest, 1)[2] == 0x00;
+  }, "the left sticks did not reach the DualShocks in PS1 ports 1 and 2");
+  client.Success("stop");
+  client.WaitStatus([](const Map& status) { return Flag(status, "ended"); }, "the PS1 game did not stop");
+  client.Success("release");
+  client.proxy().Shutdown();
+  std::cout << "A PS1 game reads the left sticks of the DualShocks in ports 1 and 2." << std::endl;
 }
 
 void TestCheckpoint(const Fixture& fixture) {
@@ -519,6 +545,7 @@ int main(int argc, char** argv) {
     TestFrameRing();
     TestFramesAndInput(fixture);
     TestPs1Ports(fixture);
+    TestPs1Sticks(fixture);
     TestCheckpoint(fixture);
     TestCrash(fixture);
     TestHang(fixture);
