@@ -193,6 +193,17 @@ class Session::Impl {
     for (auto& axes : axes_) axes.fill(0);
   }
 
+  // The PS1 ports with a controller in, from port 1. Port 2 stays connected until the launcher
+  // says otherwise, as it did before the launcher could say it.
+  bool ConnectPorts(unsigned count) {
+    if (console_ != Console::kPs1 || match_timeline_ || stop_ || ended_ || count < 1 || count > kLocalPorts)
+      return false;
+    if (connected_ports_.exchange(count) != count) ports_changed_ = true;
+    return true;
+  }
+
+  unsigned SecondPortDevice() const { return connected_ports_ >= 2 ? kPs1DualShockDevice : kNoDevice; }
+
   void SetInput(unsigned port, uint16_t buttons, const std::array<int16_t, 4>& axes) {
     if (port >= kLocalPorts) return;
     std::lock_guard<std::mutex> lock(input_mutex_);
@@ -1133,8 +1144,9 @@ class Session::Impl {
         }
         loaded = load(&game);
         if (loaded && !match_timeline_ && console_ == Console::kPs1) {
+          ports_changed_ = false;
           if (const auto controller = core.Get<void (*)(unsigned, unsigned)>("retro_set_controller_port_device", false))
-            controller(1, kPs1DualShockDevice);
+            controller(1, SecondPortDevice());
         }
         if (loaded && match_timeline_) {
           const auto controller = core.Get<void (*)(unsigned, unsigned)>("retro_set_controller_port_device");
@@ -1275,6 +1287,10 @@ class Session::Impl {
       };
       while (!stop_) {
         if (!match_timeline_ && !checkpoint_.busy()) ApplyDiscChange();
+        if (!match_timeline_ && ps1 && !checkpoint_.busy() && ports_changed_.exchange(false)) {
+          if (const auto controller = core.Get<void (*)(unsigned, unsigned)>("retro_set_controller_port_device", false))
+            controller(1, SecondPortDevice());
+        }
         if (!match_timeline_ && (ps1 || ps2) && !checkpoint_.busy())
           ApplyCheckpointGraphics(core, reopen, step, ps1, card, card_size, card_path);
         if (!recovered_source_ && !ps3_ && hardware_callbacks_.reset && !frame_ready_ && Clock::now() > hardware_deadline) {
@@ -1509,6 +1525,9 @@ class Session::Impl {
   std::mutex frame_mutex_, input_mutex_, settings_mutex_;
   std::shared_ptr<Frame> frame_;
   static constexpr unsigned kLocalPorts = 4;
+  static constexpr unsigned kNoDevice = 0;
+  std::atomic<unsigned> connected_ports_{2};
+  std::atomic<bool> ports_changed_{false};
   std::array<uint16_t, kLocalPorts> buttons_{};
   std::array<std::array<int16_t, 4>, kLocalPorts> axes_{};
   std::map<std::string, Option> options_;
@@ -1539,6 +1558,7 @@ void Session::Stop() { impl_->Stop(); }
 void Session::Join() { impl_->Join(); }
 void Session::Pause(bool pause) { impl_->Pause(pause); }
 bool Session::ChangeDisc(unsigned index) { return impl_->ChangeDisc(index); }
+bool Session::ConnectPorts(unsigned count) { return impl_->ConnectPorts(count); }
 void Session::SetInput(uint16_t buttons, const std::array<int16_t, 4>& axes) { impl_->SetInput(0, buttons, axes); }
 void Session::SetInput(unsigned port, uint16_t buttons, const std::array<int16_t, 4>& axes) {
   impl_->SetInput(port, buttons, axes);

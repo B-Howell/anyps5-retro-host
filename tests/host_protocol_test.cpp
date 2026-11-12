@@ -99,7 +99,7 @@ class Platform {
 };
 
 struct Fixture {
-  std::filesystem::path host, frames_core, checkpoint_core, root;
+  std::filesystem::path host, frames_core, checkpoint_core, ps1_core, root;
 };
 
 class Client {
@@ -321,6 +321,42 @@ void TestFramesAndInput(const Fixture& fixture) {
   std::cout << "Host frames reach the launcher texture and input reaches its own port." << std::endl;
 }
 
+// The device the fake core was given for [port], drawn on the frame's second row.
+int64_t PortDevice(const ProxyFrame& frame, unsigned port) {
+  const auto* pixel = frame.pixels + (8 + 1 + port) * 4;
+  return pixel[2] != 0x40 ? -1 : pixel[0] | (pixel[1] << 8);
+}
+
+void TestPs1Ports(const Fixture& fixture) {
+  constexpr int64_t kDualShock = (1 << 8) | 5;
+  Platform platform;
+  Client client(fixture, platform, {});
+  const auto texture = client.Start(Game(fixture, fixture.ps1_core, "frames.cue"));
+  const auto device = [&](unsigned port) {
+    const auto frame = client.proxy().Acquire(texture);
+    return frame ? PortDevice(*frame, port) : -2;
+  };
+  client.Wait([&] { return device(1) == kDualShock; }, "port 2 did not start with a DualShock, as before");
+  Check(std::get<bool>(client.Success("connectedPorts", Value(1))), "a PS1 game refused connectedPorts");
+  client.Wait([&] { return device(1) == 0; }, "port 2 kept its controller with one player");
+  Check(!std::get<bool>(client.Success("connectedPorts", Value(0))), "no connected port was accepted");
+  Check(!std::get<bool>(client.Success("connectedPorts", Value(5))), "a fifth port was accepted");
+  Check(std::get<bool>(client.Success("connectedPorts", Value(2))), "a second player was refused");
+  client.Wait([&] { return device(1) == kDualShock; }, "port 2 did not get a DualShock for the second player");
+  client.Success("stop");
+  client.WaitStatus([](const Map& status) { return Flag(status, "ended"); }, "the PS1 game did not stop");
+  client.Success("release");
+
+  const auto ps2 = client.Start(Game(fixture, fixture.frames_core, "frames.cue"));
+  client.Wait([&] { return platform.marks(ps2) > 0; }, "the PS2 game did not render");
+  Check(!std::get<bool>(client.Success("connectedPorts", Value(1))), "a PS2 game took PS1 ports");
+  client.Success("stop");
+  client.WaitStatus([](const Map& status) { return Flag(status, "ended"); }, "the PS2 game did not stop");
+  client.Success("release");
+  client.proxy().Shutdown();
+  std::cout << "A PS1 game's second port has a controller only while a second player is connected." << std::endl;
+}
+
 void TestCheckpoint(const Fixture& fixture) {
   Platform platform;
   Client client(fixture, platform, {});
@@ -471,16 +507,18 @@ void TestEarlyExit(const Fixture& fixture, const std::filesystem::path& self) {
 
 int main(int argc, char** argv) {
   try {
-    Check(argc == 4, "Pass the host executable, the frame core and the checkpoint core");
+    Check(argc == 5, "Pass the host executable, the frame core, the checkpoint core and the PS1 frame core");
     Fixture fixture{std::filesystem::absolute(std::filesystem::u8path(argv[1])),
                     std::filesystem::absolute(std::filesystem::u8path(argv[2])),
                     std::filesystem::absolute(std::filesystem::u8path(argv[3])),
+                    std::filesystem::absolute(std::filesystem::u8path(argv[4])),
                     std::filesystem::temp_directory_path() /
                         ("anyps5-retro-host-test-" + std::to_string(Clock::now().time_since_epoch().count()))};
     std::filesystem::create_directories(fixture.root);
     TestJson();
     TestFrameRing();
     TestFramesAndInput(fixture);
+    TestPs1Ports(fixture);
     TestCheckpoint(fixture);
     TestCrash(fixture);
     TestHang(fixture);

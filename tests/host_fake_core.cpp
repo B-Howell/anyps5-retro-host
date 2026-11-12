@@ -37,6 +37,8 @@ std::size_t (*audio)(const int16_t*, std::size_t);
 enum class Mode { kFrames, kCrash, kHang };
 Mode mode = Mode::kFrames;
 std::atomic<uint32_t> frames{0};
+constexpr unsigned kNeverSet = 0xFFFF;
+std::atomic<unsigned> devices[kPorts] = {kNeverSet, kNeverSet, kNeverSet, kNeverSet};
 
 std::string Name(const char* path) {
   std::string text(path ? path : "");
@@ -62,7 +64,9 @@ extern "C" TEST_EXPORT void retro_set_input_state(decltype(input) callback) { in
 extern "C" TEST_EXPORT void retro_set_input_poll(void (*callback)()) { poll = callback; }
 extern "C" TEST_EXPORT void retro_set_audio_sample(void (*)(int16_t, int16_t)) {}
 extern "C" TEST_EXPORT void retro_set_audio_sample_batch(decltype(audio) callback) { audio = callback; }
-extern "C" TEST_EXPORT void retro_set_controller_port_device(unsigned, unsigned) {}
+extern "C" TEST_EXPORT void retro_set_controller_port_device(unsigned port, unsigned device) {
+  if (port < kPorts) devices[port] = device;
+}
 extern "C" TEST_EXPORT void retro_reset() {}
 extern "C" TEST_EXPORT void retro_get_system_info(void* info) { std::memset(info, 0, 5 * sizeof(void*)); }
 extern "C" TEST_EXPORT void retro_get_system_av_info(AvInfo* info) {
@@ -114,6 +118,11 @@ extern "C" TEST_EXPORT void retro_run() {
                    (static_cast<uint32_t>(buttons >> 8) << 8);
   }
   pixels[kWidth] = 0x00800000u | (frame & 0xFFFF);
+  // Each port's device: red is its low byte, green its high byte.
+  for (unsigned port = 0; port < kPorts; ++port) {
+    const auto device = devices[port].load();
+    pixels[kWidth + 1 + port] = 0x00000040u | ((device & 0xFF) << 16) | (((device >> 8) & 0xFF) << 8);
+  }
   video(pixels, kWidth, kHeight, kWidth * 4);
   int16_t silence[800 * 2] = {};
   audio(silence, 800);

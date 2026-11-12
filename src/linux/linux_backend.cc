@@ -281,6 +281,9 @@ class LinuxBackend final : public Backend {
     } else if (method == "input") {
       SetInput(*session_, args);
       result.Success();
+    } else if (method == "connectedPorts") {
+      const auto count = lc::IsInt(args) ? lc::Int(args) : 0;
+      result.Success(Value(count >= 1 && count <= 4 && session_->ConnectPorts(static_cast<unsigned>(count))));
     } else if (method == "netplayStart") {
       result.Success(Value(session_->StartNetplay()));
     } else if (method == "ps1CheckpointHold") {

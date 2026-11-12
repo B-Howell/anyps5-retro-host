@@ -785,6 +785,17 @@ class RetroCoreSession {
     for (auto& axes : axes_) axes.fill(0);
   }
 
+  // The PS1 ports with a controller in, from port 1. Port 2 stays connected until the launcher
+  // says otherwise, as it did before the launcher could say it.
+  bool ConnectPorts(unsigned count) {
+    if (!ps1_ || netplay_ || installing_packages() || stop_ || ended_ || count < 1 || count > kLocalPorts)
+      return false;
+    if (connected_ports_.exchange(count) != count) ports_changed_ = true;
+    return true;
+  }
+
+  unsigned SecondPortDevice() const { return connected_ports_ >= 2 ? kPs1DualShockDevice : kNoDevice; }
+
   void SetInput(unsigned port, uint16_t buttons, const std::array<int16_t, 4>& axes) {
     if (!recovery_accepted_ || port >= kLocalPorts) return;
     std::lock_guard<std::mutex> lock(input_mutex_);
@@ -2546,8 +2557,9 @@ class RetroCoreSession {
         }
         lan_ready_ = lan_ && loaded;
         if (loaded && !netplay_ && ps1_) {
+          ports_changed_ = false;
           if (const auto controller = Symbol<void (*)(unsigned, unsigned)>(dll, "retro_set_controller_port_device", false))
-            controller(1, kPs1DualShockDevice);
+            controller(1, SecondPortDevice());
         }
         if (loaded && netplay_) {
           const auto controller = Symbol<void (*)(unsigned, unsigned)>(dll, "retro_set_controller_port_device");
@@ -2650,7 +2662,14 @@ class RetroCoreSession {
       auto hardware_deadline = next + std::chrono::seconds(8);
       Clock::time_point recovery_deadline{};
       while (!netplay_ && !stop_) {
-        if (ps1 && !ordinary_parked_) ApplyDiscChange();
+        if (ps1 && !ordinary_parked_) {
+          ApplyDiscChange();
+          if (ports_changed_.exchange(false)) {
+            if (const auto controller =
+                    Symbol<void (*)(unsigned, unsigned)>(dll, "retro_set_controller_port_device", false))
+              controller(1, SecondPortDevice());
+          }
+        }
         if (recovered_source() && !startup_visible_ && !paused_) {
           const auto now = Clock::now();
           if (recovery_deadline == Clock::time_point{}) recovery_deadline = now + std::chrono::seconds(8);
@@ -2849,6 +2868,9 @@ class RetroCoreSession {
   std::optional<PresentationRender> presentation_render_;
   std::shared_ptr<Frame> frame_;
   static constexpr unsigned kLocalPorts = 4;
+  static constexpr unsigned kNoDevice = 0;
+  std::atomic<unsigned> connected_ports_{2};
+  std::atomic<bool> ports_changed_{false};
   std::array<uint16_t, kLocalPorts> buttons_{};
   std::array<std::array<int16_t, 4>, kLocalPorts> axes_{};
   std::map<std::string, Option> options_;
@@ -3460,6 +3482,9 @@ void RetroCoreHost::Handle(const MethodCall& call, std::unique_ptr<MethodResult>
       }
     }
     result->Success();
+  } else if (method == "connectedPorts") {
+    const auto count = arguments ? IntegerValue(*arguments) : std::nullopt;
+    result->Success(Value(count && *count >= 1 && *count <= 4 && session_->ConnectPorts(static_cast<unsigned>(*count))));
   } else if (method == "changeDisc") {
     const auto index = arguments ? IntegerValue(*arguments) : std::nullopt;
     result->Success(Value(index && *index >= 0 && *index < 128 &&

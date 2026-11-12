@@ -148,6 +148,7 @@ class Session {
   void Join();
   void Pause(bool pause);
   bool ChangeDisc(unsigned index);
+  bool ConnectPorts(unsigned count);
   void SetInput(uint16_t buttons, const std::array<int16_t, 4>& axes);
   void SetInput(unsigned port, uint16_t buttons, const std::array<int16_t, 4>& axes);
   std::optional<LanFrames> ExchangeLan(const LanFrames& input);

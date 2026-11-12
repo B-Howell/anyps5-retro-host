@@ -114,6 +114,18 @@ the PS2 LAN calls (`ps2LanReset`, `ps2LanExchange`) and the PS3 update calls
 (`installPs3Packages`, `ps3PackageStatus`). Keeping them identical is what
 lets the launcher UI stay unchanged.
 
+`connectedPorts` (an int, 1 to 4) is the one method the host adds to that
+channel: how many of a PS1 game's controller ports, from port 1, have a
+controller in. Port 2 gets a DualShock when the count is 2 or more and no
+device (`RETRO_DEVICE_NONE`) otherwise, so a game offers a second player only
+once one has joined. The core is told between frames, on its own thread. It
+returns true when the ordinary PS1 game took the count, false for any other
+game, a synchronized PS1 match (which connects both ports itself) or a count
+out of range. A host that is never sent it keeps a DualShock in port 2 for
+every ordinary PS1 game, as before, and a launcher talking to an older host
+gets `notImplemented` and leaves it at that. Adding the method did not raise
+the protocol version, since neither side's existing calls changed.
+
 The launcher answers one method itself: `hostProcessId` returns the host's pid
 (0 when none runs). The UI reports it as the running game's pid, so per-process
 capture works for embedded games.
