@@ -235,7 +235,7 @@ Host::Reply Host::Dispatch(const std::string& method, const Json& args) {
     rings_->Clear();
     return reply;
   }
-  return Failure("unknownMethod", "Unknown method " + method + ".");
+  return Failure("unknownMethod", "This host has no such method.");
 }
 
 Host::Reply Host::Start(const Json& args) {
@@ -281,9 +281,10 @@ Host::Reply Host::Start(const Json& args) {
   return reply;
 }
 
-bool Host::OnFrame(const uint8_t* pixels, uint32_t width, uint32_t height, uint32_t epoch) {
+FrameResult Host::OnFrame(const uint8_t* pixels, uint32_t width, uint32_t height, uint32_t epoch) {
   auto growth = rings_->Prepare(width, height);
-  if (!growth.fits) return false;
+  if (!growth.fits) return FrameResult::kTooLarge;
+  if (growth.no_memory) return FrameResult::kNoMemory;
   if (growth.ring) {
     JsonObject ring{{"type", "ring"}, {"bytes", growth.ring->bytes}};
 #ifdef _WIN32
@@ -295,7 +296,7 @@ bool Host::OnFrame(const uint8_t* pixels, uint32_t width, uint32_t height, uint3
   }
   rings_->Publish(pixels, width, height, epoch);
   Send(Json(JsonObject{{"type", "frame"}}));
-  return true;
+  return FrameResult::kShown;
 }
 
 void Host::OnRumble(unsigned port, uint16_t strong, uint16_t weak) {
@@ -304,7 +305,9 @@ void Host::OnRumble(unsigned port, uint16_t strong, uint16_t weak) {
 
 void Host::Send(const Json& message, NativeHandle memory) {
   if (launcher_gone_) return;
-  if (!channel_.Write(message.Serialize(), memory)) launcher_gone_ = true;
+  if (channel_.Write(message.Serialize(), memory)) return;
+  launcher_gone_ = true;
+  std::call_once(leaving_once_, [this] { std::thread([this] { LauncherGone(); }).detach(); });
 }
 
 std::shared_ptr<Game> Host::CurrentGame() const {

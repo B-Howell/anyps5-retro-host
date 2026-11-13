@@ -74,6 +74,7 @@ class Library {
 
 // Opens a file named by a UTF-8 path for reading, or returns false.
 bool CanRead(const std::string& path);
+bool Exists(const std::string& path);
 bool IsDirectory(const std::string& path);
 bool CreateDirectories(const std::string& path);
 std::optional<std::string> ReadWholeFile(const std::string& path);

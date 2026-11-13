@@ -565,7 +565,7 @@ Loads and starts a PS1 game.
 | `core` | path | The SwanStation library the launcher checked |
 | `disc` | path | A `.cue`, `.chd`, `.pbp` or `.m3u` file |
 | `system` | path | The core's system directory (BIOS files) |
-| `saves` | path | Where memory cards are kept; the host creates it if needed. Memory card 1 is the file `<disc's name without its extension>.srm` in it, as libretro frontends name it, and is written within 5 seconds of a change, and whenever the game ends |
+| `saves` | path | Where memory cards are kept; the host creates it if needed. Memory card 1 is the file `<disc's name without its extension>.srm` in it, as libretro frontends name it, and is checked for changes every 5 seconds between frames, also while paused, and written whenever the game ends. A card file the host cannot read is left as it is and never written over |
 | `options` | object of strings, optional | Core option values saved by the player, by key, including the internal resolution (`swanstation_GPU_ResolutionScale`). Unknown keys and values are ignored |
 | `initialDisc` | integer 0 to 127, optional | Only for an `.m3u`: the index of the playlist entry to insert at boot. With any other `disc` it is an `argument` error |
 

@@ -231,11 +231,12 @@ void WatchLauncher(const Arguments& arguments, std::function<void()> on_gone) {
     struct kevent change;
     EV_SET(&change, parent, EVFILT_PROC, EV_ADD | EV_ONESHOT, NOTE_EXIT, 0, nullptr);
     struct kevent event;
-    const int result = kevent(queue, &change, 1, &event, 1, nullptr);
-    if (result < 0 || (event.flags & EV_ERROR)) {
-      if (errno == ESRCH || (result > 0 && event.data == ESRCH)) fire();
+    const int result = queue < 0 ? -1 : kevent(queue, &change, 1, &event, 1, nullptr);
+    if (result > 0 && !(event.flags & EV_ERROR)) {
+      fire();
       return;
     }
+    while (kill(parent, 0) == 0 || errno != ESRCH) std::this_thread::sleep_for(std::chrono::milliseconds(250));
     fire();
   }).detach();
 #else
@@ -301,12 +302,17 @@ void Library::Close() {
 }
 
 bool CanRead(const std::string& path) {
-  const int fd = open(path.c_str(), O_RDONLY | O_CLOEXEC);
+  const int fd = open(path.c_str(), O_RDONLY | O_CLOEXEC | O_NONBLOCK);
   if (fd < 0) return false;
   struct stat info;
   const bool regular = fstat(fd, &info) == 0 && S_ISREG(info.st_mode);
   close(fd);
   return regular;
+}
+
+bool Exists(const std::string& path) {
+  struct stat info;
+  return lstat(path.c_str(), &info) == 0;
 }
 
 bool IsDirectory(const std::string& path) {

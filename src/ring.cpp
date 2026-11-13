@@ -29,7 +29,7 @@ FrameRings::Growth FrameRings::Prepare(uint32_t width, uint32_t height) {
   if (need <= slot_bytes_) return {};
   const uint64_t slot_bytes = slot_bytes_ == 0 ? need : std::min(std::max(2 * slot_bytes_, need), kMaxSlotBytes);
   auto memory = CreateSharedMemory(kHeaderBytes + kSlotCount * slot_bytes);
-  if (!memory) return {std::nullopt, false};
+  if (!memory) return {std::nullopt, true, true};
   uint8_t* ring = memory->data;
   std::memset(ring, 0, kHeaderBytes);
   Put32(ring + 0, kRingMagic);

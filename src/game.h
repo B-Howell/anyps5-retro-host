@@ -39,12 +39,14 @@ struct PortInput {
 
 // What a running game hands back to the host: frames to publish and rumble to forward. Called
 // on the game's thread.
+enum class FrameResult { kShown, kTooLarge, kNoMemory };
+
 class GameEvents {
  public:
   virtual ~GameEvents() = default;
-  // pixels are rows of width x 4 bytes in the ring's pixel format. False when no ring can hold
-  // the frame, which ends the game.
-  virtual bool OnFrame(const uint8_t* pixels, uint32_t width, uint32_t height, uint32_t epoch) = 0;
+  // pixels are rows of width x 4 bytes in the ring's pixel format. A frame no ring can hold, or
+  // one the host cannot make memory for, ends the game.
+  virtual FrameResult OnFrame(const uint8_t* pixels, uint32_t width, uint32_t height, uint32_t epoch) = 0;
   virtual void OnRumble(unsigned port, uint16_t strong, uint16_t weak) = 0;
 };
 
@@ -118,8 +120,10 @@ class Game {
   void RunGame();
   void Finish(const std::string& error, const std::string& code);
   void ApplyPendingWork();
-  // Writes memory card 1 when it changed since the last write, or always.
-  void SaveCard(bool always = false);
+  // Writes memory card 1 when it changed since the last write, or always; false when it could
+  // not be written. A card file the host could not read is never written over.
+  bool SaveCard(bool always = false);
+  std::string ResolutionError() const;
   std::string CardPath() const;
   void RefreshDiscs();
   std::optional<std::string> PlaylistEntry(unsigned index) const;
@@ -163,7 +167,9 @@ class Game {
   double sample_rate_ = 0.0;
   bool timing_changed_ = false;
   std::vector<uint8_t> converted_;
-  bool frame_too_large_ = false;
+  FrameResult frame_failure_ = FrameResult::kShown;
+  bool card_kept_ = true;
+  mutable std::mutex pause_mutex_;
   bool bios_missing_ = false;
   std::string card_;
   struct DiscControl;

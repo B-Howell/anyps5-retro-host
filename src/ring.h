@@ -28,10 +28,12 @@ class FrameRings {
   explicit FrameRings(PixelFormat format) : format_(format) {}
 
   // A ring to announce before the frame of width x height can be published, or nullopt when
-  // the current ring has room. nullopt with fits false means no ring can hold it.
+  // the current ring has room. fits is false when no ring can hold the frame, and no_memory when
+  // the system would not give the memory for one.
   struct Growth {
     std::optional<SharedMemory> ring;
     bool fits = true;
+    bool no_memory = false;
   };
   Growth Prepare(uint32_t width, uint32_t height);
 

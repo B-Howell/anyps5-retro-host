@@ -36,7 +36,7 @@ class Host final : public GameEvents {
   // The launcher has gone (end-of-stream, its exit, or SIGTERM): stop the game as shutdown does.
   void LauncherGone();
 
-  bool OnFrame(const uint8_t* pixels, uint32_t width, uint32_t height, uint32_t epoch) override;
+  FrameResult OnFrame(const uint8_t* pixels, uint32_t width, uint32_t height, uint32_t epoch) override;
   void OnRumble(unsigned port, uint16_t strong, uint16_t weak) override;
 
   // A method's answer: its result, or an error object. exit_after ends the host once the reply
@@ -81,6 +81,7 @@ class Host final : public GameEvents {
   std::atomic<int64_t> stop_requested_at_{-1};
   std::atomic<int64_t> leaving_since_{-1};
   std::atomic<bool> launcher_gone_{false};
+  std::once_flag leaving_once_;
 };
 
 }  // namespace retro_host

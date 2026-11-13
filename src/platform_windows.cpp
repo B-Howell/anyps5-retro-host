@@ -188,6 +188,11 @@ bool CanRead(const std::string& path) {
   return regular && !directory;
 }
 
+bool Exists(const std::string& path) {
+  const std::wstring wide = Wide(path);
+  return !wide.empty() && GetFileAttributesW(wide.c_str()) != INVALID_FILE_ATTRIBUTES;
+}
+
 bool IsDirectory(const std::string& path) {
   const std::wstring wide = Wide(path);
   const DWORD attributes = wide.empty() ? INVALID_FILE_ATTRIBUTES : GetFileAttributesW(wide.c_str());

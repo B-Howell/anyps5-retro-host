@@ -50,6 +50,8 @@ bool OnRumble(unsigned port, enum retro_rumble_effect effect, uint16_t strength)
 
 constexpr unsigned kDualShock = RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_ANALOG, 0);
 constexpr int64_t kCardSaveMs = 5000;
+constexpr size_t kPathBytes = 32768;
+constexpr char kResolutionOption[] = "swanstation_GPU_ResolutionScale";
 
 #ifdef _WIN32
 constexpr char kSeparators[] = "/\\";
@@ -118,6 +120,7 @@ bool Game::Start(std::string& error) {
 }
 
 void Game::Begin() {
+  audio_.SetPaused(false);
   quiet_since_ = NowMs();
   thread_ = std::thread([this] { Run(); });
 }
@@ -168,8 +171,12 @@ void Game::RunGame() {
   void* card = Get<void* (*)(unsigned)>("retro_get_memory_data")(RETRO_MEMORY_SAVE_RAM);
   const size_t card_size = Get<size_t (*)(unsigned)>("retro_get_memory_size")(RETRO_MEMORY_SAVE_RAM);
   if (card && card_size) {
-    if (const auto saved = ReadWholeFile(CardPath()); saved && saved->size() == card_size) {
+    const std::string path = CardPath();
+    if (const auto saved = ReadWholeFile(path); saved && saved->size() == card_size) {
       std::memcpy(card, saved->data(), card_size);
+    } else if (Exists(path)) {
+      card_kept_ = false;
+      Log(RETRO_LOG_WARN, ("The memory card " + path + " cannot be read as one; it is left as it is.").c_str());
     }
     card_.assign(static_cast<const char*>(card), card_size);
   }
@@ -190,7 +197,6 @@ void Game::RunGame() {
   const auto run = Get<void (*)()>("retro_run");
   auto next = std::chrono::steady_clock::now();
   int64_t last_card_check = NowMs();
-  quiet_since_ = NowMs();
   std::string end_error;
   std::string end_code;
   while (!stop_) {
@@ -211,9 +217,18 @@ void Game::RunGame() {
     }
     ApplyPendingWork();
     run();
-    if (frame_too_large_) {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (disc_.inserted && *disc_.inserted < disc_.paths.size()) disc_.played = disc_.paths[*disc_.inserted];
+    }
+    if (frame_failure_ == FrameResult::kTooLarge) {
       end_error = "The game's frame is larger than 8192 x 8192.";
       end_code = "frameTooLarge";
+      break;
+    }
+    if (frame_failure_ == FrameResult::kNoMemory) {
+      end_error = "The host could not make memory for the game's frames.";
+      end_code = "other";
       break;
     }
     next += std::chrono::duration_cast<std::chrono::steady_clock::duration>(frame_time);
@@ -221,7 +236,10 @@ void Game::RunGame() {
     if (next < now - std::chrono::milliseconds(250)) next = now;
     std::this_thread::sleep_until(next);
   }
-  SaveCard(true);
+  if (!SaveCard(true) && end_code.empty()) {
+    end_error = "The memory card could not be saved.";
+    end_code = "other";
+  }
   Get<void (*)()>("retro_unload_game")();
   Get<void (*)()>("retro_deinit")();
   audio_.Close();
@@ -286,10 +304,11 @@ void Game::RefreshDiscs() {
   next.labels.clear();
   next.paths.clear();
   for (unsigned i = 0; i < count; ++i) {
-    char text[1024] = {};
+    std::vector<char> buffer(kPathBytes, '\0');
+    char* text = buffer.data();
     std::string label;
     if (disc_control_->extended && disc_control_->callbacks.get_image_label &&
-        disc_control_->callbacks.get_image_label(i, text, sizeof text) && text[0]) {
+        disc_control_->callbacks.get_image_label(i, text, buffer.size() - 1) && text[0]) {
       label = text;
     } else {
       label = "Disc " + std::to_string(i + 1);
@@ -297,7 +316,7 @@ void Game::RefreshDiscs() {
     next.labels.push_back(label);
     text[0] = '\0';
     if (disc_control_->extended && disc_control_->callbacks.get_image_path &&
-        disc_control_->callbacks.get_image_path(i, text, sizeof text)) {
+        disc_control_->callbacks.get_image_path(i, text, buffer.size() - 1)) {
       next.paths.emplace_back(text);
     } else {
       next.paths.emplace_back();
@@ -307,7 +326,6 @@ void Game::RefreshDiscs() {
     next.inserted.reset();
   } else {
     next.inserted = control.get_image_index();
-    if (*next.inserted < next.paths.size()) next.played = next.paths[*next.inserted];
   }
   std::lock_guard<std::mutex> lock(mutex_);
   disc_ = next;
@@ -341,13 +359,15 @@ std::string Game::CardPath() const {
   return saves + Stem(config_.disc) + ".srm";
 }
 
-void Game::SaveCard(bool always) {
+bool Game::SaveCard(bool always) {
   void* card = Get<void* (*)(unsigned)>("retro_get_memory_data")(RETRO_MEMORY_SAVE_RAM);
   const size_t card_size = Get<size_t (*)(unsigned)>("retro_get_memory_size")(RETRO_MEMORY_SAVE_RAM);
-  if (!card || !card_size) return;
+  if (!card || !card_size || !card_kept_) return true;
   std::string now(static_cast<const char*>(card), card_size);
-  if (now == card_ && !always) return;
-  if (CreateDirectories(config_.saves) && WriteFileAtomically(CardPath(), now)) card_ = std::move(now);
+  if (now == card_ && !always) return true;
+  if (!CreateDirectories(config_.saves) || !WriteFileAtomically(CardPath(), now)) return false;
+  card_ = std::move(now);
+  return true;
 }
 
 bool Game::Environment(unsigned command, void* data) {
@@ -489,7 +509,7 @@ void Game::Video(const void* data, unsigned width, unsigned height, size_t pitch
   if (!data) return;
   if (width == 0 || height == 0) return;
   if (width > kMaxFrameSide || height > kMaxFrameSide) {
-    frame_too_large_ = true;
+    frame_failure_ = FrameResult::kTooLarge;
     return;
   }
   converted_.resize(static_cast<size_t>(width) * height * 4);
@@ -523,8 +543,9 @@ void Game::Video(const void* data, unsigned width, unsigned height, size_t pitch
       out[3] = 0xFF;
     }
   }
-  if (!events_.OnFrame(converted_.data(), width, height, config_.epoch)) {
-    frame_too_large_ = true;
+  const FrameResult shown = events_.OnFrame(converted_.data(), width, height, config_.epoch);
+  if (shown != FrameResult::kShown) {
+    frame_failure_ = shown;
     return;
   }
   {
@@ -591,14 +612,16 @@ Json Game::Status() const {
                                                 {"restart", false}});
   }
   const double aspect = aspect_ > 0 && aspect_ <= 10 ? aspect_ : 4.0 / 3.0;
+  bool pending = false;
+  for (const auto& option : options_) pending = pending || option.values[option.selected] != option.active;
   JsonObject status{{"ready", ready_},
                     {"ended", ended_},
                     {"error", error_},
                     {"errorCode", error_code_},
                     {"aspect", aspect},
                     {"hardware", false},
-                    {"resolutionError", ""},
-                    {"graphicsPending", options_changed_},
+                    {"resolutionError", ResolutionError()},
+                    {"graphicsPending", pending},
                     {"progressLabel", nullptr},
                     {"progressPercent", nullptr},
                     {"options", std::move(options)}};
@@ -624,13 +647,17 @@ Json Game::Status() const {
 }
 
 void Game::Pause(bool paused) {
-  if (paused == paused_.exchange(paused)) return;
+  std::lock_guard<std::mutex> lock(pause_mutex_);
+  if (paused == paused_) return;
   audio_.SetPaused(paused);
   if (paused) {
     paused_at_ = NowMs();
+    paused_ = true;
   } else {
-    const int64_t at = paused_at_.exchange(-1);
-    if (at >= 0) quiet_since_ += NowMs() - at;
+    const int64_t quiet_before = std::max<int64_t>(0, paused_at_ - quiet_since_);
+    quiet_since_ = NowMs() - quiet_before;
+    paused_at_ = -1;
+    paused_ = false;
   }
 }
 
@@ -683,12 +710,15 @@ bool Game::Ended() const {
 }
 
 void Game::Fail(const std::string& error, const std::string& code) {
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!ended_) {
+      error_ = error;
+      error_code_ = code;
+      ended_ = true;
+    }
+  }
   stop_ = true;
-  std::lock_guard<std::mutex> lock(mutex_);
-  if (ended_) return;
-  error_ = error;
-  error_code_ = code;
-  ended_ = true;
 }
 
 bool Game::Join(int64_t timeout_ms) {
@@ -703,11 +733,18 @@ bool Game::Join(int64_t timeout_ms) {
 }
 
 int64_t Game::QuietMs() const {
-  if (paused_) {
-    const int64_t at = paused_at_;
-    return at >= 0 ? at - quiet_since_ : 0;
+  std::lock_guard<std::mutex> lock(pause_mutex_);
+  const int64_t until = paused_ ? paused_at_.load() : NowMs();
+  return std::max<int64_t>(0, until - quiet_since_);
+}
+
+std::string Game::ResolutionError() const {
+  for (const auto& option : options_) {
+    if (option.key == kResolutionOption && option.values[option.selected] != "1") {
+      return "This host draws with the software renderer, which has no internal resolution above 1x.";
+    }
   }
-  return NowMs() - quiet_since_;
+  return "";
 }
 
 bool Game::Finished() const {
