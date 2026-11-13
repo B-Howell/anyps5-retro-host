@@ -42,7 +42,12 @@ through kqueue. On Windows a thread waits on the launcher's process handle.
   up, and published to the ring like a software frame. `status.hardware` is
   then `true` and the internal resolution option works. When no context can be
   made, the host turns the request down and SwanStation draws in software;
-  `resolutionError` then says a scale above 1x needs the GPU. The renderer
+  `resolutionError` then says a scale above 1x needs the GPU. A context that was
+  made but then fails ends the game with `errorCode` `other`: when no framebuffer
+  can be made for the core's largest size, when a later geometry change cannot
+  get a bigger one, or when reading a frame back reports an OpenGL error (a lost
+  context among them) or the frame is larger than the core said it could be.
+  The game never keeps running on stale pictures. The renderer
   option stays at `Auto` and is not listed, so the host decides. As RetroArch
   does, the core's `context_destroy` runs before `retro_unload_game`.
 - **Options.** The host reports core options version 2 and takes the

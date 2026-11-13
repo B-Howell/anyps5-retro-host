@@ -6,7 +6,6 @@
 #include <algorithm>
 #include <cstring>
 #include <type_traits>
-#include <vector>
 
 namespace retro_host {
 namespace {
@@ -33,6 +32,9 @@ constexpr unsigned kBgra = 0x80E1;
 constexpr unsigned kUnsignedByte = 0x1401;
 constexpr unsigned kPackAlignment = 0x0D05;
 constexpr unsigned kPackRowLength = 0x0D02;
+constexpr unsigned kPackSkipRows = 0x0D03;
+constexpr unsigned kPackSkipPixels = 0x0D04;
+constexpr unsigned kNoError = 0;
 constexpr unsigned kPixelPackBuffer = 0x88EB;
 
 }  // namespace
@@ -50,7 +52,7 @@ struct Gpu::Functions {
   void(GL_CALL* ReadPixels)(int, int, int, int, unsigned, unsigned, void*);
   void(GL_CALL* PixelStorei)(unsigned, int);
   void(GL_CALL* BindBuffer)(unsigned, unsigned);
-  std::vector<uint8_t> rows;
+  unsigned(GL_CALL* GetError)();
 };
 
 bool Gpu::LoadFunctions() {
@@ -65,7 +67,7 @@ bool Gpu::LoadFunctions() {
       !load(gl->RenderbufferStorage, "glRenderbufferStorage") ||
       !load(gl->FramebufferRenderbuffer, "glFramebufferRenderbuffer") ||
       !load(gl->CheckFramebufferStatus, "glCheckFramebufferStatus") || !load(gl->ReadPixels, "glReadPixels") ||
-      !load(gl->PixelStorei, "glPixelStorei") || !load(gl->BindBuffer, "glBindBuffer")) {
+      !load(gl->PixelStorei, "glPixelStorei") || !load(gl->BindBuffer, "glBindBuffer") || !load(gl->GetError, "glGetError")) {
     return false;
   }
   gl_ = std::move(gl);
@@ -111,19 +113,21 @@ bool Gpu::Reserve(uint32_t width, uint32_t height, bool depth, bool stencil) {
 bool Gpu::Read(uint32_t width, uint32_t height, bool bgra, bool bottom_left, uint8_t* out) {
   if (!gl_ || !framebuffer_ || width > width_ || height > height_) return false;
   const size_t row = static_cast<size_t>(width) * 4;
+  for (int pending = 0; pending < 16 && gl_->GetError() != kNoError; ++pending) {
+  }
   gl_->BindBuffer(kPixelPackBuffer, 0);
   gl_->BindFramebuffer(kReadFramebuffer, framebuffer_);
   gl_->PixelStorei(kPackAlignment, 1);
   gl_->PixelStorei(kPackRowLength, 0);
-  uint8_t* target = out;
-  if (bottom_left) {
-    gl_->rows.resize(row * height);
-    target = gl_->rows.data();
-  }
-  gl_->ReadPixels(0, 0, static_cast<int>(width), static_cast<int>(height), bgra ? kBgra : kRgba, kUnsignedByte, target);
+  gl_->PixelStorei(kPackSkipRows, 0);
+  gl_->PixelStorei(kPackSkipPixels, 0);
+  gl_->ReadPixels(0, 0, static_cast<int>(width), static_cast<int>(height), bgra ? kBgra : kRgba, kUnsignedByte, out);
   gl_->BindFramebuffer(kReadFramebuffer, 0);
+  if (gl_->GetError() != kNoError) return false;
   if (bottom_left) {
-    for (uint32_t y = 0; y < height; ++y) std::memcpy(out + y * row, target + (height - 1 - y) * row, row);
+    for (uint32_t y = 0; y < height / 2; ++y) {
+      std::swap_ranges(out + y * row, out + (y + 1) * row, out + (height - 1 - y) * row);
+    }
   }
   for (size_t at = 3; at < row * height; at += 4) out[at] = 0xFF;
   return true;

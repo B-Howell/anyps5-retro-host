@@ -42,7 +42,7 @@ struct PortInput {
 
 // What a running game hands back to the host: frames to publish and rumble to forward. Called
 // on the game's thread.
-enum class FrameResult { kShown, kTooLarge, kNoMemory };
+enum class FrameResult { kShown, kTooLarge, kNoMemory, kGpuFailed };
 
 class GameEvents {
  public:

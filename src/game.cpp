@@ -245,9 +245,14 @@ void Game::RunGame() {
     std::lock_guard<std::mutex> lock(mutex_);
     SetAspect(info.geometry);
   }
+  std::string end_error;
+  std::string end_code;
   if (gpu_ && gpu_->Reserve(info.geometry.max_width, info.geometry.max_height, hw_depth_, hw_stencil_)) {
     hardware_ = true;
     if (hw_context_reset_) hw_context_reset_();
+  } else if (gpu_) {
+    end_error = "The host could not make a framebuffer on the GPU for the game.";
+    end_code = "other";
   }
   RefreshDiscs();
   fps_ = info.timing.fps;
@@ -258,9 +263,7 @@ void Game::RunGame() {
   const auto run = Get<void (*)()>("retro_run");
   auto next = std::chrono::steady_clock::now();
   int64_t last_card_check = NowMs();
-  std::string end_error;
-  std::string end_code;
-  while (!stop_) {
+  while (end_code.empty() && !stop_) {
     if (NowMs() - last_card_check >= kCardSaveMs) {
       SaveCard();
       last_card_check = NowMs();
@@ -289,6 +292,11 @@ void Game::RunGame() {
     }
     if (frame_failure_ == FrameResult::kNoMemory) {
       end_error = "The host could not make memory for the game's frames.";
+      end_code = "other";
+      break;
+    }
+    if (frame_failure_ == FrameResult::kGpuFailed) {
+      end_error = "The GPU stopped handing over the game's picture.";
       end_code = "other";
       break;
     }
@@ -562,7 +570,7 @@ bool Game::Environment(unsigned command, void* data) {
       sample_rate_ = info->timing.sample_rate;
       timing_changed_ = true;
       if (hardware_ && !gpu_->Reserve(info->geometry.max_width, info->geometry.max_height, hw_depth_, hw_stencil_)) {
-        frame_failure_ = FrameResult::kNoMemory;
+        frame_failure_ = FrameResult::kGpuFailed;
       }
       std::lock_guard<std::mutex> lock(mutex_);
       SetAspect(info->geometry);
@@ -579,9 +587,11 @@ bool Game::Environment(unsigned command, void* data) {
       stop_ = true;
       return true;
     case RETRO_ENVIRONMENT_GET_PREFERRED_HW_RENDER:
+      if (!data) return false;
       *static_cast<unsigned*>(data) = RETRO_HW_CONTEXT_OPENGL_CORE;
       return true;
     case RETRO_ENVIRONMENT_SET_HW_RENDER: {
+      if (!data) return false;
       auto* request = static_cast<retro_hw_render_callback*>(data);
       const bool core = request->context_type == RETRO_HW_CONTEXT_OPENGL_CORE;
       if (!core && request->context_type != RETRO_HW_CONTEXT_OPENGL) return false;
@@ -618,7 +628,10 @@ void Game::Video(const void* data, unsigned width, unsigned height, size_t pitch
       frame_failure_ = FrameResult::kNoMemory;
       return;
     }
-    if (!gpu_->Read(width, height, format_ == PixelFormat::kBgra8, hw_bottom_left_, converted_.data())) return;
+    if (!gpu_->Read(width, height, format_ == PixelFormat::kBgra8, hw_bottom_left_, converted_.data())) {
+      frame_failure_ = FrameResult::kGpuFailed;
+      return;
+    }
     Publish(width, height);
     return;
   }
