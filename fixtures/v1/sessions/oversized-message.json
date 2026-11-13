@@ -38,9 +38,36 @@
       ]
     },
     {
+      "from": "launcher",
+      "message": {
+        "type": "call",
+        "id": 1,
+        "method": "volume",
+        "args": {
+          "level": 1,
+          "muted": false
+        }
+      },
+      "anyValueFor": [
+        "id",
+        "args"
+      ]
+    },
+    {
+      "from": "host",
+      "message": {
+        "type": "reply",
+        "id": 1,
+        "result": null
+      },
+      "anyValueFor": [
+        "id"
+      ]
+    },
+    {
       "from": "host",
       "bytes": "01001000",
-      "invalid": "length at most 1 MiB"
+      "invalid": "a length is from 2 to 1 MiB"
     }
   ],
   "outcome": "protocolError"

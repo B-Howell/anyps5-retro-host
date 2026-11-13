@@ -1,0 +1,15 @@
+{
+  "description": "A disc index past the last disc of a two-disc game.",
+  "from": "launcher",
+  "message": {
+    "type": "call",
+    "id": 6,
+    "method": "changeDisc",
+    "args": 5
+  },
+  "reply": {
+    "type": "reply",
+    "id": 6,
+    "result": false
+  }
+}

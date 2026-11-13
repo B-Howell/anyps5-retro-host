@@ -1,0 +1,47 @@
+{
+  "description": "An unknown pixel format first in the list is skipped.",
+  "tests": [
+    "host"
+  ],
+  "steps": [
+    {
+      "from": "launcher",
+      "message": {
+        "type": "hello",
+        "minVersion": 1,
+        "maxVersion": 1,
+        "pixelFormats": [
+          "rgb565",
+          "bgra8"
+        ]
+      }
+    },
+    {
+      "from": "host",
+      "message": {
+        "type": "welcome",
+        "version": 1,
+        "pid": 4242,
+        "hostVersion": "1.0.0",
+        "capabilities": [
+          "ps1"
+        ],
+        "pixelFormat": "bgra8"
+      },
+      "anyValueFor": [
+        "pid",
+        "hostVersion"
+      ]
+    },
+    {
+      "from": "launcher",
+      "message": {
+        "type": "shutdown"
+      }
+    },
+    {
+      "hostExits": 0
+    }
+  ],
+  "outcome": "clean"
+}

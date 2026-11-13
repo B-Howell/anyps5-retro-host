@@ -3,16 +3,17 @@
   "from": "launcher",
   "message": {
     "type": "call",
-    "id": 2,
+    "id": 3,
     "method": "status"
   },
   "reply": {
     "type": "reply",
-    "id": 2,
+    "id": 3,
     "result": {
       "ready": true,
       "ended": false,
       "error": "",
+      "errorCode": "",
       "aspect": 1.3333333333333333,
       "hardware": true,
       "resolutionError": "",

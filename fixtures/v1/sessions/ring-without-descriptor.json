@@ -1,0 +1,150 @@
+{
+  "description": "A ring message with no descriptor.",
+  "tests": [
+    "launcher"
+  ],
+  "os": "posix",
+  "steps": [
+    {
+      "from": "launcher",
+      "message": {
+        "type": "hello",
+        "minVersion": 1,
+        "maxVersion": 1,
+        "pixelFormats": [
+          "rgba8",
+          "bgra8"
+        ]
+      },
+      "anyValueFor": [
+        "pixelFormats"
+      ]
+    },
+    {
+      "from": "host",
+      "message": {
+        "type": "welcome",
+        "version": 1,
+        "pid": 4242,
+        "hostVersion": "1.0.0",
+        "capabilities": [
+          "ps1"
+        ],
+        "pixelFormat": "rgba8"
+      },
+      "anyValueFor": [
+        "pid",
+        "hostVersion",
+        "pixelFormat"
+      ]
+    },
+    {
+      "from": "launcher",
+      "message": {
+        "type": "call",
+        "id": 1,
+        "method": "volume",
+        "args": {
+          "level": 1,
+          "muted": false
+        }
+      },
+      "anyValueFor": [
+        "id",
+        "args"
+      ]
+    },
+    {
+      "from": "host",
+      "message": {
+        "type": "reply",
+        "id": 1,
+        "result": null
+      },
+      "anyValueFor": [
+        "id"
+      ]
+    },
+    {
+      "from": "launcher",
+      "message": {
+        "type": "call",
+        "id": 2,
+        "method": "start",
+        "args": {
+          "core": "${core}",
+          "disc": "${disc}",
+          "system": "${system}",
+          "saves": "${saves}",
+          "options": {
+            "swanstation_GPU_ResolutionScale": "4",
+            "swanstation_GPU_TextureFilter": "Bilinear"
+          }
+        }
+      },
+      "anyValueFor": [
+        "id"
+      ]
+    },
+    {
+      "from": "host",
+      "message": {
+        "type": "reply",
+        "id": 2,
+        "result": {
+          "epoch": 1
+        }
+      },
+      "anyValueFor": [
+        "id"
+      ]
+    },
+    {
+      "from": "host",
+      "message": {
+        "type": "ring",
+        "bytes": 3690496
+      },
+      "descriptors": 0,
+      "ring": {
+        "memoryBytes": 3690496,
+        "sealed": true,
+        "header": {
+          "magic": 1179792705,
+          "version": 1,
+          "slotCount": 3,
+          "headerBytes": 4096,
+          "slotBytes": 1228800,
+          "latest": 4294967295,
+          "reading": 4294967295,
+          "pixelFormat": 1,
+          "slots": [
+            {
+              "width": 0,
+              "height": 0,
+              "visible": 0,
+              "epoch": 0,
+              "sequence": 0
+            },
+            {
+              "width": 0,
+              "height": 0,
+              "visible": 0,
+              "epoch": 0,
+              "sequence": 0
+            },
+            {
+              "width": 0,
+              "height": 0,
+              "visible": 0,
+              "epoch": 0,
+              "sequence": 0
+            }
+          ]
+        }
+      },
+      "invalid": "a ring carries one descriptor"
+    }
+  ],
+  "outcome": "protocolError"
+}

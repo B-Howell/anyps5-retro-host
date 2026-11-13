@@ -3,13 +3,13 @@
   "from": "launcher",
   "message": {
     "type": "call",
-    "id": 4,
+    "id": 5,
     "method": "connectedPorts",
     "args": 2
   },
   "reply": {
     "type": "reply",
-    "id": 4,
+    "id": 5,
     "result": true
   }
 }

@@ -3,13 +3,13 @@
   "from": "launcher",
   "message": {
     "type": "call",
-    "id": 3,
+    "id": 4,
     "method": "pause",
     "args": true
   },
   "reply": {
     "type": "reply",
-    "id": 3,
+    "id": 4,
     "result": null
   }
 }

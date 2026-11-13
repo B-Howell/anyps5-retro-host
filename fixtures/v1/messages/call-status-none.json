@@ -3,12 +3,12 @@
   "from": "launcher",
   "message": {
     "type": "call",
-    "id": 2,
+    "id": 3,
     "method": "status"
   },
   "reply": {
     "type": "reply",
-    "id": 2,
+    "id": 3,
     "result": null
   }
 }

@@ -42,14 +42,41 @@
       "message": {
         "type": "call",
         "id": 1,
+        "method": "volume",
+        "args": {
+          "level": 1,
+          "muted": false
+        }
+      },
+      "anyValueFor": [
+        "id",
+        "args"
+      ]
+    },
+    {
+      "from": "host",
+      "message": {
+        "type": "reply",
+        "id": 1,
+        "result": null
+      },
+      "anyValueFor": [
+        "id"
+      ]
+    },
+    {
+      "from": "launcher",
+      "message": {
+        "type": "call",
+        "id": 2,
         "method": "start",
         "args": {
           "core": "${core}",
           "disc": "${disc}",
           "system": "${system}",
           "saves": "${saves}",
-          "internalResolution": "4",
           "options": {
+            "swanstation_GPU_ResolutionScale": "4",
             "swanstation_GPU_TextureFilter": "Bilinear"
           }
         }
@@ -62,7 +89,7 @@
       "from": "host",
       "message": {
         "type": "reply",
-        "id": 1,
+        "id": 2,
         "result": {
           "epoch": 1
         }
@@ -93,7 +120,8 @@
         "result": {
           "ready": false,
           "ended": true,
-          "error": "The emulator stopped responding and was closed."
+          "error": "The emulator stopped responding and was closed.",
+          "errorCode": "hostHung"
         }
       }
     }

@@ -1,5 +1,5 @@
 {
-  "description": "The launcher offers only a pixel format no host has.",
+  "description": "The launcher offers only a pixel format this host does not know.",
   "tests": [
     "host"
   ],
@@ -13,8 +13,7 @@
         "pixelFormats": [
           "rgb565"
         ]
-      },
-      "invalid": "pixelFormats must be a non-empty list of rgba8 and bgra8"
+      }
     },
     {
       "from": "host",

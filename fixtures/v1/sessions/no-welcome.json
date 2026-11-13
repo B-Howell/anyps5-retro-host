@@ -1,0 +1,30 @@
+{
+  "description": "The host answers nothing within 10 seconds of starting.",
+  "tests": [
+    "launcher"
+  ],
+  "steps": [
+    {
+      "from": "launcher",
+      "message": {
+        "type": "hello",
+        "minVersion": 1,
+        "maxVersion": 1,
+        "pixelFormats": [
+          "rgba8",
+          "bgra8"
+        ]
+      },
+      "anyValueFor": [
+        "pixelFormats"
+      ]
+    },
+    {
+      "silence": 10.5
+    },
+    {
+      "launcherKillsHost": true
+    }
+  ],
+  "outcome": "hostFailure"
+}

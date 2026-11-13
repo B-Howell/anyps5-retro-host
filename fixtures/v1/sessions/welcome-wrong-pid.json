@@ -1,0 +1,44 @@
+{
+  "description": "The host reports a process id that is not its own.",
+  "tests": [
+    "launcher"
+  ],
+  "steps": [
+    {
+      "from": "launcher",
+      "message": {
+        "type": "hello",
+        "minVersion": 1,
+        "maxVersion": 1,
+        "pixelFormats": [
+          "rgba8",
+          "bgra8"
+        ]
+      },
+      "anyValueFor": [
+        "pixelFormats"
+      ]
+    },
+    {
+      "from": "host",
+      "message": {
+        "type": "welcome",
+        "version": 1,
+        "pid": 4242,
+        "hostVersion": "1.0.0",
+        "capabilities": [
+          "ps1"
+        ],
+        "pixelFormat": "rgba8"
+      },
+      "anyValueFor": [
+        "pid",
+        "hostVersion",
+        "pixelFormat"
+      ],
+      "wrongPid": true,
+      "invalid": "the welcome pid is the host process id"
+    }
+  ],
+  "outcome": "protocolError"
+}

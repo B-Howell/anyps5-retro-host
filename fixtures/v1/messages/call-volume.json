@@ -1,9 +1,9 @@
 {
-  "description": "Set the host volume.",
+  "description": "Set the host volume, as the launcher does after every welcome.",
   "from": "launcher",
   "message": {
     "type": "call",
-    "id": 7,
+    "id": 1,
     "method": "volume",
     "args": {
       "level": 0.5,
@@ -12,7 +12,7 @@
   },
   "reply": {
     "type": "reply",
-    "id": 7,
+    "id": 1,
     "result": null
   }
 }

@@ -38,6 +38,33 @@
       ]
     },
     {
+      "from": "launcher",
+      "message": {
+        "type": "call",
+        "id": 1,
+        "method": "volume",
+        "args": {
+          "level": 1,
+          "muted": false
+        }
+      },
+      "anyValueFor": [
+        "id",
+        "args"
+      ]
+    },
+    {
+      "from": "host",
+      "message": {
+        "type": "reply",
+        "id": 1,
+        "result": null
+      },
+      "anyValueFor": [
+        "id"
+      ]
+    },
+    {
       "from": "host",
       "message": {
         "type": "laterEvent",
@@ -48,7 +75,7 @@
       "from": "launcher",
       "message": {
         "type": "call",
-        "id": 1,
+        "id": 2,
         "method": "status"
       },
       "anyValueFor": [
@@ -59,7 +86,7 @@
       "from": "host",
       "message": {
         "type": "reply",
-        "id": 1,
+        "id": 2,
         "result": null,
         "laterField": true
       },

@@ -1,0 +1,21 @@
+{
+  "description": "The launcher calls a method before hello.",
+  "tests": [
+    "host"
+  ],
+  "steps": [
+    {
+      "from": "launcher",
+      "message": {
+        "type": "call",
+        "id": 1,
+        "method": "status"
+      },
+      "anyValueFor": [
+        "id"
+      ],
+      "invalid": "the first message is hello"
+    }
+  ],
+  "outcome": "protocolError"
+}

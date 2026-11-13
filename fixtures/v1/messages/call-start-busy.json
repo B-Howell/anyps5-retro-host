@@ -1,5 +1,5 @@
 {
-  "description": "Start while a game is running.",
+  "description": "Start while a game is loaded.",
   "from": "launcher",
   "message": {
     "type": "call",
@@ -10,8 +10,8 @@
       "disc": "${disc}",
       "system": "${system}",
       "saves": "${saves}",
-      "internalResolution": "4",
       "options": {
+        "swanstation_GPU_ResolutionScale": "4",
         "swanstation_GPU_TextureFilter": "Bilinear"
       }
     }
@@ -21,7 +21,7 @@
     "id": 9,
     "error": {
       "code": "busy",
-      "message": "A game is already running."
+      "message": "A game is already loaded."
     }
   }
 }

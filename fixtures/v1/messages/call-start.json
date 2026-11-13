@@ -3,26 +3,23 @@
   "from": "launcher",
   "message": {
     "type": "call",
-    "id": 1,
+    "id": 2,
     "method": "start",
     "args": {
       "core": "${core}",
       "disc": "${playlist}",
       "system": "${system}",
       "saves": "${saves}",
-      "internalResolution": "4",
       "options": {
+        "swanstation_GPU_ResolutionScale": "4",
         "swanstation_GPU_TextureFilter": "Bilinear"
       },
-      "initialDisc": {
-        "index": 1,
-        "path": "${disc2}"
-      }
+      "initialDisc": 1
     }
   },
   "reply": {
     "type": "reply",
-    "id": 1,
+    "id": 2,
     "result": {
       "epoch": 1
     }

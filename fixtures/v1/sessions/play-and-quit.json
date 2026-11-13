@@ -1,5 +1,5 @@
 {
-  "description": "A whole game: start, a frame, play, stop, release and quit.",
+  "description": "A whole game: volume, start, a frame, play, stop, release and quit.",
   "tests": [
     "host",
     "launcher"
@@ -43,14 +43,41 @@
       "message": {
         "type": "call",
         "id": 1,
+        "method": "volume",
+        "args": {
+          "level": 1,
+          "muted": false
+        }
+      },
+      "anyValueFor": [
+        "id",
+        "args"
+      ]
+    },
+    {
+      "from": "host",
+      "message": {
+        "type": "reply",
+        "id": 1,
+        "result": null
+      },
+      "anyValueFor": [
+        "id"
+      ]
+    },
+    {
+      "from": "launcher",
+      "message": {
+        "type": "call",
+        "id": 2,
         "method": "start",
         "args": {
           "core": "${core}",
           "disc": "${disc}",
           "system": "${system}",
           "saves": "${saves}",
-          "internalResolution": "4",
           "options": {
+            "swanstation_GPU_ResolutionScale": "4",
             "swanstation_GPU_TextureFilter": "Bilinear"
           }
         }
@@ -63,7 +90,7 @@
       "from": "host",
       "message": {
         "type": "reply",
-        "id": 1,
+        "id": 2,
         "result": {
           "epoch": 1
         }
@@ -124,10 +151,13 @@
       }
     },
     {
+      "launcherDraws": true
+    },
+    {
       "from": "launcher",
       "message": {
         "type": "call",
-        "id": 2,
+        "id": 3,
         "method": "status"
       },
       "anyValueFor": [
@@ -138,11 +168,12 @@
       "from": "host",
       "message": {
         "type": "reply",
-        "id": 2,
+        "id": 3,
         "result": {
           "ready": true,
           "ended": false,
           "error": "",
+          "errorCode": "",
           "aspect": 1.3333333333333333,
           "hardware": true,
           "resolutionError": "",
@@ -177,7 +208,7 @@
       "from": "launcher",
       "message": {
         "type": "call",
-        "id": 3,
+        "id": 4,
         "method": "stop"
       },
       "anyValueFor": [
@@ -188,7 +219,7 @@
       "from": "host",
       "message": {
         "type": "reply",
-        "id": 3,
+        "id": 4,
         "result": null
       },
       "anyValueFor": [
@@ -199,7 +230,7 @@
       "from": "launcher",
       "message": {
         "type": "call",
-        "id": 4,
+        "id": 5,
         "method": "status"
       },
       "anyValueFor": [
@@ -213,11 +244,12 @@
       "from": "host",
       "message": {
         "type": "reply",
-        "id": 4,
+        "id": 5,
         "result": {
           "ready": true,
           "ended": true,
           "error": "",
+          "errorCode": "",
           "aspect": 1.3333333333333333,
           "hardware": true,
           "resolutionError": "",
@@ -252,7 +284,7 @@
       "from": "launcher",
       "message": {
         "type": "call",
-        "id": 5,
+        "id": 6,
         "method": "release"
       },
       "anyValueFor": [
@@ -263,7 +295,7 @@
       "from": "host",
       "message": {
         "type": "reply",
-        "id": 5,
+        "id": 6,
         "result": null
       },
       "anyValueFor": [

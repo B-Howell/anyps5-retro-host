@@ -42,12 +42,20 @@ another until the launcher exits or the host fails.
 The host has no window, no console and no dialog boxes. It draws only into the
 frame ring. The **launcher's window is the target for screenshots, capture,
 Remote Play and focus** for an emulated game. The host plays the game's audio
-itself, so per-process audio capture uses the host's process id (`pid` in
-[`welcome`](#welcome)).
+itself, so per-process audio capture uses the host's process id.
+
+**Process id.** The launcher uses the process id it got when it started the
+host (from `CreateProcessW` or `posix_spawn`) for audio capture, focus and
+killing. It never uses the `pid` in [`welcome`](#welcome) for those. A
+`welcome` whose `pid` is not that process id is a protocol error.
 
 **Network.** In version 1, the host and the core MUST NOT open any network
 connection or listening socket. The only channel the host has is the one the
-launcher hands it.
+launcher hands it. Reading a game or BIOS file that the operating system
+serves from a network share (SMB, NFS) is ordinary file access, not a
+network connection under this rule. The host repository's CI checks that the
+host opens no sockets while it runs the conformance sessions (for example
+with `strace -f -e trace=%network` on Linux).
 
 ### Starting the host
 
@@ -57,41 +65,125 @@ launcher hands it.
 | Linux | `socketpair(AF_UNIX, SOCK_STREAM \| SOCK_CLOEXEC)` | `--ipc-fd 3 --parent-pid <pid>` |
 | macOS | `socketpair(AF_UNIX, SOCK_STREAM)` with `FD_CLOEXEC` set on both ends | `--ipc-fd 3 --parent-pid <pid>` |
 
-- **Windows.** The launcher makes the host's two pipe ends inheritable and
-  passes exactly those two handles with `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`,
-  so no other handle is inherited. Handle values are decimal. The host is put
-  in a job object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` that only the
-  launcher holds, so the host ends when the launcher ends. The host calls
-  `SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX)` before
-  loading a core.
-- **Linux.** The launcher's end keeps `SOCK_CLOEXEC`. The host's end is moved
-  to descriptor 3 in the child (`posix_spawn_file_actions_adddup2`, which
-  clears close-on-exec on the copy). The host calls
-  `prctl(PR_SET_PDEATHSIG, SIGTERM)`, then exits at once if `getppid()` is
-  not `--parent-pid`. `SIGTERM` is handled like [`shutdown`](#shutdown).
-  `PR_SET_PDEATHSIG` fires when the thread that started the host exits, so
-  the launcher MUST start the host from a thread that lives as long as the
-  launcher.
-- **macOS.** The launcher spawns with `POSIX_SPAWN_CLOEXEC_DEFAULT` and a
-  dup2 action for descriptor 3, so only that descriptor reaches the host. Both
-  sides set `SO_NOSIGPIPE` on their end. The host watches `--parent-pid` with
-  a kqueue `EVFILT_PROC` / `NOTE_EXIT` filter and treats the launcher's exit
-  like end-of-stream.
+`<pid>` is the launcher's own process id, in decimal.
+
+- **Windows.**
+  - The launcher creates both pipe ends not inheritable. Just before it
+    starts the host it makes the host's two ends inheritable, and passes
+    exactly those two handles with `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`, so
+    no other handle is inherited. Straight after `CreateProcessW` returns, it
+    makes them not inheritable again and closes its copies. Handle values
+    are decimal.
+  - While the two ends are inheritable, no other process start in the
+    launcher may take a copy. So every process the launcher starts with
+    inherited handles passes its own `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`, and
+    one that cannot is started under the same lock as the host, never while
+    the two ends are inheritable.
+  - The host also opens the launcher with `SYNCHRONIZE` only and treats the
+    launcher's exit like end-of-stream, so a copy of a pipe end left anywhere
+    else cannot keep it running.
+  - The host is started with `CREATE_SUSPENDED`, assigned to a job object
+    with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` that only the launcher holds,
+    and only then resumed. So the host never runs outside the job, and it
+    ends when the launcher ends.
+  - The host calls `SetErrorMode(SEM_FAILCRITICALERRORS |
+    SEM_NOGPFAULTERRORBOX)` before loading a core.
+- **Linux.**
+  - The launcher's end keeps `SOCK_CLOEXEC`. The host's end is moved to
+    descriptor 3 in the child (`posix_spawn_file_actions_adddup2`, which
+    clears close-on-exec on the copy). The launcher spawns with
+    `POSIX_SPAWN_SETSIGMASK` (an empty mask) and `POSIX_SPAWN_SETSIGDEF`
+    (`SIGTERM` back to its default), so a signal the launcher blocks or
+    ignores is not blocked in the host.
+  - At start the host closes every descriptor above 3 (`close_range(4,
+    ~0U, 0)`, or a loop over `/proc/self/fd` where that is missing),
+    unblocks every signal, then calls `prctl(PR_SET_PDEATHSIG, SIGTERM)`.
+    It then exits at once if `getppid()` is not `--parent-pid`. `SIGTERM`
+    is handled like [`shutdown`](#shutdown).
+  - `PR_SET_PDEATHSIG` fires when the thread that started the host exits,
+    so the launcher MUST start the host from a thread that lives as long as
+    the launcher.
+- **macOS.**
+  - The launcher spawns with `POSIX_SPAWN_CLOEXEC_DEFAULT` and a dup2 action
+    for descriptor 3, so only that descriptor reaches the host. It also sets
+    `POSIX_SPAWN_SETSIGMASK` and `POSIX_SPAWN_SETSIGDEF` as on Linux.
+  - Both sides set `SO_NOSIGPIPE` on their end.
+  - The host watches `--parent-pid` with a kqueue `EVFILT_PROC` /
+    `NOTE_EXIT` filter and treats the launcher's exit like end-of-stream. If
+    registering the filter fails with `ESRCH`, the launcher is already gone,
+    and the host exits at once.
+  - macOS has no `MSG_CMSG_CLOEXEC`, so each side sets `FD_CLOEXEC` on a
+    received descriptor straight after `recvmsg` returns it.
 - **Linux and macOS** send with `MSG_NOSIGNAL` where it exists, so a closed
   peer gives an error, not `SIGPIPE`.
 
 ### Finding and checking the host
 
-A release launcher runs only the host it ships with or downloads into its own
+A release launcher runs only a host it ships with or downloads into its own
 storage: from its own directory on Windows and Linux, and from
 `Contents/Helpers` in the app bundle on macOS. It finds its own directory with
-`GetModuleFileNameW`, `/proc/self/exe` or `_NSGetExecutablePath`. Before each
-start it checks the host executable and the SwanStation library against the
-release's `SHA256SUMS`. That file is signed with the Ed25519 key that already
-signs launcher updates. If the check fails, it does not start the host.
+`GetModuleFileNameW`, `/proc/self/exe` or `_NSGetExecutablePath`.
 
-Debug builds of the launcher MAY run the host named by the environment
-variable `ANYPS5_RETRO_HOST`, without the checks. Release builds ignore it.
+**Signed files.** A host release is signed the way launcher releases are:
+
+- `SHA256SUMS` lists one file a line as `shasum` writes it, `<64 hex
+  digits>  <file name>`, with names that contain no `/` or `\`.
+- `SHA256SUMS.sig` holds `ed25519 <key id> <base64 signature>` lines: Ed25519
+  signatures of `SHA256SUMS` by the release keys built into the launcher.
+  One good signature by a built-in key is enough.
+- For each system the release has `anyps5-retro-host-<version>-<os>-<arch>.zip`,
+  the host and SwanStation, and
+  `anyps5-retro-host-<version>-<os>-<arch>.files`, which lists every file in
+  that zip in the same `shasum` format, with `/` between directories.
+  `<version>` is the host's release, as in [`welcome`](#welcome).
+- The launcher matches entries by exact file name. It looks only for the
+  names of its own system.
+
+**When it checks.**
+
+- *On download*: it checks the signature, then the zip and the `.files`
+  against `SHA256SUMS`, and only then unpacks the zip. It keeps
+  `SHA256SUMS`, `SHA256SUMS.sig` and the `.files` beside the unpacked host.
+- *Before each start*: it checks the signature again, the `.files` against
+  `SHA256SUMS`, and the host executable and the SwanStation library against
+  the `.files`.
+- *Minimum version*: each launcher release has a minimum host version built
+  in. It does not use an older host, even a signed one, so an old signed
+  host with a known fault cannot be put back in its place.
+
+On Windows the launcher hashes each file from a handle it opened without
+`FILE_SHARE_WRITE` or `FILE_SHARE_DELETE`, and keeps that handle open until
+the host has answered the first `start`. So the file it checked is the file
+that runs. On Linux the launcher hashes the host executable from a
+descriptor it opened with `O_CLOEXEC` at a number above 3 (moved there with
+`F_DUPFD_CLOEXEC` if it came out lower, so the `dup2` to descriptor 3 cannot
+replace it), and starts the host through that same
+descriptor (`/proc/self/fd/<n>` as the path given to `posix_spawn`; the
+kernel opens it before close-on-exec descriptors are closed, so the
+descriptor itself never reaches the host), so the file
+it checked is the file that runs. On macOS the system itself checks the code
+signature of the host and of the SwanStation library as they are loaded (see
+macOS signing below), so a changed file does not run. The SwanStation
+library on Linux is checked by path in the launcher's own storage, which only
+the user can write.
+
+These checks protect against a damaged download and a changed mirror, not
+against another program the same user runs, which could change the launcher
+itself.
+
+If any check fails, the launcher does not start the host and shows that the
+emulator needs to be downloaded again.
+
+A release launcher only ever runs the SwanStation library from the signed
+host release. It never runs a core the player picks. Debug builds of the
+launcher MAY run the host named by the environment variable
+`ANYPS5_RETRO_HOST`, and any core, without the checks. Release builds ignore
+that variable.
+
+**macOS signing.** The host is signed with Developer ID, the hardened runtime
+and library validation, and notarized. The SwanStation library in a macOS
+host release is signed by the same team, so library validation lets the host
+load it without the `disable-library-validation` entitlement.
 
 ## Framing
 
@@ -106,12 +198,12 @@ of the message, the rest goes with plain sends.
 
 The receiver keeps each descriptor with the message it belongs to:
 
-- every read is a `recvmsg` with room for one descriptor, using
+- every read is a `recvmsg` with room for 4 descriptors, using
   `MSG_CMSG_CLOEXEC` where it exists;
 - a read never asks for more bytes than are left of the current message: 4
   for a length, then the body's remaining bytes;
-- a descriptor that arrives on the read holding the first byte of a length
-  belongs to that message. A descriptor on any other read is a protocol
+- descriptors that arrive on the read holding the first byte of a length
+  belong to that message. A descriptor on any other read is a protocol
   error.
 
 A Unix socket never returns data sent before some ancillary data together
@@ -119,37 +211,113 @@ with that ancillary data in one read, so these rules keep each descriptor
 with its message. If the stream ends in the middle of a message, the receiver
 closes any descriptor that came with it.
 
-The following are **protocol errors**:
+A write that has not finished after 5 seconds is a failure of the peer: the
+launcher handles it as a [host failure](#host-failure), and the host exits.
+
+### Protocol errors
+
+The following are **protocol errors**, on whichever side receives them.
+
+Framing:
 
 - a length outside the range above;
-- bytes that are not valid UTF-8 or not a JSON object;
+- a body that is not valid UTF-8 or not one JSON object (see [Values](#values));
 - a message without a string `type`;
-- a known message with a missing or wrongly typed field;
-- a descriptor on any message other than `ring`;
-- a `ring` message without exactly one descriptor;
-- truncated ancillary data (`MSG_CTRUNC`).
+- a known message with a missing or wrongly typed field, or a value out of
+  its range. A call's `args` is not checked here: a method argument that is
+  wrong is answered with an `argument` error (see [Methods](#methods)), and
+  the connection goes on;
+- a descriptor on any message other than `ring`, or more than one descriptor;
+- a control message other than `SCM_RIGHTS`, or truncated ancillary data
+  (`MSG_CTRUNC`).
+
+Order, as the host sees it:
+
+- a first message that is not `hello`;
+- a second `hello`.
+
+Order, as the launcher sees it:
+
+- a first message that is not `welcome` or `unsupported`, a second
+  `welcome` or `unsupported`, or any message after `unsupported`;
+- a `welcome` whose `version` or `pixelFormat` the launcher did not offer,
+  or whose `pid` is not the host's process id;
+- a `reply` whose `id` is not that of the oldest call still waiting for one;
+- a `pong` whose `id` is not that of the oldest ping still waiting for one;
+- a `frame` before any `ring`, or a [ring check](#checks-the-launcher-makes)
+  that fails.
+
+The launcher sends nothing but `hello` before `welcome`, and nothing after
+`unsupported`. The host sends nothing before it has received `hello`.
 
 The receiver closes every descriptor that came with the message in error.
-
 When the launcher sees a protocol error, it kills the host and handles it as a
-[host failure](#host-failure). When the host sees one, it stops its game the
-way `shutdown` does and exits.
+[host failure](#host-failure). A `welcome` with a version or pixel format the
+launcher did not offer is the exception: the launcher kills the host and shows
+the [update message](#unsupported), not the crash message. When the host sees
+a protocol error, it stops its game the way `shutdown` does and exits.
 
 ## Compatibility
 
 - Both sides MUST ignore a `type` they do not know, and MUST ignore object
   fields they do not know, in messages and in method arguments and results.
   Adding a message, a field or a method does not change the version.
+- Both sides MUST ignore values they do not know in these lists: the entries
+  of `pixelFormats` in `hello` and `unsupported`, and the entries of
+  `capabilities` in `welcome`.
+- An error `code` or a status `errorCode` the launcher does not know is
+  handled as a failure without a known cause: a call that failed, or a game
+  that ended with an error.
+- Any other value outside what this document allows is out of range, so it
+  is a protocol error.
 - A change that an existing peer would misread raises the version.
 
 ## Values
 
-JSON types are used as they are: `null`, `true`/`false`, strings, arrays and
-objects. *Integer* means a JSON number with no fraction or exponent; each
-field gives its range. No range in version 1 goes beyond -2147483648 to
-4294967295, so a 64-bit integer holds every value. *Number* means any JSON number. A path is an absolute path as a
-UTF-8 string with no NUL character. No binary data crosses the control
-stream in version 1.
+JSON is read as [RFC 8259](https://www.rfc-editor.org/rfc/rfc8259) describes,
+with these rules:
+
+- **Objects.** A key that appears twice in one object, at any depth, is a
+  protocol error, because JSON parsers disagree on which one wins.
+- **Strings.** A string MUST be valid Unicode. An escape for a lone
+  surrogate (such as `\ud800` with no low surrogate after it) is a protocol
+  error.
+- **Integers.** *Integer* means a JSON number whose value is a whole number.
+  A sender writes it with no fraction or exponent, but a receiver decides by
+  the value, so `1.0` and `1e0` are the integer 1. Each field gives its range.
+  No range in version 1 goes beyond -2147483648 to 4294967295, so a 64-bit
+  integer or a double holds every value exactly.
+- **Numbers.** *Number* means a JSON number whose value is finite as a
+  64-bit IEEE double. `1e400` is out of range.
+- No binary data crosses the control stream in version 1.
+
+### Paths
+
+A *path* is a string naming a file or directory with an absolute path for the
+host's system, with no NUL character:
+
+- **Windows**: a drive path (`C:\Games\a.cue`), a UNC path
+  (`\\nas\games\a.cue`), or either one in long form (`\\?\C:\Games\a.cue`,
+  `\\?\UNC\nas\games\a.cue`). `/` is accepted as a separator in the first two
+  forms. Device paths (`\\.\…`), drive-relative paths (`C:a.cue`) and
+  root-relative paths (`\a.cue`) are not absolute.
+- **Linux and macOS**: a path that starts with `/`.
+
+A path MUST NOT contain a `.` or `..` segment or an empty segment (two
+separators in a row, other than the `\\` that starts a UNC path). The launcher
+resolves those before it sends a path. A path that breaks these rules is an
+`argument` error.
+
+The launcher sends paths as UTF-8. A Linux file name that is not valid UTF-8,
+or a Windows file name with an unpaired surrogate, cannot be sent. The
+launcher does not offer such a game to the player; if the player picks one,
+it says that the file name cannot be used and sends nothing.
+
+File extensions (`.cue`, `.CUE`) match without regard to ASCII case.
+
+A file named inside a `.cue` or `.m3u` is found as the core finds it: a
+relative name against the directory of the file that names it, and an
+absolute or UNC name as it is.
 
 ## Messages
 
@@ -179,8 +347,8 @@ nothing before it.
 
 | Field | Type | Meaning |
 | --- | --- | --- |
-| `minVersion`, `maxVersion` | integer, 1 or more | The protocol versions the launcher speaks |
-| `pixelFormats` | array of strings | The frame pixel formats the launcher can draw, preferred first: `rgba8` and/or `bgra8` |
+| `minVersion`, `maxVersion` | integer, 1 to 4294967295, `minVersion` ≤ `maxVersion` | The protocol versions the launcher speaks |
+| `pixelFormats` | array of strings | The frame pixel formats the launcher can draw, preferred first. Version 1 defines `rgba8` and `bgra8` |
 
 ### welcome
 
@@ -193,13 +361,15 @@ its pixel formats.
 
 | Field | Type | Meaning |
 | --- | --- | --- |
-| `version` | integer | The highest version both sides speak; used for the rest of the connection |
-| `pid` | integer, 1 to 4294967295 | The host's process id |
+| `version` | integer, 1 to 4294967295 | The highest version both sides speak; used for the rest of the connection |
+| `pid` | integer, 1 to 4294967295 | The host's process id. The launcher checks it (see [Processes](#processes)) |
 | `hostVersion` | string | The host's release, for logs and error reports |
 | `capabilities` | array of strings | What this host can do (see [Capabilities](#capabilities)) |
 | `pixelFormat` | string | The pixel format of every frame ring this host will send: the first entry of `pixelFormats` that it supports |
 
-Calls, input and pings MUST NOT be sent before `welcome`.
+Calls, input and pings MUST NOT be sent before `welcome`. The launcher's
+first call after every `welcome` is [`volume`](#volume), with the player's
+current volume, before any `start`.
 
 ### unsupported
 
@@ -243,7 +413,7 @@ The host sends exactly one reply for each call, in call order:
 
 ```json
 {"type":"reply","id":7,"result":null}
-{"type":"reply","id":3,"error":{"code":"busy","message":"A game is already running."}}
+{"type":"reply","id":3,"error":{"code":"busy","message":"A game is already loaded."}}
 ```
 
 A reply has either `result` (any JSON value) or `error`, never both. `error`
@@ -253,7 +423,7 @@ log. These codes are defined:
 | Code | Meaning |
 | --- | --- |
 | `unknownMethod` | The host has no method of that name |
-| `argument` | The argument is missing, the wrong type or out of range |
+| `argument` | The argument is missing, the wrong type, or outside the range this document gives |
 | `busy` | `start` was called while a game is loaded |
 | `start` | The game could not be started; `message` says why |
 
@@ -302,9 +472,11 @@ connected.
 {"type":"pong","id":12}
 ```
 
-`id` is an integer from 1 to 2147483647. The host answers from the same
-thread that answers calls, in order with the replies. The launcher sends a
-ping every 2 seconds while the host runs, whether or not a call is waiting. See [Timeouts](#timeouts).
+`id` is an integer from 1 to 2147483647, counted up from 1 like call ids. The
+host answers each ping from the same thread that answers calls, in order with
+the replies, so pongs come in ping order. The launcher sends a ping every 2
+seconds while the host runs, whether or not a call is waiting. See
+[Timeouts](#timeouts).
 
 ### shutdown
 
@@ -321,12 +493,12 @@ New frame memory, sent before the first frame that needs it. That is the
 host's first frame, and any frame larger than the current ring's slots.
 
 ```json
-{"type":"ring","bytes":1576960,"handle":1234}
+{"type":"ring","bytes":3690496,"handle":1234}
 ```
 
 | Field | Type | Meaning |
 | --- | --- | --- |
-| `bytes` | integer, 4108 to 805310464 | The size of the shared memory in bytes. It MUST equal `4096 + 3 × slotBytes` from the ring's header |
+| `bytes` | integer, 4108 to 805310464 | The size of the ring in bytes. It MUST equal `4096 + 3 × slotBytes` from the ring's header |
 | `handle` | integer, 1 to 4294967295 | Windows only: the section handle's value in the host process |
 
 On Windows the launcher takes the section with `DuplicateHandle` from the
@@ -354,28 +526,35 @@ the newest frame matters.
 The core's vibration for one port changed. `port` is 0 or 1. `strong` and
 `weak` are integers from 0 to 65535, for the large and small motor. The
 launcher forwards them to the controller seated at that port, if it can
-vibrate. The launcher itself sets both motors of every port to 0 when the
-game ends, when it calls `release` or `start`, when a controller leaves its
-port, and on a [host failure](#host-failure). The host sends nothing for
-those resets.
+vibrate. The launcher itself sets both motors of every port to 0:
+
+- when the game ends, and when it calls `release` or `start`;
+- when it pauses the game (`pause` with `true`) and when input focus is lost;
+- when a controller leaves its port;
+- on a [host failure](#host-failure).
+
+The host sends nothing for those resets. While the game is paused or the
+launcher does not have input focus, the launcher does not forward `rumble`.
 
 ## Methods
 
-All methods have the `ps1` capability. When no game is loaded, `status`
-returns `null`. `pause`, `stop` and `release` then do nothing and return
-`null`, and `connectedPorts`, `changeDisc` and `option` return `false`.
+All methods have the `ps1` capability. A call whose argument has the wrong
+type, or a value outside the range given below, is an `argument` error
+whether or not a game is loaded. With a valid argument and no game loaded,
+`status` returns `null`; `pause`, `stop` and `release` do nothing and return
+`null`; and `connectedPorts`, `changeDisc` and `option` return `false`.
 
 ### start
 
 Loads and starts a PS1 game.
 
 ```json
-{"core":"C:\\Users\\p\\AppData\\Roaming\\AnyPS5\\cores\\swanstation_libretro.dll",
+{"core":"C:\\Users\\p\\AppData\\Roaming\\AnyPS5\\retro-host\\swanstation_libretro.dll",
  "disc":"D:\\Games\\PS1\\FF7\\FF7.m3u",
  "system":"C:\\Users\\p\\AppData\\Roaming\\AnyPS5\\retro\\system",
  "saves":"C:\\Users\\p\\AppData\\Roaming\\AnyPS5\\retro\\saves\\ps1",
- "internalResolution":"4","options":{"swanstation_GPU_TextureFilter":"Bilinear"},
- "initialDisc":{"index":1,"path":"D:\\Games\\PS1\\FF7\\FF7 (Disc 2).cue"}}
+ "options":{"swanstation_GPU_ResolutionScale":"4","swanstation_GPU_TextureFilter":"Bilinear"},
+ "initialDisc":1}
 ```
 
 | Field | Type | Meaning |
@@ -384,28 +563,32 @@ Loads and starts a PS1 game.
 | `disc` | path | A `.cue`, `.chd`, `.pbp` or `.m3u` file |
 | `system` | path | The core's system directory (BIOS files) |
 | `saves` | path | Where memory cards are kept; the host creates it if needed |
-| `internalResolution` | string, optional | A value of `swanstation_GPU_ResolutionScale` |
-| `options` | object of strings, optional | Core option values saved by the player, by key. Unknown keys and values are ignored |
-| `initialDisc` | object, optional | Only for an `.m3u`, otherwise an `argument` error: the disc to insert at boot. `index` is 0 to 127, `path` is that disc's path |
+| `options` | object of strings, optional | Core option values saved by the player, by key, including the internal resolution (`swanstation_GPU_ResolutionScale`). Unknown keys and values are ignored |
+| `initialDisc` | integer 0 to 127, optional | Only for an `.m3u`: the index of the playlist entry to insert at boot. With any other `disc` it is an `argument` error |
 
 The result is `{"epoch":<integer>}`. The epoch identifies this game's frames
 in the ring (see [Frame ring](#frame-ring)). It is 1 for the host's first
 game and one more for each later game, so it is never reused in a host's
 run. A host that has already started 2147483647 games answers `start` with a
 `start` error.
-After the reply the game loads in the background. `status` shows when the
-first frame is ready, or that the game ended with an error.
 
-Errors: `busy`, if a game is loaded (an ended game is released first, so only
-a running game counts); `argument`; `start`, if the core or disc cannot be
-loaded.
+After the reply the game loads in the background. `status` shows when the
+first frame is ready, or that the game ended with an error. A playlist with
+no entry at `initialDisc` ends the game this way, with `errorCode` `disc`.
+
+Errors:
+
+- `busy`, if a game is loaded, running or ended. The launcher calls
+  `release` for an ended game before the next `start`.
+- `argument`.
+- `start`, if the core cannot be loaded or the disc file cannot be opened.
 
 ### status
 
 No argument. Returns `null` when no game is loaded, or:
 
 ```json
-{"ready":true,"ended":false,"error":"","aspect":1.3333333333333333,"hardware":true,
+{"ready":true,"ended":false,"error":"","errorCode":"","aspect":1.3333333333333333,"hardware":true,
  "resolutionError":"","graphicsPending":false,"progressLabel":null,"progressPercent":null,
  "options":{"swanstation_GPU_ResolutionScale":{"title":"Internal Resolution","values":["1","2","4"],
    "labels":["1x","2x","4x"],"selected":2,"activeValue":"4","restart":false}},
@@ -417,8 +600,9 @@ No argument. Returns `null` when no game is loaded, or:
 | --- | --- | --- |
 | `ready` | boolean | The first frame has been published |
 | `ended` | boolean | The game has ended (stopped, failed or the core quit); it stays loaded until `release` |
-| `error` | string | Why the game ended, or `""` |
-| `aspect` | number | The display aspect ratio the core reports |
+| `error` | string | Why the game ended, in English for logs, or `""` |
+| `errorCode` | string | Why the game ended, for the UI to show in the player's language (table below), or `""` |
+| `aspect` | number, greater than 0 and at most 10 | The display aspect ratio the core reports; 1.3333333333333333 until it reports one |
 | `hardware` | boolean | The core draws with the GPU (not the software renderer) |
 | `resolutionError` | string | Why the last internal resolution could not be used, or `""` |
 | `graphicsPending` | boolean | A graphics option is waiting to be applied |
@@ -427,8 +611,21 @@ No argument. Returns `null` when no game is loaded, or:
 | `options` | object | Each core option the player can change now, by key |
 | `discs` | object, optional | Present for multi-disc games |
 
-After a [host failure](#host-failure), only `ready`, `ended` and `error` are
-present.
+| `errorCode` | Meaning |
+| --- | --- |
+| `""` | The game has not ended, or ended without an error (it was stopped) |
+| `bios` | No usable BIOS was found in `system` |
+| `disc` | The disc, or a file it names, could not be read |
+| `core` | The core failed while loading or running the game |
+| `stalled` | The game stopped producing frames (see [Timeouts](#timeouts)) |
+| `didNotStart` | The game produced no first frame in time |
+| `frameTooLarge` | The game's frame was larger than 8192 × 8192 |
+| `other` | Any other cause |
+
+The host always sends every field above (`discs` only for a multi-disc
+game), including for a game that ended before its first frame. The shorter
+form in [Host failure](#host-failure) is never sent by a host; only the
+launcher's client reports it.
 
 Each option has `title` (string), `values` (array of strings), `labels`
 (array of strings, the same length as `values`), `selected` (index into
@@ -453,16 +650,15 @@ Argument: an integer, 1 or 2. This is how many controller ports have a
 controller in, counting from port 1. With 1, port 2 has no controller
 (`RETRO_DEVICE_NONE`), so a game offers a second player only once one has
 joined. A game starts with 1. The core is told between frames. Returns `true`
-when the count was taken, and `false` when it is out of range or the game has
-ended.
+when the count was taken, and `false` when the game has ended.
 
 ### changeDisc
 
-Argument: an integer, the index into `discs.labels`. It opens the tray,
-inserts that disc and closes the tray, between frames. It returns `true` when
-the change has started and `discs.busy` then shows its progress. It returns
-`false` for a game with one disc, for an index out of range, or while
-another change is in progress.
+Argument: an integer from 0 to 127, the index into `discs.labels`. It opens
+the tray, inserts that disc and closes the tray, between frames. It returns
+`true` when the change has started, and `discs.busy` then shows its progress.
+It returns `false` for a game with one disc, for an index past the last
+disc, while another change is in progress, or when the game has ended.
 
 ### option
 
@@ -475,8 +671,9 @@ and was accepted (it may be pending, see `graphicsPending` and `restart`), and
 
 Argument: `{"level":<number 0 to 1>,"muted":<boolean>}`. Sets the host's
 output volume, for this and every later game, until the host exits. A new
-host starts at `{"level":1,"muted":false}`. Returns `null`. This method works
-whether or not a game is loaded.
+host starts at `{"level":1,"muted":false}`, and the launcher sends the
+player's volume after every `welcome` (see [welcome](#welcome)). Returns
+`null`. This method works whether or not a game is loaded.
 
 ### stop
 
@@ -516,8 +713,8 @@ on is little-endian.
 | 4096 + *i* × `slotBytes` | `slotBytes` | slot *i* pixels | `height` rows of `width` × 4 bytes, no padding, top row first |
 
 The ring is never larger than 4096 + 3 × 268,435,456 = 805,310,464 bytes.
-A game whose frame would be wider or taller than 8192 pixels ends with an
-error instead of being drawn.
+A game whose frame would be wider or taller than 8192 pixels ends with
+`errorCode` `frameTooLarge` instead of being drawn.
 
 `latest` and `reading` are 4-byte aligned and accessed with sequentially
 consistent atomic operations. The other header fields are plain memory. They
@@ -529,57 +726,87 @@ There is always one, because there are three slots. It writes the pixels and
 the slot's fields, then stores the slot's index in `latest`. The host never
 waits. Starting or releasing a game sets `latest` to none before the reply.
 
-**Launcher (reader).** To read a frame, it loads `latest`. If that is
-`0xFFFFFFFF` there is no frame, and the launcher keeps showing what it showed
-before. Otherwise it stores the value in `reading` and loads `latest` again.
-If the two loads agree, it reads that slot. If they still disagree after
-three tries, it skips this draw and tries again on the next one. A pinned slot is never written. The launcher holds
-one pin at a time, until its next read. It draws a frame only when the slot's
-`epoch` is the one `start` returned for the current game.
+**Launcher (reader).** To read a frame:
 
-**Checks the launcher makes.** A failed check is a protocol error.
+1. It loads `latest` once. If that is `0xFFFFFFFF` there is no frame, and
+   the launcher keeps showing what it showed before. Any value other than 0,
+   1, 2 or none is a protocol error.
+2. It stores the value in `reading` and loads `latest` again. If the two
+   loads agree, the slot is pinned. If they still disagree after three
+   tries, it skips this draw and tries again on the next one.
+3. It loads the pinned slot's `width`, `height` and `epoch` once each, into
+   its own copies, and checks those copies. From here on it uses only them.
+4. It draws the frame only when its copy of `epoch` is the one `start`
+   returned for the current game. A frame of an earlier game is skipped, and
+   is not an error.
 
-- When a ring arrives, before using it:
-  - on Windows, `VirtualQuery` on the mapped view shows at least `bytes`
-    bytes;
-  - on Linux, `fstat` gives exactly `bytes`, and `F_GET_SEALS` includes
-    `F_SEAL_SHRINK` and `F_SEAL_SEAL`;
-  - on macOS, `fcntl(fd, F_GETFL)` shows `O_RDWR`; `fstat` gives at least
-    `bytes` and less than `bytes` plus one page (macOS rounds a shared memory
-    object up to whole pages); and `ftruncate(fd, bytes)` fails. A POSIX
-    shared memory object on macOS takes only its first `ftruncate` and
-    refuses every later one. A writable regular file would accept the call,
-    so this shows the object's size cannot change;
-  - `magic`, `version`, `slotCount`, `headerBytes` and `pixelFormat` have the
-    values above;
-  - `slotBytes` is in range, and `bytes` equals `4096 + 3 × slotBytes`.
+A pinned slot is never written. The launcher holds one pin at a time, until
+its next read. It never reads `reading` back, and it never trusts any other
+header field after the ring's arrival. A host that writes into a pinned slot
+anyway can only spoil the picture: every offset and length the launcher uses
+comes from its own checked copies.
 
-  The launcher then keeps its own copy of `slotBytes`. It never reads the
-  header's geometry again.
-- For each frame: the index in `latest` is 0, 1 or 2 (or none, as above); `width` and `height`
-  are 1 to 8192; and `width × height × 4` is at most the kept `slotBytes`.
-  This is computed in 64 bits; it cannot overflow with those limits.
+### Checks the launcher makes
 
-**Memory objects.**
+A failed check, or a failed `DuplicateHandle`, `MapViewOfFile` or `mmap`, is
+a protocol error.
+
+**When a ring arrives**, before using it, in this order:
+
+1. **The memory.**
+   - Windows: `DuplicateHandle` with `FILE_MAP_READ | FILE_MAP_WRITE` as the
+     access (not `DUPLICATE_SAME_ACCESS`); `MapViewOfFile` of exactly `bytes`
+     bytes; and `VirtualQuery` on the view shows `MEM_COMMIT` and a region of
+     at least `bytes` bytes. A section made with `SEC_RESERVE` fails this
+     check.
+   - Linux: `fstat` gives exactly `bytes`, and `F_GET_SEALS` includes
+     `F_SEAL_SHRINK` and `F_SEAL_SEAL`. Then `mmap` of `bytes` bytes.
+   - macOS: `fcntl(fd, F_GETFL)` shows `O_RDWR`; `fstat` gives at least
+     `bytes` and less than `bytes` plus one page (macOS rounds a shared memory
+     object up to whole pages); and `ftruncate(fd, bytes)` fails. A POSIX
+     shared memory object on macOS takes only its first `ftruncate` and
+     refuses every later one. A writable regular file would accept the call,
+     so this shows the object's size cannot change. Then `mmap` of `bytes`
+     bytes.
+2. **The header**, each field loaded once into the launcher's own copy:
+   - `magic`, `version`, `slotCount`, `headerBytes` and `pixelFormat` have
+     the values above;
+   - `slotBytes` is a multiple of 4 from 4 to 268,435,456. Only then does
+     the launcher compute `4096 + 3 × slotBytes`, in 64 bits, and check that
+     it equals `bytes`.
+3. **Growth.** When there is a current ring, the new `slotBytes` is larger
+   than the current one, and at least twice it or 268,435,456, whichever is
+   smaller. So a host can send at most 27 rings, and a ring at the limit is
+   the last.
+
+The launcher keeps its copies of `slotBytes` and `bytes` and never reads the
+header's geometry again.
+
+**For each frame**, on its copies of the pinned slot's fields: `width` and
+`height` are 1 to 8192, and `width × height × 4` is at most the kept
+`slotBytes`. This is computed in 64 bits; it cannot overflow with those
+limits.
+
+### Memory objects
 
 | OS | Created with | Notes |
 | --- | --- | --- |
-| Windows | `CreateFileMappingW(INVALID_HANDLE_VALUE, …, PAGE_READWRITE)`, unnamed | A section never shrinks |
+| Windows | `CreateFileMappingW(INVALID_HANDLE_VALUE, …, PAGE_READWRITE \| SEC_COMMIT, …)`, unnamed | A section never shrinks |
 | Linux | `memfd_create(…, MFD_CLOEXEC \| MFD_ALLOW_SEALING)`, `ftruncate`, then `F_ADD_SEALS` with `F_SEAL_SHRINK \| F_SEAL_GROW \| F_SEAL_SEAL` | Sealing stops a truncate that would give the launcher `SIGBUS` |
 | macOS | `shm_open(name, O_RDWR \| O_CREAT \| O_EXCL, 0600)` with a random name of at most 30 characters, such as `/a5r-` and 12 random letters; `shm_unlink` at once; one `ftruncate` to the ring's size | The size is fixed after that `ftruncate`; the launcher checks it as above, and the host's macOS CI tests it |
 
 A ring only grows. When a frame needs more room, the host makes a new ring,
 sends `ring`, and publishes into the new one. The new `slotBytes` is the
-larger of twice the old one and what the frame needs, capped at the limit.
-So a host never has more than 27 rings, and their slots together take less
-than twice the largest ring's. The host keeps every ring it has announced
-until it exits, so on Windows the launcher can always still duplicate the
-handle.
+larger of twice the old one and what the frame needs, capped at the limit,
+which is what the launcher's [growth check](#checks-the-launcher-makes)
+expects. The host keeps every ring it has announced until it exits, so on
+Windows the launcher can always still duplicate the handle.
 
 Both sides map the whole ring for reading and writing, shared:
 `MapViewOfFile(…, FILE_MAP_READ | FILE_MAP_WRITE, …)` on Windows, and
-`mmap(…, PROT_READ | PROT_WRITE, MAP_SHARED, …)` elsewhere. The launcher unmaps the old ring once it holds no pin
-in it.
+`mmap(…, PROT_READ | PROT_WRITE, MAP_SHARED, …)` elsewhere. The launcher
+unmaps the old ring once it holds no pin in it, so it maps at most two rings
+at a time.
 
 A zero-copy GPU path (a D3D11 shared texture, a dmabuf) may be added later
 as another capability. The macOS mechanism for it (IOSurface) is undecided.
@@ -594,17 +821,23 @@ that misses its own limit ends its process at once.
 | `welcome` or `unsupported` after the host starts | launcher: 10 s |
 | A `reply` to a call | launcher: 5 s after the call |
 | A `pong` to a ping | launcher: 5 s after the ping |
+| A write on the control stream finishes | launcher and host: 5 s |
 | The host exits after `shutdown` | host: 10 s; the launcher kills it at 15 s |
 | The host exits after end-of-stream or the launcher's exit | host: 10 s |
 | A game ends after `stop` | host: 5 s; the launcher kills the host at 10 s |
 
 **Game limits.** These end only the game. The host keeps running, and
-`status` shows `ended: true` with the error given.
+`status` shows `ended: true` with the `error` and `errorCode` given. Time
+paused is not counted.
 
-| What | Limit | `error` |
-| --- | --- | --- |
-| A running game publishes no frame after its first one | 10 s, not counting time paused | "The emulator stopped responding." |
-| A game publishes its first frame after `start` | 60 s, not counting time paused | "The game did not start." |
+| What | Limit | `error` | `errorCode` |
+| --- | --- | --- | --- |
+| A running game's core produces no frame after its first one | 10 s | "The emulator stopped responding." | `stalled` |
+| A game publishes its first frame after `start` | 60 s | "The game did not start." | `didNotStart` |
+
+A frame here is a call of the core's video callback. A duplicate frame
+(libretro passes no pixels because nothing changed) counts as a frame, though
+the host publishes nothing new for it.
 
 The launcher MUST NOT read, write or wait on the control stream, or wait for
 the host to exit, on its UI thread or raster thread.
@@ -615,17 +848,18 @@ The host has failed if it exits without being asked, sends a protocol error,
 or misses a launcher limit. The launcher then kills it if it is still
 running. If a game was loaded:
 
-- `status` returns `{"ready":false,"ended":true,"error":"The emulator closed
-  unexpectedly."}`, or `"The emulator stopped responding and was closed."`
-  after a missed limit. `pause`, `stop`, `release` and `volume` return
-  `null`; `connectedPorts`, `changeDisc` and `option` return `false`. This
-  lasts until the UI calls `release`.
+- the launcher's client reports `status` as `{"ready":false,"ended":true,
+  "error":"The emulator closed unexpectedly.","errorCode":"hostExited"}`, or
+  with `"error":"The emulator stopped responding and was closed."` and
+  `"errorCode":"hostHung"` after a missed limit. `pause`, `stop`, `release`
+  and `volume` report `null`; `connectedPorts`, `changeDisc` and `option`
+  report `false`. This lasts until the UI calls `release`.
 - The UI shows the error and goes back to the library the same way it does
   for any game that has ended. The next game starts a new host.
 
-A launcher that gets `unsupported`, or a version or pixel format it did not
-offer, shows its own message. That message says the emulator needs updating,
-and is not the crash message.
+A launcher that gets `unsupported`, or a `welcome` with a version or pixel
+format it did not offer, shows its own message. That message says the
+emulator needs updating, and is not the crash message.
 
 ## Fixtures
 
@@ -648,40 +882,48 @@ test provides on its own system:
 - `os` is `windows` or `posix` when the message exists only on those systems;
 - `anyValueFor` lists fields whose value differs between real runs, such as
   `pid`. A test checks only that those fields are present and have the right
-  type.
+  type. A name with a dot, such as `error.message`, names a field inside an
+  object;
+- `invalid` names the rule a message breaks on purpose, such as a call with
+  an argument out of range, and the reply is the host's answer to it.
 
 **`sessions/`** has whole conversations:
 
 - `tests` lists the sides the session tests, `host` and/or `launcher`. For
   each, a fake plays the other side.
+- `os`, when present, is `windows`, `posix`, `linux` or `macos`: the session
+  runs only there.
 - Steps from the fake are sent as written. Steps from the side under test are
-  what it must send.
+  what it must send. A fake host's `welcome` carries its real process id.
 - The side under test may also send `ping`, `pong` and `input` at any time.
   A test ignores those unless a step names them.
 - `steps` run in order. Each step is one of:
 
 | Step | Meaning |
 | --- | --- |
-| `{"from":…,"message":{…}}` | That side sends the message. Optional additions: `anyValueFor`, and `descriptors` (how many descriptors are attached: 0 by default, 1 for `ring`) |
-| `{"from":…,"message":{…},"ring":{…}}` | A `ring` message. `ring` describes the shared memory: `memoryBytes` (its real size), `sealed` (whether the Linux seals are present) and `header` (every header field named as in the [table](#frame-ring), with `slots` as an array of three objects). On Windows the fake host adds `handle` and sends no descriptor |
+| `{"from":…,"message":{…}}` | That side sends the message. Optional additions: `anyValueFor`; `descriptors` (how many descriptors are attached: 0 by default, 1 for `ring`); on a fake host's `welcome`, `"wrongPid":true` (it sends a process id other than its own); and, on a fake host's `frame`, `publish`: `{"latest":<index>,"slot":{…}}`, which the fake writes into the current ring (the slot's fields, then `latest`, as the [host](#frame-ring) does) before it sends the `frame`. Without `publish`, a `frame` announces what the ring's `header` already holds |
+| `{"from":…,"message":{…},"ring":{…}}` | A `ring` message. `ring` describes the shared memory: `memoryBytes` (the size of the memory: the fake gives it `bytes` with `ftruncate` or `CreateFileMappingW`, and in a `macos` session it may be the size macOS reports after rounding up to a whole 16 KiB page), `sealed` (whether the Linux seals are present; used only on Linux) and `header` (every header field named as in the [table](#frame-ring), with `slots` as an array of three objects). On Windows the fake host adds `handle` and sends no descriptor |
 | `{"from":…,"bytes":"<hex>"}` | That side writes these raw bytes on the stream |
 | `{"pollWithin":<seconds>}` | The launcher side repeats the call before this step, with a new `id` each time, until the reply matches the next step. This may take up to that many seconds |
 | `{"hostExits":<code>}` | The host process ends with that exit code |
 | `{"silence":<seconds>}` | The fake sends nothing for that long, and answers nothing, pings included |
+| `{"wait":<seconds>,"status":<result>}` | The fake host sends nothing of its own for that long, but answers each ping, and each `status` call with that result. The launcher under test sends no other call during it |
 | `{"launcherKillsHost":true}` | The launcher ends the host |
+| `{"launcherDraws":<boolean>}` | Whether the launcher's client hands the frame announced by the last `frame` to its renderer: true exactly when that frame's `epoch` is the current game's |
 | `{"launcherReports":{"method":…,"result":…}}` | What the launcher's client gives its UI for that method from then on |
 
-A step with `"invalid":"<rule>"` breaks the named rule on purpose, and the
-fixture checker does not check it against the rules.
+A step with `"invalid":"<rule>"` breaks the named rule on purpose. The fixture
+checker reports that rule for the step, and fails if the step breaks no rule
+or a different one.
 
 `outcome` is where the side under test ends up:
 
 | Outcome | Meaning |
 | --- | --- |
 | `clean` | Everything is answered and the host exits with code 0 |
-| `protocolError` | The side under test ends the connection as [Framing](#framing) says: a host exits; a launcher kills the host |
+| `protocolError` | The side under test ends the connection as [Protocol errors](#protocol-errors) says: a host exits; a launcher kills the host |
 | `unsupported` | The launcher reports the version or pixel format mismatch, not a crash |
 | `hostFailure` | The launcher handles a [host failure](#host-failure) |
 
 [`tools/check_fixtures.py`](../tools/check_fixtures.py) checks every message
-in the fixtures against the fields, types and ranges in this document.
+in the fixtures against the fields, types, ranges and order in this document.

@@ -3,7 +3,7 @@
   "from": "launcher",
   "message": {
     "type": "call",
-    "id": 6,
+    "id": 7,
     "method": "option",
     "args": {
       "key": "swanstation_GPU_ResolutionScale",
@@ -12,7 +12,7 @@
   },
   "reply": {
     "type": "reply",
-    "id": 6,
+    "id": 7,
     "result": true
   }
 }

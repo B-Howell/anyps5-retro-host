@@ -1,0 +1,26 @@
+{
+  "description": "Status of a game that ended before its first frame.",
+  "from": "launcher",
+  "message": {
+    "type": "call",
+    "id": 3,
+    "method": "status"
+  },
+  "reply": {
+    "type": "reply",
+    "id": 3,
+    "result": {
+      "ready": false,
+      "ended": true,
+      "error": "No PS1 BIOS was found.",
+      "errorCode": "bios",
+      "aspect": 1.3333333333333333,
+      "hardware": true,
+      "resolutionError": "",
+      "graphicsPending": false,
+      "progressLabel": null,
+      "progressPercent": null,
+      "options": {}
+    }
+  }
+}

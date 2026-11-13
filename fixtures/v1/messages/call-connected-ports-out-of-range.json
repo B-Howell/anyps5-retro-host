@@ -1,0 +1,19 @@
+{
+  "description": "A port count the console does not have.",
+  "from": "launcher",
+  "message": {
+    "type": "call",
+    "id": 5,
+    "method": "connectedPorts",
+    "args": 3
+  },
+  "invalid": "connectedPorts args must be an integer from 1 to 2",
+  "reply": {
+    "type": "reply",
+    "id": 5,
+    "error": {
+      "code": "argument",
+      "message": "connectedPorts takes 1 or 2."
+    }
+  }
+}

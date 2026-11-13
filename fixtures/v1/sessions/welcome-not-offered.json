@@ -32,7 +32,8 @@
           "ps1"
         ],
         "pixelFormat": "rgba8"
-      }
+      },
+      "invalid": "welcome picks what hello offered"
     }
   ],
   "outcome": "unsupported"

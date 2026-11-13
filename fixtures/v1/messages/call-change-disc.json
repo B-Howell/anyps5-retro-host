@@ -3,13 +3,13 @@
   "from": "launcher",
   "message": {
     "type": "call",
-    "id": 5,
+    "id": 6,
     "method": "changeDisc",
     "args": 1
   },
   "reply": {
     "type": "reply",
-    "id": 5,
+    "id": 6,
     "result": true
   }
 }
