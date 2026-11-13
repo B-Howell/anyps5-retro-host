@@ -194,7 +194,7 @@ class PosixHost:
                 close_all(descriptors)
                 raise Failed(problem)
             if first and not data:
-                deadline = max(deadline, time.monotonic() + WRITE_LIMIT)
+                deadline = time.monotonic() + WRITE_LIMIT
             data += chunk
         return data, descriptors, deadline
 

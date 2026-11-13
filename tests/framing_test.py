@@ -71,5 +71,9 @@ pair = reader_and_writer([(0, MESSAGE[:1]), (0.3, MESSAGE[1:4]), (0.4, MESSAGE[4
 check('the rest later than the write limit after the first byte', read(pair[0], 0.1), 'the host sent nothing in time')
 finish(*pair)
 
+pair = reader_and_writer([(0, MESSAGE[:1]), (0.3, MESSAGE[1:4]), (0.4, MESSAGE[4:])])
+check('the same with a read timeout longer than the write limit', read(pair[0], 2), 'the host sent nothing in time')
+finish(*pair)
+
 print('FAILED: ' + '; '.join(failures) if failures else 'framing passed')
 sys.exit(1 if failures else 0)
