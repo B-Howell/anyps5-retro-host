@@ -97,7 +97,9 @@ through kqueue. On Windows a thread waits on the launcher's process handle.
   takes the new value at the first `retro_run`, as it does an `option` call);
   `resolutionError` says which value was asked for, how large its pictures could
   be, the limit, and the value used, until the player chooses an internal
-  resolution again. SwanStation still makes its renderer at the asked-for scale
+  resolution again. When the player chose a value that fits while the core was
+  loading at one that does not, the core is given the chosen one in the same
+  way, without a `resolutionError`. SwanStation still makes its renderer at the asked-for scale
   in `context_reset` (it clamps to the GPU's largest texture itself) and
   remakes it a frame later. The values the core gives before it reports its
   geometry are listed whole. Values that are not whole numbers cannot be

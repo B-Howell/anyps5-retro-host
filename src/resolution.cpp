@@ -50,7 +50,10 @@ std::optional<ResolutionLimit> LimitResolution(const std::vector<std::string>& v
   }
   if (!largest) return std::nullopt;
   bool kept = false;
-  for (const size_t i : limit.offered) kept = kept || i == selected;
+  for (const size_t i : limit.offered) {
+    kept = kept || i == selected;
+    limit.active_offered = limit.active_offered || i == active;
+  }
   limit.selected = kept ? selected : *largest;
   if (!kept) {
     const uint32_t scale = *ParseScale(values[selected]);

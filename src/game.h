@@ -144,8 +144,9 @@ class Game {
   std::string ResolutionError() const;
   // Offers only the internal resolutions whose frames fit the ring and the GPU's framebuffer, given
   // the core's largest geometry now, and moves a value that does not fit to the largest one that
-  // does. Returns the largest geometry at the value the core is given next, or std::nullopt when
-  // nothing changed the core's. Called with mutex_ held, on the game's thread, with gpu_ made.
+  // does. When the value the core drew at is not offered, the core is given the selected one
+  // instead, and the largest geometry at it is returned; otherwise std::nullopt, as the core's
+  // geometry fits. Called with mutex_ held, on the game's thread, with gpu_ made.
   std::optional<std::pair<uint32_t, uint32_t>> LimitResolution(uint32_t max_width, uint32_t max_height);
   std::string CardPath() const;
   void RefreshDiscs();

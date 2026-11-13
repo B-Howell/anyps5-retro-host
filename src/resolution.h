@@ -26,6 +26,8 @@ struct ResolutionLimit {
   // The largest geometry at values[selected].
   uint32_t width = 0;
   uint32_t height = 0;
+  // Whether values[active], the value the core drew at, is offered.
+  bool active_offered = false;
   // The largest geometry the value asked for would have had, when it is not offered.
   uint32_t refused_width = 0;
   uint32_t refused_height = 0;
