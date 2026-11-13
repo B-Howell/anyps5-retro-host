@@ -183,7 +183,8 @@ class Game {
   bool (*update_display_)() = nullptr;
   bool display_refresh_ = false;
   mutable std::mutex pause_mutex_;
-  bool bios_missing_ = false;
+  // SwanStation said which BIOS it uses; without that it boots its built-in OpenBIOS.
+  bool bios_found_ = false;
   std::string card_;
   struct DiscControl;
   std::unique_ptr<DiscControl> disc_control_;

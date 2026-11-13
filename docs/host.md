@@ -56,9 +56,13 @@ through kqueue. On Windows a thread waits on the launcher's process handle.
 - **activeValue** is the value the host gives the core. SwanStation's own
   per-game compatibility settings (`swanstation_Main_ApplyGameSettings`) can
   override some of them inside the core without telling the frontend.
-- **Missing BIOS.** SwanStation keeps going without a BIOS, and logs
-  `No BIOS image found`. The host watches the core's log for that line and
-  ends the game with `errorCode` `bios`.
+- **Missing BIOS.** SwanStation keeps going without a usable BIOS, on its
+  built-in OpenBIOS, which runs few games. It logs `Using BIOS '<file>'` for a
+  BIOS of the console's region, or `Falling back to possibly-incompatible
+  image` for another region's, and neither line when it found none or only an
+  image it does not know (`src/core/host_interface.cpp`,
+  `FindBIOSImageInDirectory`). When the core's log has neither line by the end
+  of `retro_load_game`, the host ends the game with `errorCode` `bios`.
 - **Disc changes.** These happen between two frames: open the tray, choose
   the disc, close the tray, then check the result. A change that fails puts
   the previous disc back and sets `discs.failed`.

@@ -197,11 +197,11 @@ void Game::RunGame() {
   retro_game_info game{config_.disc.c_str(), nullptr, 0, nullptr};
   if (!Get<bool (*)(const retro_game_info*)>("retro_load_game")(&game)) {
     Get<void (*)()>("retro_deinit")();
-    if (bios_missing_) Finish("No PS1 BIOS was found.", "bios");
+    if (!bios_found_) Finish("No PS1 BIOS was found.", "bios");
     else Finish("The disc could not be read.", "disc");
     return;
   }
-  if (bios_missing_) {
+  if (!bios_found_) {
     Get<void (*)()>("retro_unload_game")();
     Get<void (*)()>("retro_deinit")();
     Finish("No PS1 BIOS was found.", "bios");
@@ -645,7 +645,9 @@ int16_t Game::InputState(unsigned port, unsigned device, unsigned index, unsigne
 }
 
 void Game::Log(int level, const char* text) {
-  if (std::strstr(text, "No BIOS image found")) bios_missing_ = true;
+  if (std::strstr(text, "Using BIOS '") || std::strstr(text, "Falling back to possibly-incompatible image")) {
+    bios_found_ = true;
+  }
   std::fprintf(stderr, "[core %d] %s", level, text);
   const size_t length = std::strlen(text);
   if (length == 0 || text[length - 1] != '\n') std::fputc('\n', stderr);

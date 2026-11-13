@@ -3,8 +3,8 @@
 
 /* A libretro core for the host's tests. It draws 640x480 frames, plays silence, offers one
  * option, takes .m3u playlists through the disc control interface, keeps a 128 KiB memory card
- * and rumbles port 1's large motor while Cross is held. A system directory without fake-bios.bin
- * makes it log what SwanStation logs without a BIOS. Setting fake_hang to "yes" makes retro_run
+ * and rumbles port 1's large motor while Cross is held. It logs SwanStation's messages for a BIOS
+ * it uses (fake-bios.bin in the system directory) or for none. Setting fake_hang to "yes" makes retro_run
  * never return, as a stuck core would. */
 
 #include <libretro.h>
@@ -213,7 +213,10 @@ RETRO_API bool retro_load_game(const struct retro_game_info* game) {
   enum retro_pixel_format format = RETRO_PIXEL_FORMAT_XRGB8888;
   if (!game || !game->path) return false;
   if (!environment(RETRO_ENVIRONMENT_SET_PIXEL_FORMAT, &format)) return false;
-  if (!has_bios() && log_printf) log_printf(RETRO_LOG_INFO, "No BIOS image found for NTSC-U/C region\n");
+  if (log_printf) {
+    if (has_bios()) log_printf(RETRO_LOG_INFO, "Using BIOS 'fake-bios.bin': fake BIOS\n");
+    else log_printf(RETRO_LOG_INFO, "No BIOS image found for NTSC-U/C region\n");
+  }
   if (ends_with(game->path, ".m3u")) {
     load_playlist(game->path);
     if (disc_count == 0) return false;
