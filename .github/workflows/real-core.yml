@@ -51,6 +51,7 @@ jobs:
             core: swanstation/build/swanstation_libretro.so
             host: build/anyps5-retro-host
             python: python3
+            opengl: --expect-opengl
           - os: ubuntu-24.04
             core: swanstation/build/swanstation_libretro.so
             host: build/anyps5-retro-host
