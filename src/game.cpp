@@ -322,8 +322,13 @@ std::optional<std::string> Game::PlaylistEntry(unsigned index) const {
 }
 
 std::string Game::CardPath() const {
+#ifdef _WIN32
+  constexpr char kSeparator = '\\';
+#else
+  constexpr char kSeparator = '/';
+#endif
   std::string saves = config_.saves;
-  if (!saves.empty() && saves.back() != '/' && saves.back() != '\\') saves += '/';
+  if (!saves.empty() && saves.back() != '/' && saves.back() != '\\') saves += kSeparator;
   return saves + Stem(config_.disc) + ".srm";
 }
 
