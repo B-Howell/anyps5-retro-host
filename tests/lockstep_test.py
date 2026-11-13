@@ -50,7 +50,7 @@ class Peer:
         while True:
             left = deadline - time.monotonic()
             if left <= 0:
-                raise c.Failed(f'{self.name}: the host sent nothing that was waited for')
+                raise c.Idle(f'{self.name}: the host sent nothing that was waited for')
             message, descriptors = self.host.read(left)
             c.close_all(descriptors)
             if message.get('type') == 'sync':
@@ -60,10 +60,11 @@ class Peer:
                 return message
 
     def drain(self):
+        """Reads every message already sent, up to the first pause between messages."""
         try:
             while True:
                 self.pump(timeout=0.01)
-        except c.Failed:
+        except c.Idle:
             pass
 
     def call(self, method, args=None, timeout=6.0):

@@ -623,7 +623,7 @@ No argument. Returns `null` when no game is loaded, or:
 | `error` | string | Why the game ended, in English for logs, or `""` |
 | `errorCode` | string | Why the game ended, for the UI to show in the player's language (table below), or `""` |
 | `aspect` | number, greater than 0 and at most 10 | The display aspect ratio the core reports; 1.3333333333333333 until it reports one |
-| `hardware` | boolean | The core draws with the GPU (not the software renderer) |
+| `hardware` | boolean | The core draws with its OpenGL renderer, in a context the host made, not with its own software renderer. The OpenGL implementation itself may run on the CPU (Mesa's or Apple's software renderer on a machine with no GPU driver for it) |
 | `resolutionError` | string | Why the last internal resolution could not be used, or `""` |
 | `graphicsPending` | boolean | A graphics option is waiting to be applied |
 | `progressLabel` | string or null | What is loading right now, while there is something to show |
