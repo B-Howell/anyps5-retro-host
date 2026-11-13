@@ -25,10 +25,15 @@ WINDOWS = os.name == 'nt'
 SYSTEM = 'windows' if WINDOWS else ('macos' if sys.platform == 'darwin' else 'linux')
 IGNORED = {'frame', 'rumble'}
 NONE = 0xFFFFFFFF
+WRITE_LIMIT = 5.0
 
 
 class Failed(Exception):
     pass
+
+
+class Idle(Failed):
+    """No message began in time. The stream is still between messages, so reading again is safe."""
 
 
 ATOMICS = None
@@ -154,15 +159,21 @@ class PosixHost:
         self.send(struct.pack('<I', len(body)) + body, descriptors)
 
     def receive(self, size, deadline, first):
+        """The next size bytes, the descriptors that came with them, and the deadline for the rest
+        of the message."""
         # protocol.md "Framing": a read never asks for more than is left of the current part, and
-        # descriptors belong to the message whose first length byte they came with.
+        # descriptors belong to the message whose first length byte they came with. The deadline
+        # is for a message to begin; once its first byte is here the host has the write limit to
+        # send the rest, and giving up sooner would leave the stream in the middle of a message.
         data = b''
         descriptors = []
         while len(data) < size:
             left = deadline - time.monotonic()
             if left <= 0 or not select.select([self.socket], [], [], left)[0]:
                 close_all(descriptors)
-                raise Failed('the host sent nothing in time')
+                if first and not data:
+                    raise Idle('the host sent nothing in time')
+                raise Failed('the host did not finish a message within the write limit')
             try:
                 chunk, control, flags, _ = self.socket.recvmsg(size - len(data), socket.CMSG_SPACE(4 * 4),
                                                                getattr(socket, 'MSG_CMSG_CLOEXEC', 0))
@@ -188,17 +199,19 @@ class PosixHost:
             if problem:
                 close_all(descriptors)
                 raise Failed(problem)
+            if first and not data:
+                deadline = time.monotonic() + WRITE_LIMIT
             data += chunk
-        return data, descriptors
+        return data, descriptors, deadline
 
     def read(self, timeout):
         deadline = time.monotonic() + timeout
-        header, descriptors = self.receive(4, deadline, True)
+        header, descriptors, deadline = self.receive(4, deadline, True)
         try:
             size = struct.unpack('<I', header)[0]
             if not 2 <= size <= 1 << 20:
                 raise Failed(f'the host sent a length of {size}')
-            body, _ = self.receive(size, deadline, False)
+            body, _, _ = self.receive(size, deadline, False)
             return json.loads(body.decode('utf-8')), descriptors
         except (Failed, ValueError):
             close_all(descriptors)
@@ -262,6 +275,7 @@ class WindowsHost:
         self.chunks = []
         self.arrived = threading.Condition()
         self.closed = False
+        self.begun = None
         threading.Thread(target=self.pump, daemon=True).start()
 
     def pump(self):
@@ -298,14 +312,22 @@ class WindowsHost:
                 size = struct.unpack('<I', self.buffer[:4])[0]
                 if len(self.buffer) >= 4 + size:
                     body, self.buffer = self.buffer[4:4 + size], self.buffer[4 + size:]
+                    self.begun = time.monotonic() if self.buffer else None
                     return json.loads(body.decode('utf-8')), []
             with self.arrived:
                 while not self.chunks and not self.closed:
-                    left = deadline - time.monotonic()
-                    if left <= 0:
-                        raise Failed('the host sent nothing in time')
+                    if self.buffer:
+                        left = self.begun + WRITE_LIMIT - time.monotonic()
+                        if left <= 0:
+                            raise Failed('the host did not finish a message within the write limit')
+                    else:
+                        left = deadline - time.monotonic()
+                        if left <= 0:
+                            raise Idle('the host sent nothing in time')
                     self.arrived.wait(left)
                 if self.chunks:
+                    if not self.buffer:
+                        self.begun = time.monotonic()
                     self.buffer += b''.join(self.chunks)
                     self.chunks.clear()
                 elif self.closed:

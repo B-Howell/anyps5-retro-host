@@ -27,6 +27,8 @@ parser.add_argument('--bios', required=True, help='OpenBIOS, 512 KiB')
 parser.add_argument('--program', required=True, help='A PS-EXE that draws to the screen')
 parser.add_argument('--log', required=True)
 parser.add_argument('--picture', help='Where to save the last picture read, as a PNG')
+parser.add_argument('--expect-opengl', action='store_true',
+                    help='Fail unless the host gives the core an OpenGL context (status.hardware)')
 options = parser.parse_args()
 
 host_path = Path(options.host).resolve()
@@ -60,7 +62,7 @@ def pump(until=None, timeout=5.0):
             state['frames'] += 1
         if until and until(message):
             return message
-    raise c.Failed('the host sent nothing that was waited for')
+    raise c.Idle('the host sent nothing that was waited for')
 
 
 def drain(seconds):
@@ -68,7 +70,7 @@ def drain(seconds):
     while time.monotonic() < end:
         try:
             pump(timeout=min(1.0, end - time.monotonic()))
-        except c.Failed:
+        except c.Idle:
             pass
 
 
@@ -141,6 +143,8 @@ def start(game):
         raise c.Failed('software drawing at 2x must explain itself in resolutionError')
     if status['hardware'] and status['resolutionError']:
         raise c.Failed('GPU drawing must leave resolutionError empty')
+    if options.expect_opengl and not status['hardware']:
+        raise c.Failed('this machine has an OpenGL renderer, but the host made no context for the core')
     scales = status['options']['swanstation_GPU_ResolutionScale']['values']
     if status['hardware'] and max(int(value) for value in scales) > 8:
         raise c.Failed(f'scales whose largest geometry, 1024 x 512 times the scale, passes 8192 are offered: {scales}')
