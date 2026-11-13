@@ -57,12 +57,17 @@ through kqueue. On Windows a thread waits on the launcher's process handle.
   per-game compatibility settings (`swanstation_Main_ApplyGameSettings`) can
   override some of them inside the core without telling the frontend.
 - **Missing BIOS.** SwanStation keeps going without a usable BIOS, on its
-  built-in OpenBIOS, which runs few games. It logs `Using BIOS '<file>'` for a
-  BIOS of the console's region, or `Falling back to possibly-incompatible
-  image` for another region's, and neither line when it found none or only an
-  image it does not know (`src/core/host_interface.cpp`,
-  `FindBIOSImageInDirectory`). When the core's log has neither line by the end
-  of `retro_load_game`, the host ends the game with `errorCode` `bios`.
+  built-in OpenBIOS, which runs few games. It logs the region it chose
+  (`Console Region: …`), then loads the file its BIOS option names for that
+  region from the system folder when the file has a BIOS's size, and otherwise
+  searches the folder, logging `Using BIOS '<file>'` or `Falling back to
+  possibly-incompatible image` when it finds one it knows
+  (`src/core/host_interface.cpp`, `GetBIOSImage`). The host applies the same
+  steps to the log and the folder; when neither finds a BIOS, it ends the game
+  with `errorCode` `bios`.
+- **Missing disc tracks.** SwanStation boots the BIOS with no disc, logging
+  `Booting BIOS with no disc`, when it cannot open the disc image (a `.cue`
+  whose `.bin` is missing). The host ends that game with `errorCode` `disc`.
 - **Disc changes.** These happen between two frames: open the tray, choose
   the disc, close the tray, then check the result. A change that fails puts
   the previous disc back and sets `discs.failed`.

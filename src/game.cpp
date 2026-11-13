@@ -197,14 +197,15 @@ void Game::RunGame() {
   retro_game_info game{config_.disc.c_str(), nullptr, 0, nullptr};
   if (!Get<bool (*)(const retro_game_info*)>("retro_load_game")(&game)) {
     Get<void (*)()>("retro_deinit")();
-    if (!bios_found_) Finish("No PS1 BIOS was found.", "bios");
+    if (!UsesBios()) Finish("No PS1 BIOS was found.", "bios");
     else Finish("The disc could not be read.", "disc");
     return;
   }
-  if (!bios_found_) {
+  if (disc_missing_ || !UsesBios()) {
     Get<void (*)()>("retro_unload_game")();
     Get<void (*)()>("retro_deinit")();
-    Finish("No PS1 BIOS was found.", "bios");
+    if (disc_missing_) Finish("The disc could not be read.", "disc");
+    else Finish("No PS1 BIOS was found.", "bios");
     return;
   }
 
@@ -648,6 +649,8 @@ void Game::Log(int level, const char* text) {
   if (std::strstr(text, "Using BIOS '") || std::strstr(text, "Falling back to possibly-incompatible image")) {
     bios_found_ = true;
   }
+  if (const char* region = std::strstr(text, "Console Region: ")) console_region_ = region + 16;
+  if (std::strstr(text, "Booting BIOS with no disc")) disc_missing_ = true;
   std::fprintf(stderr, "[core %d] %s", level, text);
   const size_t length = std::strlen(text);
   if (length == 0 || text[length - 1] != '\n') std::fputc('\n', stderr);
@@ -813,6 +816,27 @@ void Game::SetAspect(const retro_game_geometry& geometry) {
   } else if (geometry.base_width && geometry.base_height) {
     aspect_ = static_cast<double>(geometry.base_width) / geometry.base_height;
   }
+}
+
+bool Game::UsesBios() const {
+  if (bios_found_) return true;
+  const char* key = nullptr;
+  if (console_region_.rfind("NTSC-J", 0) == 0) key = "swanstation_BIOS_PathNTSCJ";
+  else if (console_region_.rfind("NTSC-U", 0) == 0) key = "swanstation_BIOS_PathNTSCU";
+  else if (console_region_.rfind("PAL", 0) == 0) key = "swanstation_BIOS_PathPAL";
+  if (!key) return false;
+  std::string name;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (const auto& option : options_) {
+      if (option.key == key) name = option.active;
+    }
+  }
+  if (name.empty()) return false;
+  std::string path = config_.system;
+  if (!path.empty() && !IsSeparator(path.back())) path += kSeparator;
+  const auto image = ReadWholeFile(path + name);
+  return image && (image->size() == 512 * 1024 || image->size() == 4 * 1024 * 1024 || image->size() == 8 * 1024 * 1024);
 }
 
 std::string Game::ResolutionError() const {

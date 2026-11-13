@@ -183,8 +183,13 @@ class Game {
   bool (*update_display_)() = nullptr;
   bool display_refresh_ = false;
   mutable std::mutex pause_mutex_;
-  // SwanStation said which BIOS it uses; without that it boots its built-in OpenBIOS.
+  // SwanStation said which BIOS it found in the system folder; without that it boots its built-in
+  // OpenBIOS, unless it loaded the BIOS file its options name for the console region.
   bool bios_found_ = false;
+  std::string console_region_;
+  // SwanStation could not open the disc and boots the BIOS with no disc instead.
+  bool disc_missing_ = false;
+  bool UsesBios() const;
   std::string card_;
   struct DiscControl;
   std::unique_ptr<DiscControl> disc_control_;
