@@ -43,12 +43,16 @@ through kqueue. On Windows a thread waits on the launcher's process handle.
   `graphicsPending` is `true`. libretro has no flag for options that need a
   restart. The host reports `restart: true` for the options a core marks
   "(Restart)" at the end of their text, as libretro cores do, and for
-  SwanStation's console region and memory card options: SwanStation applies the
-  region only at boot, and makes the memory cards again when their type
-  changes, which would write a blank card over the player's save. While a game
-  runs the core keeps getting the value it started with; the new one is used
-  at the next start. Multitap mode stays at its default and is not listed,
-  because version 1 has controller ports 1 and 2 only.
+  SwanStation's console region, 8 MB RAM and fast boot options, which
+  SwanStation applies only when the console boots. While a game runs the core
+  keeps getting the value it started with; the new one is used at the next
+  start. An option counts toward `graphicsPending` only once the core has asked
+  for it.
+- **Options kept at SwanStation's default and not listed:** the memory card
+  options (the host keeps memory card 1 itself, and SwanStation formats and
+  writes over its own card files when it cannot read them), multitap (version 1
+  has controller ports 1 and 2 only), and the log level (the host finds a
+  missing BIOS in SwanStation's information messages).
 - **activeValue** is the value the host gives the core. SwanStation's own
   per-game compatibility settings (`swanstation_Main_ApplyGameSettings`) can
   override some of them inside the core without telling the frontend.

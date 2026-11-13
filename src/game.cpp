@@ -65,15 +65,19 @@ std::string Clip(const std::string& text, size_t bytes) {
 }
 constexpr char kResolutionOption[] = "swanstation_GPU_ResolutionScale";
 
-// SwanStation options it does not apply while a game runs, or applies by rebuilding hardware the
-// game is using (memory cards made again, which would write a blank card over the player's save).
-// They take effect at the next start, like the options SwanStation marks "(Restart)".
-constexpr const char* kStartOnlyOptions[] = {"swanstation_Console_Region", "swanstation_MemoryCards_Card1Type",
-                                             "swanstation_MemoryCards_Card2Type",
-                                             "swanstation_MemoryCards_UsePlaylistTitle"};
-// Options version 1 keeps at their default: a multitap moves controller port 2 away from the two
-// ports protocol.md defines.
-constexpr const char* kFixedOptions[] = {"swanstation_ControllerPorts_MultitapMode"};
+// SwanStation options it applies only when the console boots. They take effect at the next start,
+// like the options SwanStation marks "(Restart)".
+constexpr const char* kStartOnlyOptions[] = {"swanstation_Console_Region", "swanstation_Console_Enable8MBRAM",
+                                             "swanstation_BIOS_PatchFastBoot"};
+// Options version 1 keeps at SwanStation's default and does not list:
+// - the memory card options: the host keeps memory card 1 itself (<disc>.srm, protocol.md
+//   "start"), and SwanStation's own card files are formatted and written over when it cannot read
+//   them, out of the host's reach;
+// - multitap, which moves controller port 2 away from the two ports protocol.md defines;
+// - the log level, since the host finds a missing BIOS in SwanStation's information messages.
+constexpr const char* kFixedOptions[] = {"swanstation_MemoryCards_Card1Type", "swanstation_MemoryCards_Card2Type",
+                                         "swanstation_MemoryCards_UsePlaylistTitle",
+                                         "swanstation_ControllerPorts_MultitapMode", "swanstation_Logging_LogLevel"};
 
 bool Listed(const char* const* list, size_t count, const std::string& key) {
   return std::find(list, list + count, key) != list + count;
@@ -500,6 +504,7 @@ bool Game::Environment(unsigned command, void* data) {
       for (auto& option : options_) {
         if (variable->key && option.key == variable->key) {
           if (!option.restart) option.active = option.values[option.selected];
+          option.read = true;
           variable->value = option.active.c_str();
           return true;
         }
@@ -673,7 +678,7 @@ Json Game::Status() const {
   const double aspect = aspect_ > 0 && aspect_ <= 10 ? aspect_ : 4.0 / 3.0;
   bool pending = false;
   for (const auto& option : options_) {
-    pending = pending || (!option.restart && option.values[option.selected] != option.active);
+    pending = pending || (option.read && !option.restart && option.values[option.selected] != option.active);
   }
   JsonObject status{{"ready", ready_},
                     {"ended", ended_},

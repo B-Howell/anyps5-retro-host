@@ -111,6 +111,8 @@ class Game {
     bool restart = false;
     // Kept at its default and not listed in status (see kFixedOptions).
     bool fixed = false;
+    // The core has asked for this option's value at least once.
+    bool read = false;
   };
   struct Disc {
     std::vector<std::string> labels;
