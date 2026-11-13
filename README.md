@@ -16,6 +16,9 @@ SwanStation.
   against the document. Run `python3 tools/check_fixtures.py`.
 - [tests/conformance.py](tests/conformance.py): the fake launcher. It plays
   every fixture session that tests the host against a built host.
+- [tests/fake_host.py](tests/fake_host.py): the fake host. A launcher's test
+  starts it as the host, and it plays one fixture session that tests the
+  launcher. See [docs/host.md](docs/host.md#testing-a-launcher-with-the-fake-host).
 
 ## Building and testing
 

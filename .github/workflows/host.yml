@@ -20,6 +20,7 @@ jobs:
       - name: Conformance sessions, with the host's network calls traced
         run: python3 tests/conformance.py --host build/anyps5-retro-host --core build/fake_core.so --log build/host.log --strace build/network.trace
       - run: python3 tests/host_test.py --host build/anyps5-retro-host --core build/fake_core.so --log build/host.log
+      - run: python3 -I tests/fake_host_selftest.py
       - name: The host opens no network socket and listens on nothing (protocol.md, "Network")
         run: |
           if cat build/network.trace* | grep -E 'socket\((AF_INET|AF_INET6|AF_PACKET|AF_NETLINK)|(^| )(listen|bind)\('; then
@@ -62,6 +63,7 @@ jobs:
       - run: ctest --test-dir build --output-on-failure
       - run: python3 tests/conformance.py --host build/anyps5-retro-host --core build/fake_core.so --log build/host.log
       - run: python3 tests/host_test.py --host build/anyps5-retro-host --core build/fake_core.so --log build/host.log
+      - run: python3 -I tests/fake_host_selftest.py
       - if: failure()
         run: tail -200 build/host.log || true
 
@@ -77,6 +79,7 @@ jobs:
       - run: ctest --test-dir build -C Release --output-on-failure
       - run: python tests/conformance.py --host build/Release/anyps5-retro-host.exe --core build/Release/fake_core.dll --log build/host.log
       - run: python tests/host_test.py --host build/Release/anyps5-retro-host.exe --core build/Release/fake_core.dll --log build/host.log
+      - run: python -I tests/fake_host_selftest.py
       - if: failure()
         shell: bash
         run: tail -200 build/host.log || true
