@@ -114,7 +114,8 @@ through kqueue. On Windows a thread waits on the launcher's process handle.
   protocol.md asks for; Python cannot make them on shared memory itself. It
   is built next to `fake_core`, where both scripts look for it.
 - [`tests/real_core.py`](../tests/real_core.py) runs the real SwanStation
-  through the host. The `real-core` workflow builds OpenBIOS and the psyqo
+  through the host. The `real-core` workflow builds OpenBIOS (with `BOOT_MODE=fast`, which
+  boots the disc without first running OpenBIOS's own menu program) and the psyqo
   `hello` program from pcsx-redux's nugget (MIT) at a fixed commit, pads the
   BIOS to the 512 KiB SwanStation requires, and builds SwanStation at a fixed
   commit. [`tests/make_test_disc.py`](../tests/make_test_disc.py) puts the
@@ -123,7 +124,8 @@ through kqueue. On Windows a thread waits on the launcher's process handle.
   starts it at 2x, then checks that 100 frames come within 10 seconds, that
   the picture is not one colour, and that `hardware` and `resolutionError`
   agree (a machine without an OpenGL context draws in software and must say
-  so). It then checks a clean `stop` and exit. No Sony BIOS or game is used.
+  so). It then checks a clean `stop` and exit, and keeps the last picture
+  (`--picture`) as a workflow artifact. No Sony BIOS or game is used.
 - CI runs everything on Linux, macOS (arm64) and Windows, and the Linux tests
   again under ThreadSanitizer. GCC 11's ThreadSanitizer reports a false
   "double lock" in `Game::Join`: libstdc++ 11 waits with

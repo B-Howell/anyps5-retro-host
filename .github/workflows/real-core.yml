@@ -24,7 +24,7 @@ jobs:
           git -C nugget submodule update -q --init --depth 1 --recursive
       - name: Build OpenBIOS and the hello program
         run: |
-          make -C nugget/openbios -j4 PREFIX=mipsel-linux-gnu FORMAT=elf32-tradlittlemips all
+          make -C nugget/openbios -j4 PREFIX=mipsel-linux-gnu FORMAT=elf32-tradlittlemips BOOT_MODE=fast all
           make -C nugget/psyqo/examples/hello -j4 PREFIX=mipsel-linux-gnu FORMAT=elf32-tradlittlemips all
       - name: Pad OpenBIOS to the 512 KiB a BIOS chip holds, which SwanStation requires
         run: |
@@ -89,6 +89,12 @@ jobs:
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build --config Release
       - name: Run the real core
-        run: ${{ matrix.python }} tests/real_core.py --host ${{ matrix.host }} --core ${{ matrix.core }} --bios ps1-files/openbios.bin --program ps1-files/hello.exe --log build/real-core.log
+        run: ${{ matrix.python }} tests/real_core.py --host ${{ matrix.host }} --core ${{ matrix.core }} --bios ps1-files/openbios.bin --program ps1-files/hello.exe --log build/real-core.log --picture build/real-core.png
       - if: failure()
         run: tail -200 build/real-core.log || true
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-core-${{ runner.os }}
+          path: build/real-core.png
+          if-no-files-found: ignore
