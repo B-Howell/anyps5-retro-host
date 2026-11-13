@@ -39,12 +39,16 @@ int16_t OnInputState(unsigned port, unsigned device, unsigned index, unsigned id
   return g_game ? g_game->InputState(port, device, index, id) : 0;
 }
 void OnLog(enum retro_log_level level, const char* format, ...) {
-  char text[1024];
   va_list arguments;
   va_start(arguments, format);
-  std::vsnprintf(text, sizeof text, format, arguments);
+  va_list measure;
+  va_copy(measure, arguments);
+  const int length = std::vsnprintf(nullptr, 0, format, measure);
+  va_end(measure);
+  std::string text(length > 0 ? static_cast<size_t>(length) : 0, '\0');
+  if (length > 0) std::vsnprintf(text.data(), text.size() + 1, format, arguments);
   va_end(arguments);
-  if (g_game) g_game->Log(static_cast<int>(level), text);
+  if (g_game) g_game->Log(static_cast<int>(level), text.c_str());
 }
 bool OnRumble(unsigned port, enum retro_rumble_effect effect, uint16_t strength) {
   return g_game && g_game->Rumble(port, static_cast<int>(effect), strength);

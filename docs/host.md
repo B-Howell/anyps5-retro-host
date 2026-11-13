@@ -64,7 +64,9 @@ through kqueue. On Windows a thread waits on the launcher's process handle.
   possibly-incompatible image` when it finds one it knows
   (`src/core/host_interface.cpp`, `GetBIOSImage`). The host applies the same
   steps to the log and the folder; when neither finds a BIOS, it ends the game
-  with `errorCode` `bios`.
+  with `errorCode` `bios`. SwanStation takes a file of BIOS size under the
+  configured name without looking inside it, so a damaged one boots and never
+  shows a frame; that game ends with `didNotStart` after 60 seconds.
 - **Missing disc tracks.** SwanStation boots the BIOS with no disc, logging
   `Booting BIOS with no disc`, when it cannot open the disc image (a `.cue`
   whose `.bin` is missing). The host ends that game with `errorCode` `disc`.

@@ -623,7 +623,7 @@ No argument. Returns `null` when no game is loaded, or:
 | `errorCode` | Meaning |
 | --- | --- |
 | `""` | The game has not ended, or ended without an error (it was stopped) |
-| `bios` | No usable BIOS was found in `system` |
+| `bios` | No BIOS was found in `system`, the way the core looks for one. A file the core takes as a BIOS but that is damaged shows as `didNotStart` instead |
 | `disc` | The disc, or a file it names, could not be read |
 | `core` | The core could not be loaded, or failed while loading or running the game |
 | `stalled` | The game stopped producing frames (see [Timeouts](#timeouts)) |
