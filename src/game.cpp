@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
+#include <iterator>
 #include <new>
 
 namespace retro_host {
@@ -63,6 +64,20 @@ std::string Clip(const std::string& text, size_t bytes) {
   return text.substr(0, end);
 }
 constexpr char kResolutionOption[] = "swanstation_GPU_ResolutionScale";
+
+// SwanStation options it does not apply while a game runs, or applies by rebuilding hardware the
+// game is using (memory cards made again, which would write a blank card over the player's save).
+// They take effect at the next start, like the options SwanStation marks "(Restart)".
+constexpr const char* kStartOnlyOptions[] = {"swanstation_Console_Region", "swanstation_MemoryCards_Card1Type",
+                                             "swanstation_MemoryCards_Card2Type",
+                                             "swanstation_MemoryCards_UsePlaylistTitle"};
+// Options version 1 keeps at their default: a multitap moves controller port 2 away from the two
+// ports protocol.md defines.
+constexpr const char* kFixedOptions[] = {"swanstation_ControllerPorts_MultitapMode"};
+
+bool Listed(const char* const* list, size_t count, const std::string& key) {
+  return std::find(list, list + count, key) != list + count;
+}
 
 #ifdef _WIN32
 constexpr char kSeparators[] = "/\\";
@@ -147,6 +162,7 @@ void Game::Run() {
 }
 
 void Game::RunGame() {
+  CreateDirectories(config_.saves);
   std::string error;
   if (!LoadCore(error)) {
     Finish(error, "core");
@@ -444,7 +460,9 @@ bool Game::Environment(unsigned command, void* data) {
         option.key = definition->key;
         const std::string text = definition->desc ? definition->desc : definition->key;
         option.title = Clip(text, kTextBytes);
-        option.restart = text.size() >= 9 && text.compare(text.size() - 9, 9, "(Restart)") == 0;
+        option.restart = (text.size() >= 9 && text.compare(text.size() - 9, 9, "(Restart)") == 0) ||
+                         Listed(kStartOnlyOptions, std::size(kStartOnlyOptions), option.key);
+        option.fixed = Listed(kFixedOptions, std::size(kFixedOptions), option.key);
         for (const retro_core_option_value* value = definition->values; value->value; ++value) {
           option.values.emplace_back(value->value);
           option.labels.emplace_back(Clip(value->label ? value->label : value->value, kTextBytes));
@@ -456,7 +474,7 @@ bool Game::Environment(unsigned command, void* data) {
         };
         option.selected = chosen(definition->default_value ? definition->default_value : "").value_or(0);
         for (const auto& [key, value] : config_.options) {
-          if (key == option.key) option.selected = chosen(value).value_or(option.selected);
+          if (key == option.key && !option.fixed) option.selected = chosen(value).value_or(option.selected);
         }
         option.active = option.values[option.selected];
         options_.push_back(std::move(option));
@@ -482,7 +500,7 @@ bool Game::Environment(unsigned command, void* data) {
       for (auto& option : options_) {
         if (variable->key && option.key == variable->key) {
           if (!option.restart) option.active = option.values[option.selected];
-          variable->value = option.values[option.selected].c_str();
+          variable->value = option.active.c_str();
           return true;
         }
       }
@@ -642,7 +660,7 @@ Json Game::Status() const {
   std::lock_guard<std::mutex> lock(mutex_);
   JsonObject options;
   for (const auto& option : options_) {
-    if (!option.visible) continue;
+    if (!option.visible || option.fixed) continue;
     JsonArray values(option.values.begin(), option.values.end());
     JsonArray labels(option.labels.begin(), option.labels.end());
     options.emplace_back(option.key, JsonObject{{"title", option.title},
@@ -726,7 +744,7 @@ bool Game::SetOption(const std::string& key, const std::string& value) {
   std::lock_guard<std::mutex> lock(mutex_);
   if (ended_) return false;
   for (auto& option : options_) {
-    if (option.key != key || !option.visible) continue;
+    if (option.key != key || !option.visible || option.fixed) continue;
     const auto found = std::find(option.values.begin(), option.values.end(), value);
     if (found == option.values.end()) return false;
     const auto selected = static_cast<size_t>(found - option.values.begin());

@@ -109,6 +109,8 @@ class Game {
     // Applied only when the game starts again; libretro cores mark these with "(Restart)" at the
     // end of the option's text.
     bool restart = false;
+    // Kept at its default and not listed in status (see kFixedOptions).
+    bool fixed = false;
   };
   struct Disc {
     std::vector<std::string> labels;

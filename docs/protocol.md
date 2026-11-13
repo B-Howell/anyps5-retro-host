@@ -639,8 +639,10 @@ launcher's client reports it.
 Each option has `title` (string), `values` (array of strings), `labels`
 (array of strings, the same length as `values`), `selected` (index into
 `values` of the value chosen, which may still be pending), `activeValue` (the
-value in use now) and `restart` (true when a change only takes effect when the
-game is started again).
+value the host gives the core now; a core's own per-game compatibility
+settings can still override it) and `restart` (true when a change only takes
+effect when the game is started again; until then the host keeps giving the
+core the value the game started with).
 
 `discs` has `labels` (array of strings), `inserted` (index of the inserted
 disc, or null while the tray is open), `insertedDiscPath` (string or null),
