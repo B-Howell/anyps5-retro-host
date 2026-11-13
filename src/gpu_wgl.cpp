@@ -16,7 +16,17 @@ constexpr int kContextCoreProfileBit = 0x00000001;
 
 using CreateContextAttribs = HGLRC(WINAPI*)(HDC, HGLRC, const int*);
 
-// OpenGL on Windows needs a window's device context; this one is never shown.
+// DefWindowProc destroys a window on WM_CLOSE, which `taskkill` without /f sends to every
+// top-level window of a process; the context's device context must outlive the game, so the
+// window ignores it. The launcher ends the host through the protocol or its job object.
+LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
+  if (message == WM_CLOSE) return 0;
+  return DefWindowProcW(window, message, wparam, lparam);
+}
+
+// OpenGL on Windows needs a window's device context; this one is never shown. It is a top-level
+// window, which the system and other programs send messages to (SendMessage to HWND_BROADCAST
+// waits for every top-level window), so the game's thread answers them between frames (Pump).
 class WglGpu final : public Gpu {
  public:
   ~WglGpu() override {
@@ -32,7 +42,7 @@ class WglGpu final : public Gpu {
     opengl_ = LoadLibraryW(L"opengl32.dll");
     if (!opengl_) return false;
     WNDCLASSW type{};
-    type.lpfnWndProc = DefWindowProcW;
+    type.lpfnWndProc = WindowProc;
     type.hInstance = GetModuleHandleW(nullptr);
     type.lpszClassName = L"anyps5-retro-host-gl";
     RegisterClassW(&type);
@@ -70,6 +80,11 @@ class WglGpu final : public Gpu {
       wglDeleteContext(legacy);
     }
     return context_ && wglMakeCurrent(dc_, context_) && LoadFunctions();
+  }
+
+  void Pump() override {
+    MSG message;
+    while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) DispatchMessageW(&message);
   }
 
   void* Proc(const char* name) override {

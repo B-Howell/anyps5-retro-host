@@ -49,7 +49,13 @@ through kqueue. On Windows a thread waits on the launcher's process handle.
   context among them) or the frame is larger than the core said it could be.
   The game never keeps running on stale pictures. The renderer
   option stays at `Auto` and is not listed, so the host decides. As RetroArch
-  does, the core's `context_destroy` runs before `retro_unload_game`.
+  does, the core's `context_destroy` runs before `retro_unload_game`. The
+  hidden WGL window is a top-level window, so Windows and other programs send
+  it messages (a `SendMessage` to `HWND_BROADCAST` waits for every top-level
+  window); the game's thread answers them between frames (`Gpu::Pump`), so it
+  never shows as hung, and the window ignores `WM_CLOSE`, which `taskkill`
+  without `/f` sends and which would otherwise destroy the window under the
+  context.
 - **Options.** The host reports core options version 2 and takes the
   definitions the core gives (`SET_CORE_OPTIONS_V2` or `_V2_INTL`, English
   text). `start.options` sets the starting values. An `option` call is
@@ -125,8 +131,15 @@ through kqueue. On Windows a thread waits on the launcher's process handle.
   two pictures a second or more apart are not black and differ (the
   program animates its background), and that `hardware` and `resolutionError`
   agree (a machine without an OpenGL context draws in software and must say
-  so). It then checks a clean `stop` and exit, and keeps the last picture
-  (`--picture`) as a workflow artifact. No Sony BIOS or game is used.
+  so). The `hello` picture is one flat colour, so it cannot show which way up
+  a picture is. After a clean `stop` the test therefore starts a second game,
+  a program `make_test_disc.py` writes itself (`corner_program`), which fills
+  the screen blue and only its top-left corner red; the test checks those
+  colours near all four corners, which a picture turned upside down, mirrored
+  or with red and blue swapped fails. The second game also makes a second
+  OpenGL context in the same host. The test then checks a clean `stop` and
+  exit, and keeps the last picture (`--picture`) as a workflow artifact. No
+  Sony BIOS or game is used.
 - CI runs everything on Linux, macOS (arm64) and Windows, and the Linux tests
   again under ThreadSanitizer. GCC 11's ThreadSanitizer reports a false
   "double lock" in `Game::Join`: libstdc++ 11 waits with
