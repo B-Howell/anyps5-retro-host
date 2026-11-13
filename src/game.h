@@ -114,7 +114,8 @@ class Game {
   void RunGame();
   void Finish(const std::string& error, const std::string& code);
   void ApplyPendingWork();
-  void SaveCard();
+  // Writes memory card 1 when it changed since the last write, or always.
+  void SaveCard(bool always = false);
   std::string CardPath() const;
   void RefreshDiscs();
   std::optional<std::string> PlaylistEntry(unsigned index) const;

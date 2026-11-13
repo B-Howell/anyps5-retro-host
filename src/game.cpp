@@ -196,7 +196,7 @@ void Game::RunGame() {
     if (next < now - std::chrono::milliseconds(250)) next = now;
     std::this_thread::sleep_until(next);
   }
-  SaveCard();
+  SaveCard(true);
   Get<void (*)()>("retro_unload_game")();
   Get<void (*)()>("retro_deinit")();
   audio_.Close();
@@ -316,12 +316,12 @@ std::string Game::CardPath() const {
   return saves + Stem(config_.disc) + ".srm";
 }
 
-void Game::SaveCard() {
+void Game::SaveCard(bool always) {
   void* card = Get<void* (*)(unsigned)>("retro_get_memory_data")(RETRO_MEMORY_SAVE_RAM);
   const size_t card_size = Get<size_t (*)(unsigned)>("retro_get_memory_size")(RETRO_MEMORY_SAVE_RAM);
   if (!card || !card_size) return;
   std::string now(static_cast<const char*>(card), card_size);
-  if (now == card_) return;
+  if (now == card_ && !always) return;
   if (CreateDirectories(config_.saves) && WriteFileAtomically(CardPath(), now)) card_ = std::move(now);
 }
 
