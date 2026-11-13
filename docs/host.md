@@ -49,8 +49,8 @@ through kqueue. On Windows a thread waits on the launcher's process handle.
   (`kCGLPFARendererID` = `kCGLRendererGenericFloatID`, "Apple Software
   Renderer" in `CGLRenderers.h`, OpenGL 4.1 core). A Mac whose GPU has an
   OpenGL renderer takes the first; a Mac virtual machine whose paravirtual GPU offers Metal but
-  no OpenGL renderer takes the second. GitHub's `macos-latest` runner is such a
-  machine: its only CGL renderer is `0x01020400` (`kCGLRendererGenericFloatID`
+  no OpenGL renderer takes the second. GitHub's `macos-latest` runner was such a
+  machine when checked in November 2026: its only CGL renderer is `0x01020400` (`kCGLRendererGenericFloatID`
   under `kCGLRendererIDMatchingMask`), not accelerated, and asking for
   acceleration fails with `kCGLBadPixelFormat`. This matches Linux, where EGL
   takes Mesa's software rasterizer when there is no GPU driver, so on all
@@ -161,6 +161,10 @@ through kqueue. On Windows a thread waits on the launcher's process handle.
   come, the reader waits the 5-second write limit of protocol.md "Framing",
   counted from that byte, for the rest of the length and the body, because
   giving up in the middle of a message would read the next body as a length.
+  A read that times out before a message begins raises `Idle`, after which
+  reading again is safe; one that times out in the middle raises `Failed`,
+  which a caller must not read past. `real_core.py` waits out quiet spells by
+  catching `Idle` only.
   [`tests/framing_test.py`](../tests/framing_test.py) checks that rule on a
   socketpair, without the host, on Linux and macOS.
 - [`tests/fake_core.c`](../tests/fake_core.c) is the core the sessions run:
@@ -203,7 +207,8 @@ through kqueue. On Windows a thread waits on the launcher's process handle.
   two pictures a second or more apart are not black and differ (the
   program animates its background), and that `hardware` and `resolutionError`
   agree (a machine without an OpenGL context draws in software and must say
-  so). With `--expect-opengl`, which CI passes on Linux and macOS, the test also
+  so). With `--expect-opengl`, which `real-core.yml` passes on Linux and macOS (the
+  release workflow's check of the unpacked zips does not), the test also
   fails when the host made no OpenGL context, so neither system can slip back
   to the core's software renderer unnoticed. The Windows runner makes no
   OpenGL 3.3 context, so there the core draws in software. The `hello`

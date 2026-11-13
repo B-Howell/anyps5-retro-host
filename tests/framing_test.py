@@ -3,7 +3,9 @@
 
 """Checks the POSIX fake launcher's reader against protocol.md "Framing": a read's timeout is for a
 message to begin, and the rest of the message, length and body, has one write limit counted from
-its first byte. Runs without the host, on a socketpair."""
+its first byte. A read that times out before a message begins raises conformance.Idle, after which
+reading again is safe; one that times out in the middle of a message does not. Runs without the
+host, on a socketpair."""
 
 import socket
 import struct
@@ -18,6 +20,25 @@ import conformance as c  # noqa: E402
 c.WRITE_LIMIT = 0.5
 BODY = b'{"type":"frame"}'
 MESSAGE = struct.pack('<I', len(BODY)) + BODY
+
+
+class SlowAfterRead:
+    """The reader's socket, made to take longer than the read's timeout to return each read."""
+
+    def __init__(self, inner, delay):
+        self.inner = inner
+        self.delay = delay
+
+    def fileno(self):
+        return self.inner.fileno()
+
+    def recvmsg(self, *args):
+        result = self.inner.recvmsg(*args)
+        time.sleep(self.delay)
+        return result
+
+    def close(self):
+        self.inner.close()
 
 
 def reader_and_writer(parts):
@@ -46,7 +67,7 @@ def read(host, timeout):
     try:
         return host.read(timeout)[0]
     except c.Failed as error:
-        return str(error)
+        return f'{type(error).__name__}: {error}'
 
 
 failures = []
@@ -68,11 +89,22 @@ check('a split length within the write limit', read(pair[0], 0.1), {'type': 'fra
 finish(*pair)
 
 pair = reader_and_writer([(0, MESSAGE[:1]), (0.3, MESSAGE[1:4]), (0.4, MESSAGE[4:])])
-check('the rest later than the write limit after the first byte', read(pair[0], 0.1), 'the host sent nothing in time')
+check('the rest later than the write limit after the first byte', read(pair[0], 0.1), 'Failed: the host did not finish a message within the write limit')
 finish(*pair)
 
 pair = reader_and_writer([(0, MESSAGE[:1]), (0.3, MESSAGE[1:4]), (0.4, MESSAGE[4:])])
-check('the same with a read timeout longer than the write limit', read(pair[0], 2), 'the host sent nothing in time')
+check('the same with a read timeout longer than the write limit', read(pair[0], 2), 'Failed: the host did not finish a message within the write limit')
+finish(*pair)
+
+pair = reader_and_writer([(0.3, MESSAGE)])
+check('nothing before the read timeout', read(pair[0], 0.1), 'Idle: the host sent nothing in time')
+check('the message after it', read(pair[0], 1), {'type': 'frame'})
+finish(*pair)
+
+pair = reader_and_writer([(0, MESSAGE + MESSAGE)])
+pair[0].socket = SlowAfterRead(pair[0].socket, 0.2)
+check('a read timeout already over when the body is read', read(pair[0], 0.1), {'type': 'frame'})
+check('the message after that', read(pair[0], 1), {'type': 'frame'})
 finish(*pair)
 
 print('FAILED: ' + '; '.join(failures) if failures else 'framing passed')

@@ -62,7 +62,7 @@ def pump(until=None, timeout=5.0):
             state['frames'] += 1
         if until and until(message):
             return message
-    raise c.Failed('the host sent nothing that was waited for')
+    raise c.Idle('the host sent nothing that was waited for')
 
 
 def drain(seconds):
@@ -70,7 +70,7 @@ def drain(seconds):
     while time.monotonic() < end:
         try:
             pump(timeout=min(1.0, end - time.monotonic()))
-        except c.Failed:
+        except c.Idle:
             pass
 
 

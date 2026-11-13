@@ -32,6 +32,10 @@ class Failed(Exception):
     pass
 
 
+class Idle(Failed):
+    """No message began in time. The stream is still between messages, so reading again is safe."""
+
+
 ATOMICS = None
 
 
@@ -167,7 +171,9 @@ class PosixHost:
             left = deadline - time.monotonic()
             if left <= 0 or not select.select([self.socket], [], [], left)[0]:
                 close_all(descriptors)
-                raise Failed('the host sent nothing in time')
+                if first and not data:
+                    raise Idle('the host sent nothing in time')
+                raise Failed('the host did not finish a message within the write limit')
             try:
                 chunk, control, flags, _ = self.socket.recvmsg(size - len(data), socket.CMSG_SPACE(4 * 4),
                                                                getattr(socket, 'MSG_CMSG_CLOEXEC', 0))
@@ -310,7 +316,7 @@ class WindowsHost:
                 while not self.chunks and not self.closed:
                     left = deadline - time.monotonic()
                     if left <= 0:
-                        raise Failed('the host sent nothing in time')
+                        raise Idle('the host sent nothing in time')
                     self.arrived.wait(left)
                 if self.chunks:
                     self.buffer += b''.join(self.chunks)
