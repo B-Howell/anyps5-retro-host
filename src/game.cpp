@@ -194,6 +194,10 @@ void Game::RunGame() {
   std::string end_error;
   std::string end_code;
   while (!stop_) {
+    if (NowMs() - last_card_check >= kCardSaveMs) {
+      SaveCard();
+      last_card_check = NowMs();
+    }
     if (paused_) {
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
       next = std::chrono::steady_clock::now();
@@ -211,10 +215,6 @@ void Game::RunGame() {
       end_error = "The game's frame is larger than 8192 x 8192.";
       end_code = "frameTooLarge";
       break;
-    }
-    if (NowMs() - last_card_check >= kCardSaveMs) {
-      SaveCard();
-      last_card_check = NowMs();
     }
     next += std::chrono::duration_cast<std::chrono::steady_clock::duration>(frame_time);
     const auto now = std::chrono::steady_clock::now();
