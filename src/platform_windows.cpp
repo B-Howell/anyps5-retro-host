@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -137,7 +138,10 @@ void WatchLauncher(const Arguments&, std::function<void()> on_gone) {
   }).detach();
 }
 
-void ExitNow(int code) { TerminateProcess(GetCurrentProcess(), static_cast<UINT>(code)); }
+void ExitNow(int code) {
+  TerminateProcess(GetCurrentProcess(), static_cast<UINT>(code));
+  std::_Exit(code);
+}
 
 std::optional<SharedMemory> CreateSharedMemory(uint64_t bytes) {
   HANDLE section = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE | SEC_COMMIT,

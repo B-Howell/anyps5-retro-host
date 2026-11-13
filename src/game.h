@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "audio.h"
+#include "gpu.h"
 #include "json.h"
 #include "platform.h"
 #include "ring.h"
@@ -96,6 +97,8 @@ class Game {
   int16_t InputState(unsigned port, unsigned device, unsigned index, unsigned id);
   void Log(int level, const char* text);
   bool Rumble(unsigned port, int effect, uint16_t strength);
+  uintptr_t CurrentFramebuffer() const;
+  void* ProcAddress(const char* name) const;
 
  private:
   struct Option {
@@ -126,6 +129,10 @@ class Game {
   void Run();
   void RunGame();
   bool LoadCore(std::string& error);
+  // Hands the frame in converted_ to the host.
+  void Publish(uint32_t width, uint32_t height);
+  // Tells the core its OpenGL context is going away, then releases it.
+  void DropGpu();
   // Takes the core's aspect ratio, or base_width / base_height when it gives none (libretro).
   void SetAspect(const ::retro_game_geometry& geometry);
   void Finish(const std::string& error, const std::string& code);
@@ -178,6 +185,14 @@ class Game {
   bool timing_changed_ = false;
   std::vector<uint8_t> converted_;
   FrameResult frame_failure_ = FrameResult::kShown;
+  // The core's OpenGL context (RETRO_ENVIRONMENT_SET_HW_RENDER), used on the game's thread.
+  std::unique_ptr<Gpu> gpu_;
+  std::atomic<bool> hardware_{false};
+  void (*hw_context_reset_)() = nullptr;
+  void (*hw_context_destroy_)() = nullptr;
+  bool hw_depth_ = false;
+  bool hw_stencil_ = false;
+  bool hw_bottom_left_ = false;
   bool published_ = false;
   bool card_kept_ = true;
   bool (*update_display_)() = nullptr;

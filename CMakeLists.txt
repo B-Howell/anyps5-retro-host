@@ -21,10 +21,15 @@ add_library(retro_host_core STATIC
   src/paths.cpp
   src/ring.cpp
 )
+target_sources(retro_host_core PRIVATE src/gpu.cpp)
 if(WIN32)
-  target_sources(retro_host_core PRIVATE src/platform_windows.cpp)
+  target_sources(retro_host_core PRIVATE src/platform_windows.cpp src/gpu_wgl.cpp)
+  target_link_libraries(retro_host_core PUBLIC opengl32 gdi32 user32)
+elseif(APPLE)
+  target_sources(retro_host_core PRIVATE src/platform_posix.cpp src/gpu_cgl.cpp)
+  target_link_libraries(retro_host_core PUBLIC "-framework OpenGL")
 else()
-  target_sources(retro_host_core PRIVATE src/platform_posix.cpp)
+  target_sources(retro_host_core PRIVATE src/platform_posix.cpp src/gpu_egl.cpp)
 endif()
 target_include_directories(retro_host_core PUBLIC src
   PRIVATE 3rdparty/libretro-common/include 3rdparty/miniaudio)

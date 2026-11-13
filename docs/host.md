@@ -32,10 +32,19 @@ through kqueue. On Windows a thread waits on the launcher's process handle.
 
 ## Choices made for version 1
 
-- **Software rendering.** The host turns down `RETRO_ENVIRONMENT_SET_HW_RENDER`,
-  so SwanStation draws with its software renderer and `status.hardware` is
-  `false`. A GPU path (an offscreen context, read back into the ring) is a
-  later change. Until then the internal resolution option has no effect.
+- **GPU rendering.** The host answers SwanStation's request for an OpenGL
+  3.3 core context (`RETRO_ENVIRONMENT_SET_HW_RENDER`; `GET_PREFERRED_HW_RENDER`
+  says OpenGL core) with an offscreen context on the game's thread: EGL on
+  Linux (loaded at run time), WGL with a hidden window on Windows, and CGL on
+  macOS ([`src/gpu.cpp`](../src/gpu.cpp) and one file per system). The core
+  draws into the host's framebuffer, which grows with the core's largest
+  geometry; each frame is read back with `glReadPixels`, turned the right way
+  up, and published to the ring like a software frame. `status.hardware` is
+  then `true` and the internal resolution option works. When no context can be
+  made, the host turns the request down and SwanStation draws in software;
+  `resolutionError` then says a scale above 1x needs the GPU. The renderer
+  option stays at `Auto` and is not listed, so the host decides. As RetroArch
+  does, the core's `context_destroy` runs before `retro_unload_game`.
 - **Options.** The host reports core options version 2 and takes the
   definitions the core gives (`SET_CORE_OPTIONS_V2` or `_V2_INTL`, English
   text). `start.options` sets the starting values. An `option` call is
