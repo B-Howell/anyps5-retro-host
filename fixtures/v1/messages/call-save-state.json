@@ -1,0 +1,23 @@
+{
+  "description": "The host player saves the state a joining player starts from.",
+  "from": "launcher",
+  "message": {
+    "type": "call",
+    "id": 14,
+    "method": "saveState",
+    "args": {
+      "path": "/home/player/.local/share/AnyPS5/retro/match/match.state"
+    }
+  },
+  "reply": {
+    "type": "reply",
+    "id": 14,
+    "result": {
+      "frame": 600,
+      "bytes": 11534384
+    }
+  },
+  "anyValueFor": [
+    "result.bytes"
+  ]
+}

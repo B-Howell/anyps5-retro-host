@@ -19,8 +19,9 @@ MAX_SLOT = 268435456
 STEPS = {'hostExits', 'pollWithin', 'silence', 'wait', 'launcherKillsHost', 'launcherDraws', 'launcherReports'}
 OUTCOMES = {'clean', 'protocolError', 'unsupported', 'hostFailure'}
 SENDERS = {'hello': 'launcher', 'call': 'launcher', 'input': 'launcher', 'ping': 'launcher', 'shutdown': 'launcher',
-           'welcome': 'host', 'unsupported': 'host', 'reply': 'host', 'pong': 'host', 'ring': 'host',
-           'frame': 'host', 'rumble': 'host'}
+           'step': 'launcher', 'welcome': 'host', 'unsupported': 'host', 'reply': 'host', 'pong': 'host',
+           'ring': 'host', 'frame': 'host', 'rumble': 'host', 'sync': 'host'}
+HASH = re.compile(r'[0-9a-f]{16}')
 
 
 class Bad(Exception):
@@ -142,6 +143,8 @@ def start_args(args, name=None):
     if 'options' in args:
         for key, value in obj(args['options'], 'start.options').items():
             string(value, f'start.options.{key}')
+    if 'lockstep' in args:
+        lockstep_args(args['lockstep'], 'start.lockstep')
     if 'initialDisc' in args:
         integer(args['initialDisc'], 0, 127, 'start.initialDisc')
         need(extension(args['disc'], '.m3u') or args['disc'] == '${playlist}', 'initialDisc needs an .m3u disc')
@@ -203,6 +206,41 @@ def option_args(args, name=None):
     string(args.get('value'), 'option.value')
 
 
+def lockstep_args(args, name='lockstep args'):
+    if args is False:
+        return
+    obj(args, name)
+    integer(args.get('check'), 1, 3600, f'{name}.check')
+    if 'paced' in args:
+        boolean(args['paced'], f'{name}.paced')
+
+
+def lockstep_result(value, name=None):
+    if isinstance(value, bool):
+        return
+    integer(obj(value, 'lockstep result').get('frame'), 0, U32[1], 'lockstep.frame')
+
+
+def state_args(args, name=None):
+    obj(args, name)
+    path(args.get('path'), f'{name}.path')
+
+
+def state_result(value, name=None):
+    if value is False:
+        return
+    obj(value, name)
+    integer(value.get('frame'), 0, U32[1], f'{name}.frame')
+    integer(value.get('bytes'), 1, 2**53, f'{name}.bytes')
+
+
+def port_state(value, name):
+    obj(value, name)
+    integer(value.get('buttons'), 0, 65535, f'{name}.buttons')
+    for axis in ('leftX', 'leftY', 'rightX', 'rightY'):
+        integer(value.get(axis), *AXIS, f'{name}.{axis}')
+
+
 def epoch_result(value, name=None):
     integer(obj(value, 'start result').get('epoch'), *ID, 'start.epoch')
 
@@ -221,6 +259,9 @@ METHODS = {
     'volume': (volume_args, none),
     'stop': (none, none),
     'release': (none, none),
+    'lockstep': (lockstep_args, lockstep_result),
+    'saveState': (state_args, state_result),
+    'loadState': (state_args, state_result),
 }
 
 
@@ -278,6 +319,18 @@ def check_message(message, calls, check_args=True):
         integer(message.get('port'), 0, 1, 'port')
         integer(message.get('strong'), 0, 65535, 'strong')
         integer(message.get('weak'), 0, 65535, 'weak')
+    elif kind == 'step':
+        integer(message.get('frame'), 0, U32[1], 'frame')
+        ports = message.get('ports')
+        need(isinstance(ports, list) and 1 <= len(ports) <= 2, 'ports has one or two entries')
+        for at, state in enumerate(ports):
+            port_state(state, f'ports[{at}]')
+    elif kind == 'sync':
+        integer(message.get('frame'), 0, U32[1], 'frame')
+        for field in ('ram', 'video', 'state'):
+            need(field in message, f'{field} is present')
+            need(message[field] is None or (isinstance(message[field], str) and HASH.fullmatch(message[field])),
+                 f'{field} is 16 lowercase hex digits or null')
 
 
 def check_slot(slot, slot_bytes):

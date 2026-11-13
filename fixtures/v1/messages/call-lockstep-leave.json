@@ -1,0 +1,15 @@
+{
+  "description": "The match ended; the game leaves lockstep and runs on its own again.",
+  "from": "launcher",
+  "message": {
+    "type": "call",
+    "id": 12,
+    "method": "lockstep",
+    "args": false
+  },
+  "reply": {
+    "type": "reply",
+    "id": 12,
+    "result": true
+  }
+}

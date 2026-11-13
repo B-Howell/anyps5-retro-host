@@ -1,0 +1,17 @@
+{
+  "description": "A state file the core cannot load: the game is no longer in a known state and the match ends.",
+  "from": "launcher",
+  "message": {
+    "type": "call",
+    "id": 16,
+    "method": "loadState",
+    "args": {
+      "path": "/home/player/.local/share/AnyPS5/retro/match/broken.state"
+    }
+  },
+  "reply": {
+    "type": "reply",
+    "id": 16,
+    "result": false
+  }
+}

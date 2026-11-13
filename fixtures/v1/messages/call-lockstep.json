@@ -1,0 +1,20 @@
+{
+  "description": "The running game enters lockstep: a sync every 60 frames, at the core's frame rate.",
+  "from": "launcher",
+  "message": {
+    "type": "call",
+    "id": 11,
+    "method": "lockstep",
+    "args": {
+      "check": 60,
+      "paced": true
+    }
+  },
+  "reply": {
+    "type": "reply",
+    "id": 11,
+    "result": {
+      "frame": 0
+    }
+  }
+}

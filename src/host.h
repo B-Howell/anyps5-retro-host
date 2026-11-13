@@ -23,7 +23,7 @@ constexpr int kExitClean = 0;
 constexpr int kExitProtocolError = 2;
 constexpr int kExitMissedLimit = 3;
 
-// The host side of protocol.md, version 1, capability ps1.
+// The host side of protocol.md, version 1, capabilities ps1 and ps1Lockstep.
 class Host final : public GameEvents {
  public:
   explicit Host(Channel& channel) : channel_(channel) {}
@@ -38,6 +38,7 @@ class Host final : public GameEvents {
 
   FrameResult OnFrame(const uint8_t* pixels, uint32_t width, uint32_t height, uint32_t epoch) override;
   void OnRumble(unsigned port, uint16_t strong, uint16_t weak) override;
+  void OnSync(const SyncPoint& point) override;
 
   // A method's answer: its result, or an error object. exit_after ends the host once the reply
   // is sent (a release whose core cannot be stopped).
@@ -56,8 +57,10 @@ class Host final : public GameEvents {
   Outcome Hello(const Json& message);
   Outcome Call(const Json& message);
   Outcome Input(const Json& message);
+  Outcome Step(const Json& message);
   Reply Dispatch(const std::string& method, const Json& args);
   Reply Start(const Json& args);
+  Reply State(bool save, const Json& args);
   void Send(const Json& message, NativeHandle memory = kNoHandle);
   int ShutDown(int code);
   void Watch();

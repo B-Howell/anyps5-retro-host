@@ -7,6 +7,11 @@
  * it uses (fake-bios.bin in the system directory) or for none. Setting fake_hang to "yes" makes retro_run
  * never return, as a stuck core would.
  *
+ * For lockstep tests its "system RAM" is four 32-bit words: the frame count, a mix of every
+ * controller input it has read, and the last buttons of ports 1 and 2. Its serialized state holds
+ * those, the rumble state and the memory card, so a loaded state brings back the same RAM and the
+ * same pictures.
+ *
  * When the system directory holds fake-gpu, it also offers SwanStation's internal resolution
  * option (swanstation_GPU_ResolutionScale, 1x to 16x) and asks for an OpenGL 3.3 core context.
  * With one, it draws as SwanStation draws a 640-pixel-wide screen: frames of 640 x 480 times the
@@ -42,6 +47,8 @@
 #define GL_CALL
 #endif
 #define CARD_BYTES (128 * 1024)
+#define STATE_MAGIC "FAKESTAT"
+#define STATE_BYTES (8 + 4 * 6 + CARD_BYTES)
 #define MAX_DISCS 8
 
 static retro_environment_t environment;
@@ -52,6 +59,7 @@ static retro_input_state_t input_state;
 static retro_log_printf_t log_printf;
 static struct retro_rumble_interface rumble;
 static unsigned frame_count;
+static uint32_t memory[4];
 static unsigned rumbling;
 static uint32_t pixels[WIDTH * HEIGHT];
 static int16_t silence[2 * 735];
@@ -208,6 +216,7 @@ RETRO_API void retro_init(void) {
   environment(RETRO_ENVIRONMENT_SET_DISK_CONTROL_EXT_INTERFACE, &disc_control);
   if (!environment(RETRO_ENVIRONMENT_GET_RUMBLE_INTERFACE, &rumble)) rumble.set_rumble_state = NULL;
   frame_count = 0;
+  memset(memory, 0, sizeof memory);
   rumbling = 0;
   disc_count = 0;
   disc_index = 0;
@@ -382,24 +391,42 @@ RETRO_API void retro_run(void) {
   }
   audio_batch(silence, 735);
   cross = input_state(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_B) != 0;
+  memory[2] = (uint16_t)input_state(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_MASK);
+  memory[3] = (uint16_t)input_state(1, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_MASK);
+  memory[1] = memory[1] * 31u + memory[2] + memory[3] * 65599u +
+              (uint16_t)input_state(0, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_LEFT, RETRO_DEVICE_ID_ANALOG_X);
   if (rumble.set_rumble_state && cross != (rumbling != 0)) {
     rumbling = cross ? 1 : 0;
     rumble.set_rumble_state(0, RETRO_RUMBLE_STRONG, cross ? 0xFFFF : 0);
   }
   card[0] = (unsigned char)(frame_count >= 30 ? 1 : 0);
   ++frame_count;
+  memory[0] = frame_count;
 }
 
-RETRO_API size_t retro_serialize_size(void) { return 0; }
+RETRO_API size_t retro_serialize_size(void) { return STATE_BYTES; }
 RETRO_API bool retro_serialize(void* data, size_t size) {
-  (void)data;
-  (void)size;
-  return false;
+  unsigned char* out = data;
+  const uint32_t words[6] = {frame_count, memory[1], memory[2], memory[3], rumbling, 0};
+  if (size < STATE_BYTES) return false;
+  memcpy(out, STATE_MAGIC, 8);
+  memcpy(out + 8, words, sizeof words);
+  memcpy(out + 8 + sizeof words, card, CARD_BYTES);
+  return true;
 }
 RETRO_API bool retro_unserialize(const void* data, size_t size) {
-  (void)data;
-  (void)size;
-  return false;
+  const unsigned char* in = data;
+  uint32_t words[6];
+  if (size < STATE_BYTES || memcmp(in, STATE_MAGIC, 8) != 0) return false;
+  memcpy(words, in + 8, sizeof words);
+  frame_count = words[0];
+  memory[0] = words[0];
+  memory[1] = words[1];
+  memory[2] = words[2];
+  memory[3] = words[3];
+  rumbling = words[4];
+  memcpy(card, in + 8 + sizeof words, CARD_BYTES);
+  return true;
 }
 RETRO_API void retro_cheat_reset(void) {}
 RETRO_API void retro_cheat_set(unsigned index, bool enabled, const char* code) {
@@ -407,5 +434,9 @@ RETRO_API void retro_cheat_set(unsigned index, bool enabled, const char* code) {
   (void)enabled;
   (void)code;
 }
-RETRO_API void* retro_get_memory_data(unsigned id) { return id == RETRO_MEMORY_SAVE_RAM ? card : NULL; }
-RETRO_API size_t retro_get_memory_size(unsigned id) { return id == RETRO_MEMORY_SAVE_RAM ? sizeof card : 0; }
+RETRO_API void* retro_get_memory_data(unsigned id) {
+  return id == RETRO_MEMORY_SAVE_RAM ? (void*)card : id == RETRO_MEMORY_SYSTEM_RAM ? (void*)memory : NULL;
+}
+RETRO_API size_t retro_get_memory_size(unsigned id) {
+  return id == RETRO_MEMORY_SAVE_RAM ? sizeof card : id == RETRO_MEMORY_SYSTEM_RAM ? sizeof memory : 0;
+}

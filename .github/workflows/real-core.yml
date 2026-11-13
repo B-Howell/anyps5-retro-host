@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: MIT
 # SPDX-FileCopyrightText: 2026 AnyPS5 Desktop contributors
 
-# Boots the real SwanStation core through the host on each system. The BIOS and the program are
-# built here from pcsx-redux's nugget (MIT): OpenBIOS and the psyqo "hello" example. No Sony BIOS
-# or game is used.
+# Boots the real SwanStation core through the host on each system, and runs two of them in
+# lockstep. The BIOS and the program are built here from pcsx-redux's nugget (MIT): OpenBIOS and
+# the psyqo "hello" example. No Sony BIOS or game is used.
 name: real-core
 on: [push, pull_request]
 permissions:
@@ -94,8 +94,10 @@ jobs:
           cmake --build build --config Release
       - name: Run the real core
         run: ${{ matrix.python }} tests/real_core.py --host ${{ matrix.host }} --core ${{ matrix.core }} --bios ps1-files/openbios.bin --program ps1-files/hello.exe --log build/real-core.log --picture build/real-core.png
+      - name: Two real cores in lockstep, fed the same input, frame for frame
+        run: ${{ matrix.python }} tests/lockstep_test.py --host ${{ matrix.host }} --core ${{ matrix.core }} --bios ps1-files/openbios.bin --program ps1-files/hello.exe --log build/lockstep.log --frames 600
       - if: failure()
-        run: tail -200 build/real-core.log || true
+        run: tail -200 build/real-core.log build/lockstep.log || true
       - if: always()
         uses: actions/upload-artifact@v4
         with:

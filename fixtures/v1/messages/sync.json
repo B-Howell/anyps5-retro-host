@@ -1,0 +1,16 @@
+{
+  "description": "What lockstep frame 120 left behind, as 64-bit FNV-1a hashes in hexadecimal.",
+  "from": "host",
+  "message": {
+    "type": "sync",
+    "frame": 120,
+    "ram": "8f67e12ab88b0626",
+    "video": "2a2019e82fedaa1a",
+    "state": "edcd2ac6e2993c68"
+  },
+  "anyValueFor": [
+    "ram",
+    "video",
+    "state"
+  ]
+}

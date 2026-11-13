@@ -29,7 +29,8 @@
         "pid": 4242,
         "hostVersion": "1.0.0",
         "capabilities": [
-          "ps1"
+          "ps1",
+          "ps1Lockstep"
         ],
         "pixelFormat": "rgba8"
       },

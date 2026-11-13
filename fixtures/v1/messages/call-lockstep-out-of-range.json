@@ -1,0 +1,24 @@
+{
+  "description": "A check interval of 0 frames is out of range.",
+  "from": "launcher",
+  "invalid": "lockstep args.check must be an integer from 1 to 3600",
+  "message": {
+    "type": "call",
+    "id": 13,
+    "method": "lockstep",
+    "args": {
+      "check": 0
+    }
+  },
+  "reply": {
+    "type": "reply",
+    "id": 13,
+    "error": {
+      "code": "argument",
+      "message": "lockstep.check must be an integer from 1 to 3600."
+    }
+  },
+  "anyValueFor": [
+    "error.message"
+  ]
+}

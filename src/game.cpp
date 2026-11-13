@@ -69,6 +69,31 @@ constexpr size_t kPathBytes = 3 * 32767 + 1;
 constexpr size_t kBiosSizes[] = {0x80000, 0x400000, 0x3E66F0};
 constexpr size_t kTextBytes = 256;
 constexpr size_t kErrorBytes = 1024;
+// Lockstep (protocol.md "lockstep"): steps queued ahead of the game at most, how long the game's
+// thread waits for one before it looks at other work again, and the state file's header.
+constexpr size_t kMaxSteps = 600;
+constexpr int64_t kStepWaitMs = 10;
+constexpr char kStateMagic[8] = {'A', 'P', '5', 'S', 'T', 'A', 'T', 'E'};
+constexpr uint32_t kStateVersion = 1;
+constexpr size_t kStateHeaderBytes = 48;
+constexpr uint64_t kFnvOffset = 14695981039346656037ULL;
+constexpr uint64_t kFnvPrime = 1099511628211ULL;
+
+uint64_t Fnv(const void* data, size_t size, uint64_t hash = kFnvOffset) {
+  const auto* bytes = static_cast<const uint8_t*>(data);
+  for (size_t i = 0; i < size; ++i) hash = (hash ^ bytes[i]) * kFnvPrime;
+  return hash;
+}
+
+void PutLe(std::string& out, uint64_t value, int bytes) {
+  for (int i = 0; i < bytes; ++i) out.push_back(static_cast<char>((value >> (8 * i)) & 0xFF));
+}
+
+uint64_t GetLe(const std::string& in, size_t at, int bytes) {
+  uint64_t value = 0;
+  for (int i = 0; i < bytes; ++i) value |= static_cast<uint64_t>(static_cast<uint8_t>(in[at + i])) << (8 * i);
+  return value;
+}
 
 // text cut to at most bytes, at a UTF-8 character boundary.
 std::string Clip(const std::string& text, size_t bytes) {
@@ -133,7 +158,7 @@ bool IsAbsolute(const std::string& path) {
 
 Game::Game(GameConfig config, PixelFormat format, GameEvents& events, AudioOutput& audio)
     : config_(std::move(config)), format_(format), events_(events), audio_(audio),
-      quiet_since_(NowMs()), disc_control_(std::make_unique<DiscControl>()) {}
+      quiet_since_(NowMs()), disc_control_(std::make_unique<DiscControl>()), lockstep_(config_.lockstep) {}
 
 Game::~Game() {
   stop_ = true;
@@ -284,6 +309,7 @@ void Game::RunGame() {
       SaveCard();
       last_card_check = NowMs();
     }
+    ServeStateRequest();
     if (paused_) {
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
       next = std::chrono::steady_clock::now();
@@ -295,8 +321,24 @@ void Game::RunGame() {
       const double fps = fps_ > 1 && fps_ < 1000 ? fps_ : 60.0;
       frame_time = std::chrono::duration<double>(1.0 / fps);
     }
+    const NextStep step = TakeStep(kStepWaitMs);
+    if (step.lockstep && !step.input) {
+      quiet_since_ = NowMs();
+      next = std::chrono::steady_clock::now();
+      continue;
+    }
+    step_input_ = step.input;
+    if (step.input) {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (connected_ports_ != step.input->connected) {
+        connected_ports_ = step.input->connected;
+        ports_changed_ = true;
+      }
+    }
     ApplyPendingWork();
     run();
+    step_input_.reset();
+    if (step.input) FinishStep(step.frame);
     {
       std::lock_guard<std::mutex> lock(mutex_);
       if (disc_.inserted && *disc_.inserted < disc_.paths.size()) disc_.played = disc_.paths[*disc_.inserted];
@@ -316,6 +358,10 @@ void Game::RunGame() {
       end_code = "other";
       break;
     }
+    if (step.input && !step.paced) {
+      next = std::chrono::steady_clock::now();
+      continue;
+    }
     next += std::chrono::duration_cast<std::chrono::steady_clock::duration>(frame_time);
     const auto now = std::chrono::steady_clock::now();
     if (next < now - std::chrono::milliseconds(250)) next = now;
@@ -333,12 +379,15 @@ void Game::RunGame() {
 }
 
 void Game::Finish(const std::string& error, const std::string& code) {
-  std::lock_guard<std::mutex> lock(mutex_);
-  if (!ended_) {
-    error_ = error;
-    error_code_ = code;
-    ended_ = true;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!ended_) {
+      error_ = error;
+      error_code_ = code;
+      ended_ = true;
+    }
   }
+  state_signal_.notify_all();
 }
 
 void Game::ApplyPendingWork() {
@@ -462,6 +511,10 @@ bool Game::SaveCard(bool always) {
 
 bool Game::Environment(unsigned command, void* data) {
   switch (command) {
+    case RETRO_ENVIRONMENT_GET_SAVESTATE_CONTEXT:
+      if (!data) return false;
+      *static_cast<retro_savestate_context*>(data) = static_cast<retro_savestate_context>(savestate_context_);
+      return true;
     case RETRO_ENVIRONMENT_GET_CAN_DUPE:
       *static_cast<bool*>(data) = true;
       return true;
@@ -695,6 +748,17 @@ void Game::Video(const void* data, unsigned width, unsigned height, size_t pitch
 }
 
 void Game::Publish(uint32_t width, uint32_t height) {
+  if (step_input_) {
+    // The picture in RGB order, whichever pixel format the ring has, so peers can compare it.
+    const uint32_t size[2] = {width, height};
+    uint64_t hash = Fnv(size, sizeof size);
+    const bool bgra = format_ == PixelFormat::kBgra8;
+    for (size_t at = 0; at < converted_.size(); at += 4) {
+      const uint8_t rgb[3] = {converted_[at + (bgra ? 2 : 0)], converted_[at + 1], converted_[at + (bgra ? 0 : 2)]};
+      hash = Fnv(rgb, sizeof rgb, hash);
+    }
+    video_hash_ = hash;
+  }
   const FrameResult shown = events_.OnFrame(converted_.data(), width, height, config_.epoch);
   if (shown != FrameResult::kShown) {
     frame_failure_ = shown;
@@ -720,7 +784,7 @@ int16_t Game::InputState(unsigned port, unsigned device, unsigned index, unsigne
   if (port > 1) return 0;
   std::lock_guard<std::mutex> lock(mutex_);
   if (port == 1 && connected_ports_ < 2) return 0;
-  const PortInput& input = input_[port];
+  const PortInput& input = step_input_ ? step_input_->ports[port] : input_[port];
   const unsigned base = device & RETRO_DEVICE_MASK;
   if (base == RETRO_DEVICE_JOYPAD) {
     if (id == RETRO_DEVICE_ID_JOYPAD_MASK) return static_cast<int16_t>(input.buttons);
@@ -823,7 +887,7 @@ void Game::Pause(bool paused) {
 
 bool Game::SetConnectedPorts(unsigned count) {
   std::lock_guard<std::mutex> lock(mutex_);
-  if (ended_) return false;
+  if (ended_ || lockstep_) return false;
   if (connected_ports_ != count) {
     connected_ports_ = count;
     ports_changed_ = true;
@@ -833,7 +897,7 @@ bool Game::SetConnectedPorts(unsigned count) {
 
 bool Game::ChangeDisc(unsigned index) {
   std::lock_guard<std::mutex> lock(mutex_);
-  if (ended_ || disc_.labels.size() < 2 || index >= disc_.labels.size() || disc_.busy) return false;
+  if (ended_ || lockstep_ || disc_.labels.size() < 2 || index >= disc_.labels.size() || disc_.busy) return false;
   disc_.busy = true;
   disc_request_ = index;
   return true;
@@ -841,7 +905,7 @@ bool Game::ChangeDisc(unsigned index) {
 
 bool Game::SetOption(const std::string& key, const std::string& value) {
   std::lock_guard<std::mutex> lock(mutex_);
-  if (ended_) return false;
+  if (ended_ || lockstep_) return false;
   for (auto& option : options_) {
     if (option.key != key || !option.visible || option.fixed) continue;
     const auto found = std::find(option.values.begin(), option.values.end(), value);
@@ -880,6 +944,7 @@ void Game::Fail(const std::string& error, const std::string& code) {
       ended_ = true;
     }
   }
+  state_signal_.notify_all();
   stop_ = true;
 }
 
@@ -999,6 +1064,180 @@ bool Game::Finished() const {
 bool Game::Ready() const {
   std::lock_guard<std::mutex> lock(mutex_);
   return ready_;
+}
+
+
+std::optional<uint64_t> Game::Lockstep(const LockstepConfig& config) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (ended_) return std::nullopt;
+  if (!lockstep_) {
+    next_frame_ = 0;
+    steps_.clear();
+  }
+  lockstep_ = config;
+  return next_frame_ + steps_.size();
+}
+
+bool Game::LeaveLockstep() {
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (ended_) return false;
+    lockstep_.reset();
+    steps_.clear();
+  }
+  step_signal_.notify_all();
+  return true;
+}
+
+StepResult Game::Step(uint64_t frame, const StepInput& input) {
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (ended_) return StepResult::kIgnored;
+    if (!lockstep_ || frame != next_frame_ + steps_.size() || steps_.size() >= kMaxSteps) return StepResult::kRefused;
+    steps_.push_back(input);
+  }
+  step_signal_.notify_all();
+  return StepResult::kTaken;
+}
+
+Game::NextStep Game::TakeStep(int64_t wait_ms) {
+  std::unique_lock<std::mutex> lock(mutex_);
+  NextStep next;
+  if (!lockstep_) return next;
+  if (steps_.empty()) {
+    step_signal_.wait_for(lock, std::chrono::milliseconds(wait_ms),
+                          [this] { return !lockstep_ || !steps_.empty() || state_request_ || stop_; });
+  }
+  if (!lockstep_) return next;
+  next.lockstep = true;
+  next.paced = lockstep_->paced;
+  if (steps_.empty() || state_request_) return next;
+  next.frame = next_frame_++;
+  next.input = steps_.front();
+  steps_.pop_front();
+  return next;
+}
+
+void Game::FinishStep(uint64_t frame) {
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!lockstep_ || frame % lockstep_->check != 0) return;
+  }
+  SyncPoint point;
+  point.frame = frame;
+  point.video = video_hash_;
+  const auto ram = Get<void* (*)(unsigned)>("retro_get_memory_data")(RETRO_MEMORY_SYSTEM_RAM);
+  const size_t ram_size = Get<size_t (*)(unsigned)>("retro_get_memory_size")(RETRO_MEMORY_SYSTEM_RAM);
+  if (ram && ram_size) point.ram = Fnv(ram, ram_size);
+  savestate_context_ = RETRO_SAVESTATE_CONTEXT_ROLLBACK_NETPLAY;
+  if (const std::string* state = Serialize()) point.state = Fnv(state->data(), state->size());
+  savestate_context_ = RETRO_SAVESTATE_CONTEXT_NORMAL;
+  events_.OnSync(point);
+}
+
+const std::string* Game::Serialize() {
+  const auto size_of = Get<size_t (*)()>("retro_serialize_size");
+  const auto serialize = Get<bool (*)(void*, size_t)>("retro_serialize");
+  if (!size_of || !serialize) return nullptr;
+  const size_t size = size_of();
+  if (size == 0) return nullptr;
+  try {
+    serialized_.assign(size, '\0');
+  } catch (const std::bad_alloc&) {
+    return nullptr;
+  }
+  return serialize(serialized_.data(), size) ? &serialized_ : nullptr;
+}
+
+std::optional<StateResult> Game::SaveState(const std::string& path, int64_t timeout_ms) {
+  return RequestState(StateWork::kSave, path, timeout_ms);
+}
+
+std::optional<StateResult> Game::LoadState(const std::string& path, int64_t timeout_ms) {
+  return RequestState(StateWork::kLoad, path, timeout_ms);
+}
+
+std::optional<StateResult> Game::RequestState(StateWork work, const std::string& path, int64_t timeout_ms) {
+  auto request = std::make_shared<StateRequest>();
+  request->work = work;
+  request->path = path;
+  std::unique_lock<std::mutex> lock(mutex_);
+  if (ended_ || !lockstep_ || state_request_) return std::nullopt;
+  state_request_ = request;
+  step_signal_.notify_all();
+  if (state_signal_.wait_for(lock, std::chrono::milliseconds(timeout_ms), [&] { return request->done || ended_; })) {
+    if (state_request_ == request) state_request_.reset();
+    return request->result;
+  }
+  const bool taken = state_request_ != request;
+  if (!taken) state_request_.reset();
+  lock.unlock();
+  // A load the game's thread began but did not finish leaves the console in no known state.
+  if (taken && work == StateWork::kLoad) Fail("The game's state could not be loaded in time.", "other");
+  return std::nullopt;
+}
+
+void Game::ServeStateRequest() {
+  std::shared_ptr<StateRequest> request;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::swap(request, state_request_);
+  }
+  if (!request) return;
+  auto result = request->work == StateWork::kSave ? WriteState(request->path) : ReadState(request->path);
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    request->result = result;
+    request->done = true;
+  }
+  state_signal_.notify_all();
+}
+
+std::optional<StateResult> Game::WriteState(const std::string& path) {
+  uint64_t frame = 0;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!lockstep_) return std::nullopt;
+    frame = next_frame_;
+  }
+  savestate_context_ = RETRO_SAVESTATE_CONTEXT_ROLLBACK_NETPLAY;
+  const std::string* state = Serialize();
+  savestate_context_ = RETRO_SAVESTATE_CONTEXT_NORMAL;
+  if (!state) return std::nullopt;
+  std::string file(kStateMagic, sizeof kStateMagic);
+  PutLe(file, kStateVersion, 4);
+  PutLe(file, video_hash_ ? 1 : 0, 4);
+  PutLe(file, frame, 8);
+  PutLe(file, video_hash_.value_or(0), 8);
+  PutLe(file, state->size(), 8);
+  PutLe(file, 0, 8);
+  file += *state;
+  if (!WriteFileAtomically(path, file)) return std::nullopt;
+  return StateResult{frame, file.size()};
+}
+
+std::optional<StateResult> Game::ReadState(const std::string& path) {
+  const auto file = ReadWholeFile(path);
+  if (!file || file->size() < kStateHeaderBytes ||
+      file->compare(0, sizeof kStateMagic, kStateMagic, sizeof kStateMagic) != 0 ||
+      GetLe(*file, 8, 4) != kStateVersion || GetLe(*file, 12, 4) > 1 || GetLe(*file, 40, 8) != 0 ||
+      GetLe(*file, 32, 8) != file->size() - kStateHeaderBytes) {
+    return std::nullopt;
+  }
+  const auto unserialize = Get<bool (*)(const void*, size_t)>("retro_unserialize");
+  if (!unserialize) return std::nullopt;
+  const uint64_t frame = GetLe(*file, 16, 8);
+  savestate_context_ = RETRO_SAVESTATE_CONTEXT_ROLLBACK_NETPLAY;
+  const bool loaded = unserialize(file->data() + kStateHeaderBytes, file->size() - kStateHeaderBytes);
+  savestate_context_ = RETRO_SAVESTATE_CONTEXT_NORMAL;
+  if (!loaded) return std::nullopt;
+  video_hash_ = GetLe(*file, 12, 4) ? std::optional<uint64_t>(GetLe(*file, 24, 8)) : std::nullopt;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    next_frame_ = frame;
+    steps_.clear();
+  }
+  return StateResult{frame, file->size()};
 }
 
 }  // namespace retro_host

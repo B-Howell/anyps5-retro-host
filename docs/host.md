@@ -3,13 +3,13 @@
 
 # How the host is put together
 
-The host implements [protocol version 1](protocol.md) with the `ps1`
-capability. It is a small C++17 program with three threads:
+The host implements [protocol version 1](protocol.md) with the `ps1` and
+`ps1Lockstep` capabilities. It is a small C++17 program with three threads:
 
 | Thread | Does |
 | --- | --- |
 | Control (`main`) | Reads each message, answers calls and pings in order, and enforces the connection's order rules |
-| Game | Started once the `start` reply is sent. Opens the core and the disc, then `retro_init`, `retro_load_game` and `retro_run` paced to the core's frame rate. Publishes frames and sends `ring`, `frame` and `rumble` |
+| Game | Started once the `start` reply is sent. Opens the core and the disc, then `retro_init`, `retro_load_game` and `retro_run` paced to the core's frame rate, or in lockstep one `retro_run` per step. Publishes frames, sends `ring`, `frame`, `rumble` and `sync`, and saves and loads states between frames |
 | Watch | Every 100 ms: the 5 s write limit, the stall and first-frame game limits, the `stop` limit, and the 10 s limit for leaving |
 
 On Linux and macOS a fourth thread waits for `SIGTERM` (sent by
@@ -22,7 +22,7 @@ through kqueue. On Windows a thread waits on the launcher's process handle.
 | --- | --- |
 | [`src/main.cpp`](../src/main.cpp) | The command line, the process setup, then the host |
 | [`src/host.cpp`](../src/host.cpp) | The protocol: `hello`, the order rules, every method's argument checks and replies, and the limits |
-| [`src/game.cpp`](../src/game.cpp) | One loaded game: the libretro callbacks, core options, disc control, the memory card, input, rumble and pixel conversion |
+| [`src/game.cpp`](../src/game.cpp) | One loaded game: the libretro callbacks, core options, disc control, the memory card, input, rumble, pixel conversion, and lockstep: the queue of steps, the `sync` hashes, and the state files of `saveState` and `loadState` |
 | [`src/resolution.cpp`](../src/resolution.cpp) | Which internal resolutions a GPU game is offered (see "Resolution limits" below) |
 | [`src/ring.cpp`](../src/ring.cpp) | The frame ring writer: the header from protocol.md's byte table, slot choice, and capped doubling when a frame needs more room |
 | [`src/json.cpp`](../src/json.cpp) | A strict JSON reader (duplicate keys, lone surrogates, invalid UTF-8 and non-finite numbers are errors) and writer |
@@ -173,6 +173,18 @@ through kqueue. On Windows a thread waits on the launcher's process handle.
   refused. Without an OpenGL
   context that test is skipped, unless `--require-gpu` is given, as the Linux
   CI job does with Mesa installed. Run it like `conformance.py`.
+- [`tests/lockstep_test.py`](../tests/lockstep_test.py) runs two hosts in
+  [lockstep](protocol.md#lockstep), as two online players' hosts
+  ([netplay.md](netplay.md) "Tests"): both fed the same input for every
+  frame, then a saved state loaded back and replayed on one, and loaded into
+  a newly started game on the other; every frame's `sync` must match. With
+  the fake core it also checks that input reaches the console, the refusals
+  of lockstep and its protocol errors. With `--bios` and `--program` it runs
+  the real SwanStation on the `make_test_disc.py` disc, which the
+  `real-core` workflow does for 600 frames on each system. For lockstep the
+  fake core keeps four words of "system RAM" (the frame count, a mix of every
+  input it read, and the last buttons of each port) and serializes them with
+  its rumble state and memory card.
 - [`tests/ring_access.c`](../tests/ring_access.c) gives the fake launcher the
   sequentially consistent loads and stores of `latest` and `reading` that
   protocol.md asks for; Python cannot make them on shared memory itself. It
