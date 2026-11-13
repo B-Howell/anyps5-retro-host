@@ -51,14 +51,17 @@ jobs:
             core: swanstation/build/swanstation_libretro.so
             host: build/anyps5-retro-host
             python: python3
+            opengl: --expect-opengl
           - os: macos-latest
             core: swanstation/build/swanstation_libretro.dylib
             host: build/anyps5-retro-host
             python: python3
+            opengl: --expect-opengl
           - os: windows-2022
             core: swanstation/build/swanstation_libretro.dll
             host: build/Release/anyps5-retro-host.exe
             python: python
+            opengl: ''
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -89,7 +92,7 @@ jobs:
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build --config Release
       - name: Run the real core
-        run: ${{ matrix.python }} tests/real_core.py --host ${{ matrix.host }} --core ${{ matrix.core }} --bios ps1-files/openbios.bin --program ps1-files/hello.exe --log build/real-core.log --picture build/real-core.png
+        run: ${{ matrix.python }} tests/real_core.py --host ${{ matrix.host }} --core ${{ matrix.core }} --bios ps1-files/openbios.bin --program ps1-files/hello.exe --log build/real-core.log --picture build/real-core.png ${{ matrix.opengl }}
       - if: failure()
         run: tail -200 build/real-core.log || true
       - if: always()

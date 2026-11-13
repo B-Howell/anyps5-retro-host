@@ -19,6 +19,7 @@ jobs:
       - run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
       - run: cmake --build build
       - run: ctest --test-dir build --output-on-failure
+      - run: python3 tests/framing_test.py
       - name: Conformance sessions, with the host's network calls traced
         run: python3 tests/conformance.py --host build/anyps5-retro-host --core build/fake_core.so --log build/host.log --strace build/network.trace
       - name: Host tests, with Mesa's OpenGL for the resolution limits
@@ -63,6 +64,7 @@ jobs:
       - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
       - run: cmake --build build
       - run: ctest --test-dir build --output-on-failure
+      - run: python3 tests/framing_test.py
       - run: python3 tests/conformance.py --host build/anyps5-retro-host --core build/fake_core.so --log build/host.log
       - run: python3 tests/host_test.py --host build/anyps5-retro-host --core build/fake_core.so --log build/host.log
       - if: failure()
