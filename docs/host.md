@@ -59,7 +59,7 @@ through kqueue. On Windows a thread waits on the launcher's process handle.
   host does not prefer SwanStation's own software renderer over it, as no
   system has a way to know which is faster on a given machine. When no context
   can be made, the host turns the request down and SwanStation draws in software;
-  `resolutionError` then says a scale above 1x needs the GPU, and keeps saying
+  `resolutionError` then says a scale above 1x needs an OpenGL context, and keeps saying
   so after that game ends. A context that was
   made but then fails ends the game with `errorCode` `other`: when no framebuffer
   can be made for the core's largest size, when a later geometry change cannot

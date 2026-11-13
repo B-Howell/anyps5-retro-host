@@ -969,7 +969,7 @@ std::optional<std::pair<uint32_t, uint32_t>> Game::LimitResolution(uint32_t max_
       resolution_refused_ = asked + " would make the game's picture up to " +
                             std::to_string(limit->refused_width) + " x " + std::to_string(limit->refused_height) +
                             ", more than the " + std::to_string(width_limit) + " x " + std::to_string(height_limit) +
-                            " the host can pass on with this GPU, so the game uses " +
+                            " the host can pass on with this OpenGL renderer, so the game uses " +
                             option.labels[option.selected] + ".";
     }
     if (limit->active_offered) return std::nullopt;

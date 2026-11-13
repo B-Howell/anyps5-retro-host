@@ -647,10 +647,10 @@ core the value the game started with).
 For the internal resolution (`swanstation_GPU_ResolutionScale`), while
 `hardware` is `true`, `values` lists only the whole-number scales whose
 largest frame the host can pass on (at most 8192 × 8192 and no larger than
-the GPU can draw), and any value that is not a whole number. A saved value
+the OpenGL context can draw), and any value that is not a whole number. A saved value
 larger than those starts the game at the largest one listed, and
 `resolutionError` says why until the player chooses another value. Without
-the GPU, or when not even the smallest scale fits, every value is listed; a
+an OpenGL context, or when not even the smallest scale fits, every value is listed; a
 frame larger than 8192 × 8192 then ends the game with `frameTooLarge`.
 
 `discs` has `labels` (array of strings), `inserted` (index of the inserted
