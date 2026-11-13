@@ -36,6 +36,8 @@ constexpr unsigned kPackSkipRows = 0x0D03;
 constexpr unsigned kPackSkipPixels = 0x0D04;
 constexpr unsigned kNoError = 0;
 constexpr unsigned kPixelPackBuffer = 0x88EB;
+constexpr unsigned kMaxRenderbufferSize = 0x84E8;
+constexpr unsigned kMaxViewportDims = 0x0D3A;
 
 }  // namespace
 
@@ -53,6 +55,7 @@ struct Gpu::Functions {
   void(GL_CALL* PixelStorei)(unsigned, int);
   void(GL_CALL* BindBuffer)(unsigned, unsigned);
   unsigned(GL_CALL* GetError)();
+  void(GL_CALL* GetIntegerv)(unsigned, int*);
 };
 
 bool Gpu::LoadFunctions() {
@@ -67,9 +70,16 @@ bool Gpu::LoadFunctions() {
       !load(gl->RenderbufferStorage, "glRenderbufferStorage") ||
       !load(gl->FramebufferRenderbuffer, "glFramebufferRenderbuffer") ||
       !load(gl->CheckFramebufferStatus, "glCheckFramebufferStatus") || !load(gl->ReadPixels, "glReadPixels") ||
-      !load(gl->PixelStorei, "glPixelStorei") || !load(gl->BindBuffer, "glBindBuffer") || !load(gl->GetError, "glGetError")) {
+      !load(gl->PixelStorei, "glPixelStorei") || !load(gl->BindBuffer, "glBindBuffer") || !load(gl->GetError, "glGetError") ||
+      !load(gl->GetIntegerv, "glGetIntegerv")) {
     return false;
   }
+  int renderbuffer = 0;
+  int viewport[2] = {0, 0};
+  gl->GetIntegerv(kMaxRenderbufferSize, &renderbuffer);
+  gl->GetIntegerv(kMaxViewportDims, viewport);
+  max_width_ = static_cast<uint32_t>(std::max(0, std::min(renderbuffer, viewport[0])));
+  max_height_ = static_cast<uint32_t>(std::max(0, std::min(renderbuffer, viewport[1])));
   gl_ = std::move(gl);
   return true;
 }

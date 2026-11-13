@@ -19,6 +19,7 @@ add_library(retro_host_core STATIC
   src/host.cpp
   src/json.cpp
   src/paths.cpp
+  src/resolution.cpp
   src/ring.cpp
 )
 target_sources(retro_host_core PRIVATE src/gpu.cpp)
@@ -68,4 +69,7 @@ if(ANYPS5_RETRO_HOST_TESTS)
   target_link_libraries(json_test PRIVATE retro_host_core)
   enable_testing()
   add_test(NAME json COMMAND json_test)
+  add_executable(resolution_test tests/resolution_test.cpp)
+  target_link_libraries(resolution_test PRIVATE retro_host_core)
+  add_test(NAME resolution COMMAND resolution_test)
 endif()

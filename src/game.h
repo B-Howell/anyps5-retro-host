@@ -13,6 +13,7 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "audio.h"
@@ -141,6 +142,11 @@ class Game {
   // not be written. A card file the host could not read is never written over.
   bool SaveCard(bool always = false);
   std::string ResolutionError() const;
+  // Offers only the internal resolutions whose frames fit the ring and the GPU's framebuffer, given
+  // the core's largest geometry now, and moves a value that does not fit to the largest one that
+  // does. Returns the largest geometry at the value the core is given next, or std::nullopt when
+  // nothing changed the core's. Called with mutex_ held, on the game's thread, with gpu_ made.
+  std::optional<std::pair<uint32_t, uint32_t>> LimitResolution(uint32_t max_width, uint32_t max_height);
   std::string CardPath() const;
   void RefreshDiscs();
   std::optional<std::string> PlaylistEntry(unsigned index) const;
@@ -167,6 +173,10 @@ class Game {
   double aspect_ = 4.0 / 3.0;
   std::vector<Option> options_;
   bool options_changed_ = false;
+  // Why the internal resolution asked for is not used, while the game uses another.
+  std::string resolution_refused_;
+  // The game runs without an OpenGL context, so the core draws in software.
+  bool software_ = false;
   Disc disc_;
   unsigned connected_ports_ = 1;
   bool ports_changed_ = false;

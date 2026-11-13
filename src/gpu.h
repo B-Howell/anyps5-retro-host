@@ -23,6 +23,11 @@ class Gpu {
   // An OpenGL function for the core (retro_hw_render_callback::get_proc_address).
   virtual void* Proc(const char* name) = 0;
 
+  // The largest framebuffer this context can draw into: GL_MAX_RENDERBUFFER_SIZE, and
+  // GL_MAX_VIEWPORT_DIMS for each side.
+  uint32_t MaxWidth() const { return max_width_; }
+  uint32_t MaxHeight() const { return max_height_; }
+
   // Makes the framebuffer at least width x height; false when OpenGL refuses.
   bool Reserve(uint32_t width, uint32_t height, bool depth, bool stencil);
   uintptr_t Framebuffer() const { return framebuffer_; }
@@ -49,6 +54,8 @@ class Gpu {
   uint32_t depth_ = 0;
   uint32_t width_ = 0;
   uint32_t height_ = 0;
+  uint32_t max_width_ = 0;
+  uint32_t max_height_ = 0;
   bool with_depth_ = false;
   bool with_stencil_ = false;
 };

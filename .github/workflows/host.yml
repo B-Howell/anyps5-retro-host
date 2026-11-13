@@ -13,14 +13,17 @@ jobs:
         with:
           submodules: true
           persist-credentials: false
-      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ninja-build strace
+      - run: >-
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends ninja-build strace
+          libegl1 libgl1 libegl-mesa0
       - run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
       - run: cmake --build build
       - run: ctest --test-dir build --output-on-failure
       - run: python3 tests/framing_test.py
       - name: Conformance sessions, with the host's network calls traced
         run: python3 tests/conformance.py --host build/anyps5-retro-host --core build/fake_core.so --log build/host.log --strace build/network.trace
-      - run: python3 tests/host_test.py --host build/anyps5-retro-host --core build/fake_core.so --log build/host.log
+      - name: Host tests, with Mesa's OpenGL for the resolution limits
+        run: python3 tests/host_test.py --host build/anyps5-retro-host --core build/fake_core.so --log build/host.log --require-gpu
       - name: The host opens no network socket and listens on nothing (protocol.md, "Network")
         run: |
           if cat build/network.trace* | grep -E 'socket\((AF_INET|AF_INET6|AF_PACKET|AF_NETLINK)|(^| )(listen|bind)\('; then
