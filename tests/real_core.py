@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2026 AnyPS5 Desktop contributors
 
 """Runs the real SwanStation core through the host with a freely licensed BIOS (OpenBIOS) and
-program, and checks that it starts, draws a picture that is not blank, stops and exits cleanly.
+program, put on a disc image by make_test_disc.py, and checks that it starts, draws a picture that is not blank, stops and exits cleanly.
 The renderer is whichever the machine allows: with no OpenGL context the host must say why a scale
 above 1x does not apply."""
 
@@ -13,7 +13,9 @@ import tempfile
 import time
 from pathlib import Path
 
-import conformance as c
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import conformance as c  # noqa: E402
+import make_test_disc  # noqa: E402
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--host', required=True)
@@ -29,18 +31,21 @@ work = Path(tempfile.mkdtemp(prefix='real-core-'))
 system = work / 'system'
 system.mkdir()
 shutil.copy(options.bios, system / 'openbios.bin')
-program = work / 'program.exe'
-shutil.copy(options.program, program)
+disc = work / 'program.cue'
+make_test_disc.build(options.program, disc.with_suffix('.bin'), disc)
 log = open(options.log, 'wb')
 host = (c.WindowsHost if c.WINDOWS else c.PosixHost)(host_path, log)
 ids = iter(range(1, 1 << 30))
-state = {'ring': None, 'frames': 0}
+state = {'ring': None, 'frames': 0, 'pinged': time.monotonic(), 'pings': iter(range(1, 1 << 30))}
 
 
-def pump(until=None, timeout=10.0):
+def pump(until=None, timeout=5.0):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        message, descriptors = host.read(max(0.1, deadline - time.monotonic()))
+        if time.monotonic() - state['pinged'] >= 2:
+            host.send_message({'type': 'ping', 'id': next(state['pings'])})
+            state['pinged'] = time.monotonic()
+        message, descriptors = host.read(max(0.1, min(1.0, deadline - time.monotonic())))
         if message.get('type') == 'ring':
             state['ring'] = host.ring(message, descriptors)
         elif message.get('type') == 'frame':
@@ -65,7 +70,7 @@ def call(method, args=None):
     if args is not None:
         message['args'] = args
     host.send_message(message)
-    reply = pump(lambda m: m.get('type') == 'reply' and m.get('id') == ident, 10)
+    reply = pump(lambda m: m.get('type') == 'reply' and m.get('id') == ident, 5)
     if 'error' in reply:
         raise c.Failed(f'{method}: {reply["error"]}')
     return reply.get('result')
@@ -82,13 +87,29 @@ def wait_status(check, seconds, what):
 
 
 def picture():
+    """The pinned frame's size and how many colours it has, read as protocol.md "Frame ring" says
+    a launcher reads, or None when there is no frame to read now."""
     ring = state['ring']
     if ring is None:
         raise c.Failed('no frame ring was sent')
-    slot = ring.latest()
-    offset = 4096 + ring.load(24) * ring.slot_bytes
-    data = bytes(ring.memory[offset:offset + slot['width'] * slot['height'] * 4])
-    return slot['width'], slot['height'], len({data[i:i + 3] for i in range(0, len(data), 4)})
+    for _ in range(3):
+        index = ring.load(24)
+        if index == c.NONE:
+            return None
+        if index > 2:
+            raise c.Failed(f'latest is {index}')
+        ring.store(28, index)
+        if ring.load(24) == index:
+            break
+    else:
+        return None
+    at = 40 + 24 * index
+    width, height = ring.u32(at), ring.u32(at + 4)
+    if not (1 <= width <= 8192 and 1 <= height <= 8192) or width * height * 4 > ring.slot_bytes:
+        raise c.Failed(f'slot {index} is {width}x{height}')
+    offset = 4096 + index * ring.slot_bytes
+    data = bytes(ring.memory[offset:offset + width * height * 4])
+    return width, height, len({data[i:i + 3] for i in range(0, len(data), 4)})
 
 
 failed = False
@@ -97,7 +118,7 @@ try:
     pump(lambda m: m.get('type') == 'welcome')
     call('volume', {'level': 0.0, 'muted': True})
     call('start', {'core': str(Path(options.core).resolve()), 'system': str(system), 'saves': str(work / 'saves'),
-                   'disc': str(program),
+                   'disc': str(disc),
                    'options': {'swanstation_BIOS_PathNTSCU': 'openbios.bin', 'swanstation_BIOS_PathNTSCJ': 'openbios.bin',
                                'swanstation_BIOS_PathPAL': 'openbios.bin', 'swanstation_GPU_ResolutionScale': '2'}})
     status = wait_status(lambda s: s['ready'] or s['ended'], 60, 'the game was not ready')
@@ -115,7 +136,9 @@ try:
     deadline = time.monotonic() + 30
     while colours < 2 and time.monotonic() < deadline:
         drain(1)
-        width, height, colours = picture()
+        seen = picture()
+        if seen:
+            width, height, colours = seen
     print(f'{shown} frames in 10 s; picture {width}x{height} with {colours} colours')
     if shown < 100:
         raise c.Failed('fewer than 100 frames in 10 s')
