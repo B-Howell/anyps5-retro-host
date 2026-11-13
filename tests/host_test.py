@@ -177,6 +177,35 @@ def gpu_limits(program, core, log, require_gpu):
         status = session.wait(lambda s: s['ended'], 10)
         if status['errorCode'] or status['resolutionError']:
             raise c.Failed(f'the game stopped with {status}')
+        session.call('release')
+
+        # 2x chosen after the core read 16x but before the host saw its geometry: by the time the
+        # core's context is reset, the host gives it 2x, offers no 16x, and refused nothing.
+        system = Path(session.paths['system'])
+        for step in ('load', 'reset'):
+            (system / f'fake-hold-{step}').write_bytes(b'')
+
+        def held(step):
+            deadline = time.monotonic() + 10
+            while not (system / f'fake-held-{step}').exists():
+                if time.monotonic() > deadline:
+                    raise c.Failed(f'the fake core never held at {step}')
+                time.sleep(0.05)
+
+        session.start({key: '16'})
+        held('load')
+        if session.call('option', {'key': key, 'value': '2'}) is not True:
+            raise c.Failed('2x was not taken while the game loaded')
+        (system / 'fake-hold-load').unlink()
+        held('reset')
+        status = session.call('status')
+        option = status['options'][key]
+        if status['resolutionError'] or option['activeValue'] != '2' or '16' in option['values']:
+            raise c.Failed(f'2x chosen while loading at 16x, at context_reset: {status}')
+        (system / 'fake-hold-reset').unlink()
+        status = session.wait(frame_width(1280), 30)
+        if status['ended'] or status['resolutionError'] or status['options'][key]['activeValue'] != '2':
+            raise c.Failed(f'2x chosen while loading at 16x: {status}')
     finally:
         session.close()
 

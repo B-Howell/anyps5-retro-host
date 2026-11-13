@@ -170,7 +170,9 @@ through kqueue. On Windows a thread waits on the launcher's process handle.
   OpenGL 3.3 core context; with one it clears the host's framebuffer and gives
   SwanStation's sizes for a 640-wide screen (frames 640 × 480 times the scale,
   largest geometry 1024 × 512 times the scale), and tells the host of a new
-  scale through `SET_SYSTEM_AV_INFO` before the next frame.
+  scale through `SET_SYSTEM_AV_INFO` before the next frame. `fake-hold-load`
+  and `fake-hold-reset` files make it wait after reading the scale in
+  `retro_load_game` and in `context_reset`, so a test can act between them.
 - [`tests/host_test.py`](../tests/host_test.py) covers what the fixtures do
   not: a stuck core (the stall limit, then `release` replying and the host
   exiting), a core that is not a library and a missing disc (each ending the
@@ -178,7 +180,10 @@ through kqueue. On Windows a thread waits on the launcher's process handle.
   `volume`, `pause` and `stop` calls in between, and the resolution limits
   (`gpu_limits`): the fake core started at 16x must start at 8x, offer 1x to
   8x, explain itself in `resolutionError`, draw 5120-wide frames, refuse 16x
-  through `option`, take 2x and clear `resolutionError`. Without an OpenGL
+  through `option`, take 2x and clear `resolutionError`; then, with 2x chosen
+  after the core read a saved 16x but before the host saw its geometry, the
+  core must be given 2x by `context_reset`, with no 16x offered and nothing
+  refused. Without an OpenGL
   context that test is skipped, unless `--require-gpu` is given, as the Linux
   CI job does with Mesa installed. Run it like `conformance.py`.
 - [`tests/ring_access.c`](../tests/ring_access.c) gives the fake launcher the
