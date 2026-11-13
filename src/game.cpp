@@ -51,21 +51,35 @@ bool OnRumble(unsigned port, enum retro_rumble_effect effect, uint16_t strength)
 constexpr unsigned kDualShock = RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_ANALOG, 0);
 constexpr int64_t kCardSaveMs = 5000;
 
+#ifdef _WIN32
+constexpr char kSeparators[] = "/\\";
+constexpr char kSeparator = '\\';
+#else
+constexpr char kSeparators[] = "/";
+constexpr char kSeparator = '/';
+#endif
+
+bool IsSeparator(char c) { return c != '\0' && std::strchr(kSeparators, c) != nullptr; }
+
 std::string Stem(const std::string& path) {
-  const size_t slash = path.find_last_of("/\\");
+  const size_t slash = path.find_last_of(kSeparators);
   std::string name = slash == std::string::npos ? path : path.substr(slash + 1);
   const size_t dot = name.find_last_of('.');
   return dot == std::string::npos || dot == 0 ? name : name.substr(0, dot);
 }
 
 std::string Directory(const std::string& path) {
-  const size_t slash = path.find_last_of("/\\");
+  const size_t slash = path.find_last_of(kSeparators);
   return slash == std::string::npos ? std::string() : path.substr(0, slash + 1);
 }
 
 bool IsAbsolute(const std::string& path) {
-  return (!path.empty() && (path[0] == '/' || path[0] == '\\')) ||
-         (path.size() > 2 && path[1] == ':' && (path[2] == '\\' || path[2] == '/'));
+  if (!path.empty() && IsSeparator(path[0])) return true;
+#ifdef _WIN32
+  return path.size() > 2 && path[1] == ':' && IsSeparator(path[2]);
+#else
+  return false;
+#endif
 }
 
 }  // namespace
@@ -322,13 +336,8 @@ std::optional<std::string> Game::PlaylistEntry(unsigned index) const {
 }
 
 std::string Game::CardPath() const {
-#ifdef _WIN32
-  constexpr char kSeparator = '\\';
-#else
-  constexpr char kSeparator = '/';
-#endif
   std::string saves = config_.saves;
-  if (!saves.empty() && saves.back() != '/' && saves.back() != '\\') saves += kSeparator;
+  if (!saves.empty() && !IsSeparator(saves.back())) saves += kSeparator;
   return saves + Stem(config_.disc) + ".srm";
 }
 
