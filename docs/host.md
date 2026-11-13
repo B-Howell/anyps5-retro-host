@@ -214,12 +214,10 @@ release can be packed and checked by hand the same way.
 
 - **Systems.** `windows-x64` (Windows Server 2022, MSVC, with the static C and
   C++ runtime so no Visual C++ redistributable is needed; the workflow fails
-  if the host or SwanStation imports it), `linux-x64` (Ubuntu 24.04, so it
-  needs glibc 2.39 or later) and `macos-arm64` (built on `macos-latest`, an arm64 runner, for macOS 11 or later). A Linux
-  build on Ubuntu 22.04 was tried for older systems: it drew the first game,
-  then the host's connection closed when SwanStation switched from its
-  hardware renderer to software at `stop`, so it is not used until that is
-  understood.
+  if the host or SwanStation imports it), `linux-x64` (Ubuntu 22.04, the oldest
+  Linux the launcher supports, so it needs glibc 2.35 or later) and
+  `macos-arm64` (built on `macos-latest`, an arm64 runner, for macOS 11 or
+  later).
 - **What a zip holds.** The host (`anyps5-retro-host.exe` on Windows,
   `anyps5-retro-host` elsewhere), SwanStation
   (`swanstation_libretro.dll`, `.so` or `.dylib`) built from

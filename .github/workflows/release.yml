@@ -92,7 +92,7 @@ jobs:
             ring-access: build/Release/ring_access.dll
             python: python
           - system: linux-x64
-            os: ubuntu-24.04
+            os: ubuntu-22.04
             host: build/anyps5-retro-host
             core: swanstation/build/swanstation_libretro.so
             unpacked-host: anyps5-retro-host
