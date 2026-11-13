@@ -161,6 +161,7 @@ class PosixHost:
         while len(data) < size:
             left = deadline - time.monotonic()
             if left <= 0 or not select.select([self.socket], [], [], left)[0]:
+                close_all(descriptors)
                 raise Failed('the host sent nothing in time')
             try:
                 chunk, control, flags, _ = self.socket.recvmsg(size - len(data), socket.CMSG_SPACE(4 * 4),
@@ -361,7 +362,8 @@ class Ring:
     def __init__(self, memory, address):
         self.memory = memory
         self.address = address
-        self.slot_bytes = self.u64(16)
+        self.snapshot = self.header()
+        self.slot_bytes = self.snapshot['slotBytes']
 
     def load(self, offset):
         return ATOMICS.ring_load(self.address + offset)
@@ -456,7 +458,7 @@ def play(session, program, core, log, trace=None):
                 ring = host.ring(message, descriptors)
                 compare({key: value for key, value in step['ring']['header'].items()
                          if key in ('magic', 'version', 'slotCount', 'headerBytes', 'slotBytes', 'pixelFormat')},
-                        ring.header(), set())
+                        ring.snapshot, set())
                 continue
             for fd in descriptors:
                 os.close(fd)
