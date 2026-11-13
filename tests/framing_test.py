@@ -1,12 +1,13 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 # SPDX-FileCopyrightText: 2026 AnyPS5 Desktop contributors
 
-"""Checks the POSIX fake launcher's reader against protocol.md "Framing": a read's timeout is for a
+"""Checks the fake launcher's readers against protocol.md "Framing": a read's timeout is for a
 message to begin, and the rest of the message, length and body, has one write limit counted from
 its first byte. A read that times out before a message begins raises conformance.Idle, after which
 reading again is safe; one that times out in the middle of a message does not. Runs without the
-host, on a socketpair."""
+host: the POSIX reader on a socketpair, the Windows reader on a pipe."""
 
+import os
 import socket
 import struct
 import sys
@@ -42,15 +43,31 @@ class SlowAfterRead:
 
 
 def reader_and_writer(parts):
-    """A reader on one end of a socketpair; the other end sends each (delay, bytes) in turn."""
-    near, far = socket.socketpair()
-    host = c.PosixHost.__new__(c.PosixHost)
-    host.socket = near
+    """A reader on one end of a socketpair (a pipe on Windows); the other end sends each
+    (delay, bytes) in turn."""
+    if c.WINDOWS:
+        near, far = os.pipe()
+        host = c.WindowsHost.__new__(c.WindowsHost)
+        host.buffer = b''
+        host.from_host = near
+        host.chunks = []
+        host.arrived = threading.Condition()
+        host.closed = False
+        host.begun = None
+        threading.Thread(target=host.pump, daemon=True).start()
+
+        def write(data):
+            os.write(far, data)
+    else:
+        near, far = socket.socketpair()
+        host = c.PosixHost.__new__(c.PosixHost)
+        host.socket = near
+        write = far.sendall
 
     def send():
         for delay, data in parts:
             time.sleep(delay)
-            far.sendall(data)
+            write(data)
 
     writer = threading.Thread(target=send)
     writer.start()
@@ -59,8 +76,11 @@ def reader_and_writer(parts):
 
 def finish(host, far, writer):
     writer.join()
-    far.close()
-    host.socket.close()
+    if c.WINDOWS:
+        os.close(far)
+    else:
+        far.close()
+        host.socket.close()
 
 
 def read(host, timeout):
@@ -101,11 +121,12 @@ check('nothing before the read timeout', read(pair[0], 0.1), 'Idle: the host sen
 check('the message after it', read(pair[0], 1), {'type': 'frame'})
 finish(*pair)
 
-pair = reader_and_writer([(0, MESSAGE + MESSAGE)])
-pair[0].socket = SlowAfterRead(pair[0].socket, 0.2)
-check('a read timeout already over when the body is read', read(pair[0], 0.1), {'type': 'frame'})
-check('the message after that', read(pair[0], 1), {'type': 'frame'})
-finish(*pair)
+if not c.WINDOWS:
+    pair = reader_and_writer([(0, MESSAGE + MESSAGE)])
+    pair[0].socket = SlowAfterRead(pair[0].socket, 0.2)
+    check('a read timeout already over when the body is read', read(pair[0], 0.1), {'type': 'frame'})
+    check('the message after that', read(pair[0], 1), {'type': 'frame'})
+    finish(*pair)
 
 print('FAILED: ' + '; '.join(failures) if failures else 'framing passed')
 sys.exit(1 if failures else 0)
