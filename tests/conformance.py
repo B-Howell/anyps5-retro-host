@@ -155,6 +155,8 @@ class PosixHost:
         self.send(struct.pack('<I', len(body)) + body, descriptors)
 
     def receive(self, size, deadline, first):
+        """The next size bytes, the descriptors that came with them, and the deadline for the rest
+        of the message."""
         # protocol.md "Framing": a read never asks for more than is left of the current part, and
         # descriptors belong to the message whose first length byte they came with. The deadline
         # is for a message to begin; once its first byte is here the host has the write limit to
@@ -194,16 +196,16 @@ class PosixHost:
             if first and not data:
                 deadline = max(deadline, time.monotonic() + WRITE_LIMIT)
             data += chunk
-        return data, descriptors
+        return data, descriptors, deadline
 
     def read(self, timeout):
         deadline = time.monotonic() + timeout
-        header, descriptors = self.receive(4, deadline, True)
+        header, descriptors, deadline = self.receive(4, deadline, True)
         try:
             size = struct.unpack('<I', header)[0]
             if not 2 <= size <= 1 << 20:
                 raise Failed(f'the host sent a length of {size}')
-            body, _ = self.receive(size, max(deadline, time.monotonic() + WRITE_LIMIT), False)
+            body, _, _ = self.receive(size, deadline, False)
             return json.loads(body.decode('utf-8')), descriptors
         except (Failed, ValueError):
             close_all(descriptors)
