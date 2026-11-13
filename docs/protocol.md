@@ -53,9 +53,12 @@ killing. It never uses the `pid` in [`welcome`](#welcome) for those. A
 connection or listening socket. The only channel the host has is the one the
 launcher hands it. Reading a game or BIOS file that the operating system
 serves from a network share (SMB, NFS) is ordinary file access, not a
-network connection under this rule. The host repository's CI checks that the
-host opens no sockets while it runs the conformance sessions (for example
-with `strace -f -e trace=%network` on Linux).
+network connection under this rule, and neither is playing sound through the
+system's sound service over its local socket (PulseAudio or PipeWire on
+Linux). The host repository's CI traces the host's network calls with
+`strace -f -e trace=%network` on Linux while it runs the conformance
+sessions, and fails on any `AF_INET`, `AF_INET6`, `AF_PACKET` or
+`AF_NETLINK` socket, and on any `bind` or `listen`.
 
 ### Starting the host
 
@@ -562,7 +565,7 @@ Loads and starts a PS1 game.
 | `core` | path | The SwanStation library the launcher checked |
 | `disc` | path | A `.cue`, `.chd`, `.pbp` or `.m3u` file |
 | `system` | path | The core's system directory (BIOS files) |
-| `saves` | path | Where memory cards are kept; the host creates it if needed |
+| `saves` | path | Where memory cards are kept; the host creates it if needed. Memory card 1 is the file `<disc's name without its extension>.srm` in it, as libretro frontends name it, and is written at least every 5 seconds while it changes, and when the game ends |
 | `options` | object of strings, optional | Core option values saved by the player, by key, including the internal resolution (`swanstation_GPU_ResolutionScale`). Unknown keys and values are ignored |
 | `initialDisc` | integer 0 to 127, optional | Only for an `.m3u`: the index of the playlist entry to insert at boot. With any other `disc` it is an `argument` error |
 
@@ -686,6 +689,11 @@ The game MUST end within 5 seconds of the call.
 No argument. Forgets an ended game, so `status` returns `null` and a new
 `start` can follow. It does nothing while the game is still running. Returns
 `null`.
+
+A game that ended by a [game limit](#timeouts) may have left its core stuck
+inside `retro_run`, where the host cannot unload it. Then the host sends the
+reply to `release` and exits. No game is loaded at that point, so the
+launcher does not show an error, and it starts a new host for the next game.
 
 ## Frame ring
 
@@ -896,7 +904,19 @@ test provides on its own system:
 - Steps from the fake are sent as written. Steps from the side under test are
   what it must send. A fake host's `welcome` carries its real process id.
 - The side under test may also send `ping`, `pong` and `input` at any time.
-  A test ignores those unless a step names them.
+  A test ignores those unless a step names them. A host under test also
+  sends `frame` (one per published frame) and `rumble` (as its core asks),
+  so a test ignores those too unless the next step names one.
+- When the host is under test, a `ring` step's `header` is checked only for
+  `magic`, `version`, `slotCount`, `headerBytes`, `slotBytes` and
+  `pixelFormat`. The host keeps publishing, so by the time a test reads the
+  ring, the other fields have moved on. At each `frame` step the test checks
+  the slot named by `latest`, as the [launcher's checks](#checks-the-launcher-makes)
+  do.
+- A host under test runs whatever core the test provides as `${core}`. The
+  host repository's CI uses a small test core, not SwanStation. So a status
+  reply that a host is tested on lists the fields that depend on the core
+  (`result.options`, `result.hardware`, `result.aspect`) in `anyValueFor`.
 - `steps` run in order. Each step is one of:
 
 | Step | Meaning |

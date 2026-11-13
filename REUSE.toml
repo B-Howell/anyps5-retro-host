@@ -7,3 +7,8 @@ version = 1
 path = "fixtures/**/*.json"
 SPDX-License-Identifier = "MIT"
 SPDX-FileCopyrightText = "2026 AnyPS5 Desktop contributors"
+
+[[annotations]]
+path = ".gitmodules"
+SPDX-License-Identifier = "MIT"
+SPDX-FileCopyrightText = "2026 AnyPS5 Desktop contributors"

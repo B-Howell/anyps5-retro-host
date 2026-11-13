@@ -1,0 +1,6 @@
+[submodule "3rdparty/libretro-common"]
+	path = 3rdparty/libretro-common
+	url = https://github.com/libretro/libretro-common.git
+[submodule "3rdparty/miniaudio"]
+	path = 3rdparty/miniaudio
+	url = https://github.com/mackron/miniaudio.git
