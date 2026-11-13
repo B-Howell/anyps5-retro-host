@@ -34,6 +34,7 @@ jobs:
           truncate -s 524288 out/openbios.bin
           cp nugget/psyqo/examples/hello/hello.ps-exe out/hello.exe
           cp nugget/LICENSE out/LICENSE
+          cp nugget/psyqo/examples/hello/hello.cpp out/hello.cpp
           ls -l out
       - uses: actions/upload-artifact@v4
         with:
