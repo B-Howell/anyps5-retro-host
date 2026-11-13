@@ -155,9 +155,9 @@ storage: from its own directory on Windows and Linux, and from
   host with a known fault cannot be put back in its place.
 
 On Windows the launcher hashes each file from a handle it opened without
-`FILE_SHARE_WRITE` or `FILE_SHARE_DELETE`, and keeps that handle open until
-the host has answered the first `start`. So the file it checked is the file
-that runs. On Linux the launcher hashes the host executable from a
+`FILE_SHARE_WRITE` or `FILE_SHARE_DELETE`, and keeps those handles open
+until the first game's `status` shows `ready` or `ended`; the host has loaded
+the core by then. So the file it checked is the file that runs. On Linux the launcher hashes the host executable from a
 descriptor it opened with `O_CLOEXEC` at a number above 3 (moved there with
 `F_DUPFD_CLOEXEC` if it came out lower, so the `dup2` to descriptor 3 cannot
 replace it), and starts the host through that same
@@ -429,6 +429,7 @@ log. These codes are defined:
 | `argument` | The argument is missing, the wrong type, or outside the range this document gives |
 | `busy` | `start` was called while a game is loaded |
 | `start` | The game could not be started; `message` says why |
+| `tooLarge` | The result would not fit in one message (1 MiB); this does not happen with reasonable data |
 
 The host MUST reply to every call within 5 seconds. Long work, such as
 loading a game, runs after the reply, and `status` reports how it is going.

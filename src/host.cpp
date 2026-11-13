@@ -141,11 +141,15 @@ Host::Outcome Host::Call(const Json& message) {
   } catch (const ArgumentError& error) {
     reply = Failure("argument", error.message);
   }
-  if (reply.error) {
-    Send(Json(JsonObject{{"type", "reply"}, {"id", *id}, {"error", *reply.error}}));
-  } else {
-    Send(Json(JsonObject{{"type", "reply"}, {"id", *id}, {"result", reply.result}}));
+  Json answer = reply.error ? Json(JsonObject{{"type", "reply"}, {"id", *id}, {"error", *reply.error}})
+                            : Json(JsonObject{{"type", "reply"}, {"id", *id}, {"result", reply.result}});
+  if (answer.Serialize().size() > kMaxMessage) {
+    answer = Json(JsonObject{{"type", "reply"},
+                             {"id", *id},
+                             {"error", JsonObject{{"code", "tooLarge"},
+                                                  {"message", "The result does not fit in one message."}}}});
   }
+  Send(answer);
   if (reply.after) reply.after();
   if (reply.exit_after) ExitNow(kExitMissedLimit);
   return Outcome::kContinue;

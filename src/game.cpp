@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
+#include <new>
 
 namespace retro_host {
 
@@ -51,6 +52,16 @@ bool OnRumble(unsigned port, enum retro_rumble_effect effect, uint16_t strength)
 constexpr unsigned kDualShock = RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_ANALOG, 0);
 constexpr int64_t kCardSaveMs = 5000;
 constexpr size_t kPathBytes = 3 * 32767 + 1;
+constexpr size_t kTextBytes = 256;
+constexpr size_t kErrorBytes = 1024;
+
+// text cut to at most bytes, at a UTF-8 character boundary.
+std::string Clip(const std::string& text, size_t bytes) {
+  if (text.size() <= bytes) return text;
+  size_t end = bytes;
+  while (end > 0 && (static_cast<unsigned char>(text[end]) & 0xC0) == 0x80) --end;
+  return text.substr(0, end);
+}
 constexpr char kResolutionOption[] = "swanstation_GPU_ResolutionScale";
 
 #ifdef _WIN32
@@ -129,6 +140,7 @@ void Game::Run() {
   g_game = this;
   RunGame();
   g_game = nullptr;
+  library_.Close();
 }
 
 void Game::RunGame() {
@@ -317,7 +329,7 @@ void Game::RefreshDiscs() {
     std::string label;
     if (disc_control_->extended && disc_control_->callbacks.get_image_label &&
         disc_control_->callbacks.get_image_label(i, text, buffer.size() - 1) && text[0]) {
-      label = text;
+      label = Clip(text, kTextBytes);
     } else {
       label = "Disc " + std::to_string(i + 1);
     }
@@ -426,10 +438,10 @@ bool Game::Environment(unsigned command, void* data) {
            definition && definition->key; ++definition) {
         Option option;
         option.key = definition->key;
-        option.title = definition->desc ? definition->desc : definition->key;
+        option.title = Clip(definition->desc ? definition->desc : definition->key, kTextBytes);
         for (const retro_core_option_value* value = definition->values; value->value; ++value) {
           option.values.emplace_back(value->value);
-          option.labels.emplace_back(value->label ? value->label : value->value);
+          option.labels.emplace_back(Clip(value->label ? value->label : value->value, kTextBytes));
         }
         if (option.values.empty()) continue;
         const auto chosen = [&](const std::string& wanted) {
@@ -523,7 +535,12 @@ void Game::Video(const void* data, unsigned width, unsigned height, size_t pitch
     frame_failure_ = FrameResult::kTooLarge;
     return;
   }
-  converted_.resize(static_cast<size_t>(width) * height * 4);
+  try {
+    converted_.resize(static_cast<size_t>(width) * height * 4);
+  } catch (const std::bad_alloc&) {
+    frame_failure_ = FrameResult::kNoMemory;
+    return;
+  }
   const bool bgra = format_ == PixelFormat::kBgra8;
   for (unsigned y = 0; y < height; ++y) {
     const auto* row = static_cast<const uint8_t*>(data) + y * pitch;
@@ -629,7 +646,7 @@ Json Game::Status() const {
   for (const auto& option : options_) pending = pending || option.values[option.selected] != option.active;
   JsonObject status{{"ready", ready_},
                     {"ended", ended_},
-                    {"error", error_},
+                    {"error", Clip(error_, kErrorBytes)},
                     {"errorCode", error_code_},
                     {"aspect", aspect},
                     {"hardware", false},
