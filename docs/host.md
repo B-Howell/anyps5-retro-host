@@ -122,7 +122,8 @@ through kqueue. On Windows a thread waits on the launcher's process handle.
   program on a one-track Mode 2 disc image (`.cue` and `.bin`, with the EDC
   and ECC a pressed disc has), because `start` takes only disc files. The test
   starts it at 2x, then checks that 100 frames come within 10 seconds, that
-  the picture is not one colour, and that `hardware` and `resolutionError`
+  two pictures a second or more apart are not black and differ (the
+  program animates its background), and that `hardware` and `resolutionError`
   agree (a machine without an OpenGL context draws in software and must say
   so). It then checks a clean `stop` and exit, and keeps the last picture
   (`--picture`) as a workflow artifact. No Sony BIOS or game is used.

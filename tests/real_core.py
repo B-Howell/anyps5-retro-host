@@ -3,7 +3,7 @@
 
 """Runs the real SwanStation core through the host with a freely licensed BIOS (OpenBIOS) and
 program, put on a disc image by make_test_disc.py, and checks that it starts, draws a picture
-that is not blank, stops and exits cleanly.
+that is not black and keeps changing, stops and exits cleanly.
 The renderer is whichever the machine allows: with no OpenGL context the host must say why a scale
 above 1x does not apply."""
 
@@ -91,8 +91,8 @@ def wait_status(check, seconds, what):
 
 
 def picture():
-    """The pinned frame's size and how many colours it has, read as protocol.md "Frame ring" says
-    a launcher reads, or None when there is no frame to read now."""
+    """The pinned frame's size and pixels, read as protocol.md "Frame ring" says a launcher reads,
+    or None when there is no frame to read now."""
     ring = state['ring']
     if ring is None:
         raise c.Failed('no frame ring was sent')
@@ -115,7 +115,7 @@ def picture():
     data = bytes(ring.memory[offset:offset + width * height * 4])
     if options.picture:
         save_png(width, height, data, ring.snapshot['pixelFormat'] == 2)
-    return width, height, len({data[i:i + 3] for i in range(0, len(data), 4)})
+    return width, height, data
 
 
 def save_png(width, height, data, bgra):
@@ -152,18 +152,19 @@ try:
     before = state['frames']
     drain(10)
     shown = state['frames'] - before
-    width, height, colours = 0, 0, 0
+    pictures = []
     deadline = time.monotonic() + 30
-    while colours < 2 and time.monotonic() < deadline:
+    while len(set(p[2] for p in pictures)) < 2 and time.monotonic() < deadline:
         drain(1)
         seen = picture()
-        if seen:
-            width, height, colours = seen
-    print(f'{shown} frames in 10 s; picture {width}x{height} with {colours} colours')
+        if seen and any(seen[2][i] or seen[2][i + 1] or seen[2][i + 2] for i in range(0, len(seen[2]), 4)):
+            pictures.append(seen)
+    width, height = pictures[-1][:2] if pictures else (0, 0)
+    print(f'{shown} frames in 10 s; {len(pictures)} pictures that are not black, last {width}x{height}')
     if shown < 100:
         raise c.Failed('fewer than 100 frames in 10 s')
-    if colours < 2:
-        raise c.Failed('the picture stayed one colour')
+    if len(set(p[2] for p in pictures)) < 2:
+        raise c.Failed('no two pictures that are not black differ: the game is not running')
     if status['hardware'] and (width < 640 or height < 480):
         raise c.Failed('a 2x GPU picture is at least 640x480')
     call('stop')
