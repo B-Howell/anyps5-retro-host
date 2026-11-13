@@ -104,6 +104,30 @@ def unloadable(program, core, log):
         session.close()
 
 
+def restart_option(program, core, log):
+    session = Session(program, core, log)
+    try:
+        session.start()
+        status = session.wait(lambda s: s and s['ready'], 10)
+        region = status['options'].get('fake_region')
+        if not region or region['restart'] is not True or status['options']['fake_color']['restart'] is not False:
+            raise c.Failed(f'restart flags are wrong: {status["options"]}')
+        if session.call('option', {'key': 'fake_region', 'value': 'pal'}) is not True:
+            raise c.Failed('the restart option was not taken')
+        time.sleep(0.5)
+        status = session.call('status')
+        region = status['options']['fake_region']
+        if region['values'][region['selected']] != 'pal' or region['activeValue'] != 'ntsc' or status['graphicsPending']:
+            raise c.Failed(f'a restart option was applied at once: {region}, pending {status["graphicsPending"]}')
+        if session.call('option', {'key': 'fake_color', 'value': 'green'}) is not True:
+            raise c.Failed('the color option was not taken')
+        status = session.wait(lambda s: s['options']['fake_color']['activeValue'] == 'green', 3)
+        if status['graphicsPending']:
+            raise c.Failed('graphicsPending stayed true after the core read the value')
+    finally:
+        session.close()
+
+
 def many_games(program, core, log):
     session = Session(program, core, log)
     try:
@@ -137,7 +161,7 @@ def main():
     log = open(options.log, 'ab') if options.log else c.subprocess.DEVNULL
     c.load_atomics(options.core.resolve())
     failures = 0
-    tests = [test for test in (stuck_core, unloadable, many_games) if not options.names or test.__name__ in options.names]
+    tests = [test for test in (stuck_core, unloadable, restart_option, many_games) if not options.names or test.__name__ in options.names]
     for test in tests:
         try:
             test(options.host.resolve(), options.core.resolve(), log)

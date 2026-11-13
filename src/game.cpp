@@ -141,6 +141,9 @@ void Game::Run() {
   RunGame();
   g_game = nullptr;
   library_.Close();
+  std::lock_guard<std::mutex> lock(mutex_);
+  finished_ = true;
+  finished_signal_.notify_all();
 }
 
 void Game::RunGame() {
@@ -273,16 +276,16 @@ void Game::Finish(const std::string& error, const std::string& code) {
     error_code_ = code;
     ended_ = true;
   }
-  finished_ = true;
-  finished_signal_.notify_all();
 }
 
 void Game::ApplyPendingWork() {
   std::optional<unsigned> disc;
   bool ports = false;
   unsigned count = 1;
+  bool refresh = false;
   {
     std::lock_guard<std::mutex> lock(mutex_);
+    std::swap(refresh, display_refresh_);
     std::swap(disc, disc_request_);
     ports = ports_changed_;
     ports_changed_ = false;
@@ -291,6 +294,7 @@ void Game::ApplyPendingWork() {
   if (ports) {
     Get<void (*)(unsigned, unsigned)>("retro_set_controller_port_device")(1, count == 2 ? kDualShock : RETRO_DEVICE_NONE);
   }
+  if (refresh && update_display_) update_display_();
   if (disc) {
     const auto& control = disc_control_->callbacks;
     bool changed = false;
@@ -438,7 +442,9 @@ bool Game::Environment(unsigned command, void* data) {
            definition && definition->key; ++definition) {
         Option option;
         option.key = definition->key;
-        option.title = Clip(definition->desc ? definition->desc : definition->key, kTextBytes);
+        const std::string text = definition->desc ? definition->desc : definition->key;
+        option.title = Clip(text, kTextBytes);
+        option.restart = text.size() >= 9 && text.compare(text.size() - 9, 9, "(Restart)") == 0;
         for (const retro_core_option_value* value = definition->values; value->value; ++value) {
           option.values.emplace_back(value->value);
           option.labels.emplace_back(Clip(value->label ? value->label : value->value, kTextBytes));
@@ -457,6 +463,11 @@ bool Game::Environment(unsigned command, void* data) {
       }
       return true;
     }
+    case RETRO_ENVIRONMENT_SET_CORE_OPTIONS_UPDATE_DISPLAY_CALLBACK: {
+      const auto* callback = static_cast<const retro_core_options_update_display_callback*>(data);
+      update_display_ = callback ? callback->callback : nullptr;
+      return true;
+    }
     case RETRO_ENVIRONMENT_SET_CORE_OPTIONS_DISPLAY: {
       const auto* display = static_cast<const retro_core_option_display*>(data);
       std::lock_guard<std::mutex> lock(mutex_);
@@ -470,7 +481,7 @@ bool Game::Environment(unsigned command, void* data) {
       std::lock_guard<std::mutex> lock(mutex_);
       for (auto& option : options_) {
         if (variable->key && option.key == variable->key) {
-          option.active = option.values[option.selected];
+          if (!option.restart) option.active = option.values[option.selected];
           variable->value = option.values[option.selected].c_str();
           return true;
         }
@@ -639,11 +650,13 @@ Json Game::Status() const {
                                                 {"labels", std::move(labels)},
                                                 {"selected", static_cast<uint64_t>(option.selected)},
                                                 {"activeValue", option.active},
-                                                {"restart", false}});
+                                                {"restart", option.restart}});
   }
   const double aspect = aspect_ > 0 && aspect_ <= 10 ? aspect_ : 4.0 / 3.0;
   bool pending = false;
-  for (const auto& option : options_) pending = pending || option.values[option.selected] != option.active;
+  for (const auto& option : options_) {
+    pending = pending || (!option.restart && option.values[option.selected] != option.active);
+  }
   JsonObject status{{"ready", ready_},
                     {"ended", ended_},
                     {"error", Clip(error_, kErrorBytes)},
@@ -720,6 +733,7 @@ bool Game::SetOption(const std::string& key, const std::string& value) {
     if (selected != option.selected) {
       option.selected = selected;
       options_changed_ = true;
+      display_refresh_ = true;
     }
     return true;
   }

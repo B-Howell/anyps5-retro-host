@@ -106,6 +106,9 @@ class Game {
     size_t selected = 0;
     std::string active;
     bool visible = true;
+    // Applied only when the game starts again; libretro cores mark these with "(Restart)" at the
+    // end of the option's text.
+    bool restart = false;
   };
   struct Disc {
     std::vector<std::string> labels;
@@ -173,6 +176,8 @@ class Game {
   FrameResult frame_failure_ = FrameResult::kShown;
   bool published_ = false;
   bool card_kept_ = true;
+  bool (*update_display_)() = nullptr;
+  bool display_refresh_ = false;
   mutable std::mutex pause_mutex_;
   bool bios_missing_ = false;
   std::string card_;

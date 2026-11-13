@@ -89,6 +89,14 @@ static struct retro_core_option_v2_definition definitions[] = {
      NULL,
      {{"blue", "Blue"}, {"green", "Green"}, {NULL, NULL}},
      "blue"},
+    {"fake_region",
+     "Region (Restart)",
+     NULL,
+     "Applied when the game starts again.",
+     NULL,
+     NULL,
+     {{"ntsc", "NTSC"}, {"pal", "PAL"}, {NULL, NULL}},
+     "ntsc"},
     {"fake_hang",
      "Hang",
      NULL,
@@ -231,6 +239,7 @@ RETRO_API unsigned retro_get_region(void) { return RETRO_REGION_NTSC; }
 RETRO_API void retro_run(void) {
   struct retro_variable color = {"fake_color", NULL};
   struct retro_variable hang = {"fake_hang", NULL};
+  struct retro_variable region = {"fake_region", NULL};
   uint32_t fill;
   unsigned i;
   bool cross;
@@ -245,6 +254,7 @@ RETRO_API void retro_run(void) {
     }
   }
   environment(RETRO_ENVIRONMENT_GET_VARIABLE, &color);
+  environment(RETRO_ENVIRONMENT_GET_VARIABLE, &region);
   fill = color.value && strcmp(color.value, "green") == 0 ? 0x0000C000u : 0x000000C0u;
   for (i = 0; i < WIDTH * HEIGHT; ++i) pixels[i] = fill + (frame_count & 0xFF) * 0x10000u;
   video(pixels, WIDTH, HEIGHT, WIDTH * sizeof(uint32_t));
