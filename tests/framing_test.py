@@ -18,7 +18,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import conformance as c  # noqa: E402
 
-c.WRITE_LIMIT = 0.5
+c.WRITE_LIMIT = 2.0
+# Delays that must stay inside a limit have at least 1.5 s to spare, as hosted runners can sleep late.
 BODY = b'{"type":"frame"}'
 MESSAGE = struct.pack('<I', len(BODY)) + BODY
 
@@ -111,17 +112,17 @@ pair = reader_and_writer([(0, MESSAGE[:1]), (0.2, MESSAGE[1:4]), (0.2, MESSAGE[4
 check('a split length within the write limit', read(pair[0], 0.1), {'type': 'frame'})
 finish(*pair)
 
-pair = reader_and_writer([(0, MESSAGE[:1]), (0.3, MESSAGE[1:4]), (0.4, MESSAGE[4:])])
+pair = reader_and_writer([(0, MESSAGE[:1]), (1.0, MESSAGE[1:4]), (1.5, MESSAGE[4:])])
 check('the rest later than the write limit after the first byte', read(pair[0], 0.1), 'Failed: the host did not finish a message within the write limit')
 finish(*pair)
 
-pair = reader_and_writer([(0, MESSAGE[:1]), (0.3, MESSAGE[1:4]), (0.4, MESSAGE[4:])])
-check('the same with a read timeout longer than the write limit', read(pair[0], 2), 'Failed: the host did not finish a message within the write limit')
+pair = reader_and_writer([(0, MESSAGE[:1]), (1.0, MESSAGE[1:4]), (1.5, MESSAGE[4:])])
+check('the same with a read timeout longer than the write limit', read(pair[0], 4), 'Failed: the host did not finish a message within the write limit')
 finish(*pair)
 
-pair = reader_and_writer([(0.3, MESSAGE)])
+pair = reader_and_writer([(1.0, MESSAGE)])
 check('nothing before the read timeout', read(pair[0], 0.1), 'Idle: the host sent nothing in time')
-check('the message after it', read(pair[0], 1), {'type': 'frame'})
+check('the message after it', read(pair[0], 3), {'type': 'frame'})
 finish(*pair)
 
 if not c.WINDOWS:
