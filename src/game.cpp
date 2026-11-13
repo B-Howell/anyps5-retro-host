@@ -72,7 +72,7 @@ bool IsAbsolute(const std::string& path) {
 
 Game::Game(GameConfig config, PixelFormat format, GameEvents& events, AudioOutput& audio)
     : config_(std::move(config)), format_(format), events_(events), audio_(audio),
-      disc_control_(std::make_unique<DiscControl>()) {}
+      quiet_since_(NowMs()), disc_control_(std::make_unique<DiscControl>()) {}
 
 Game::~Game() {
   stop_ = true;
