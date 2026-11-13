@@ -57,6 +57,8 @@ bool OnRumble(unsigned port, enum retro_rumble_effect effect, uint16_t strength)
 constexpr unsigned kDualShock = RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_ANALOG, 0);
 constexpr int64_t kCardSaveMs = 5000;
 constexpr size_t kPathBytes = 3 * 32767 + 1;
+// The BIOS image sizes SwanStation loads: PS1, PS2 and PS3 (src/core/bios.h, BIOS_SIZE*).
+constexpr size_t kBiosSizes[] = {0x80000, 0x400000, 0x3E66F0};
 constexpr size_t kTextBytes = 256;
 constexpr size_t kErrorBytes = 1024;
 
@@ -840,7 +842,7 @@ bool Game::UsesBios() const {
   std::string path = config_.system;
   if (!path.empty() && !IsSeparator(path.back())) path += kSeparator;
   const auto image = ReadWholeFile(path + name);
-  return image && (image->size() == 512 * 1024 || image->size() == 4 * 1024 * 1024 || image->size() == 8 * 1024 * 1024);
+  return image && std::find(std::begin(kBiosSizes), std::end(kBiosSizes), image->size()) != std::end(kBiosSizes);
 }
 
 std::string Game::ResolutionError() const {
