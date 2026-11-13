@@ -30,6 +30,7 @@ through kqueue. On Windows a thread waits on the launcher's process handle.
 | [`src/channel.cpp`](../src/channel.cpp) | Framing for the control stream, and the clock the watch thread reads for the write limit |
 | [`src/platform_posix.cpp`](../src/platform_posix.cpp), [`src/platform_windows.cpp`](../src/platform_windows.cpp) | The control stream, process setup, watching the launcher, shared memory, loading the core and files |
 | [`src/audio.cpp`](../src/audio.cpp) | Sound output through miniaudio, with the volume, mute and pause |
+| [`tools/package_release.py`](../tools/package_release.py) | Packs, lists and checks a release (see "Releases" below) |
 
 ## Choices made for version 1
 
@@ -195,3 +196,59 @@ through kqueue. On Windows a thread waits on the launcher's process handle.
   "double lock" in `Game::Join`: libstdc++ 11 waits with
   `pthread_cond_clockwait`, which that version does not intercept. Use GCC 12
   or later, or clang 14 or later.
+
+## Releases
+
+[`.github/workflows/release.yml`](../.github/workflows/release.yml) builds the
+files protocol.md "Finding and checking the host" names, and
+[`tools/package_release.py`](../tools/package_release.py) packs them, so a
+release can be packed and checked by hand the same way.
+
+- **Systems.** `windows-x64` (Windows Server 2022, MSVC, with the static C and
+  C++ runtime so no Visual C++ redistributable is needed; the workflow fails
+  if the host or SwanStation imports it), `linux-x64` (Ubuntu 22.04, so glibc
+  2.35 or later is enough) and `macos-arm64` (macOS 11 or later).
+- **What a zip holds.** The host (`anyps5-retro-host.exe` on Windows,
+  `anyps5-retro-host` elsewhere), SwanStation
+  (`swanstation_libretro.dll`, `.so` or `.dylib`) built from
+  `SWANSTATION_COMMIT`, `licenses/` with both licences, and `SOURCE.txt`
+  naming the host commit and the SwanStation commit. Everything sits at the
+  top of the zip except the licences. The zip is the same bytes for the same
+  inputs (entries sorted by name, one fixed time, fixed permissions), so a
+  rebuild can be compared with a release.
+- **Tested with.** `SWANSTATION_COMMIT` in `release.yml` must be the one
+  `real-core.yml` tests, and the workflow fails otherwise. Each system's zip
+  is unpacked again on its own runner and boots OpenBIOS and the `hello`
+  program through [`tests/real_core.py`](../tests/real_core.py), so the
+  files that are released are the files that were tested.
+- **Version.** `<version>` is `project(... VERSION)` in `CMakeLists.txt`,
+  which is also `hostVersion` in `welcome`. A tag `v<version>` runs the
+  workflow for a release and must match it. Pushes and pull requests that
+  change the workflow or the packer run it too, and `workflow_dispatch` runs it
+  by hand.
+- **Result.** The artifact `anyps5-retro-host-<version>-unsigned` holds the
+  three zips, the three `.files` and `SHA256SUMS`, written as `shasum -a 256`
+  writes it and sorted by name as AnyPS5-ARM's `tools/release/sign.sh` sorts
+  it. `python3 tools/package_release.py --check <folder>` checks a folder of
+  them as a launcher checks a download, without the signature.
+
+**Where the maintainers sign.** The workflow holds no key, so `SHA256SUMS` is
+unsigned and nothing is published. A maintainer with the release key:
+
+1. Downloads the `unsigned` artifact.
+2. Runs `tools/release/sign.sh -o <folder> <folder>/*.zip <folder>/*.files`
+   from AnyPS5-ARM. It writes the same `SHA256SUMS` again (same lines, same
+   order) and `SHA256SUMS.sig`, `ed25519 <key id> <base64 signature>` a line,
+   with the keys listed in its `tools/release/release-signing.pub`, which are
+   the keys built into the launchers (`lib/core/release_keys.dart` in the
+   Flutter launcher).
+3. Publishes a GitHub release `v<version>` with the zips, the `.files`,
+   `SHA256SUMS` and `SHA256SUMS.sig`.
+
+On macOS the host and SwanStation must also carry a Developer ID signature with
+the hardened runtime, and the host must be notarized (protocol.md "macOS
+signing"). That signing changes the files, so it goes into the `package` job
+after the build and before `Pack`, where the workflow marks it; it needs the
+team's certificate as a secret, which this repository does not hold. Until it
+is added, the macOS zip carries only the linker's ad-hoc signature: it is not
+yet the release protocol.md describes, and Gatekeeper refuses a downloaded copy.

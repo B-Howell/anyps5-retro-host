@@ -1,0 +1,202 @@
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2026 AnyPS5 Desktop contributors
+
+# Builds a host release as protocol.md "Finding and checking the host" describes it: for each
+# system the host and SwanStation in anyps5-retro-host-<version>-<os>-<arch>.zip with its .files,
+# then SHA256SUMS over all of them. Each packed zip is unpacked again and must boot the real core.
+# SHA256SUMS is left unsigned: the maintainers sign it with the release key (docs/host.md
+# "Releases"). A tag v<version> must match the version in CMakeLists.txt.
+name: release
+on:
+  push:
+    branches: ['**']
+    tags: ['v*']
+    paths:
+      - .github/workflows/release.yml
+      - tools/package_release.py
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - tools/package_release.py
+  workflow_dispatch:
+permissions:
+  contents: read
+env:
+  NUGGET_COMMIT: 875bfcbe3ea5d1a0de0de0f3c88c9f977fb9abf4
+  SWANSTATION_COMMIT: 631f0fb31b809e0f889d7c551fe695788e39c1d3
+jobs:
+  version:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - id: version
+        name: Read the version and check the tag and the tested SwanStation commit
+        run: |
+          version="$(sed -n 's/^project(anyps5_retro_host VERSION \([0-9]*\.[0-9]*\.[0-9]*\) .*/\1/p' CMakeLists.txt)"
+          test -n "$version"
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "the tag $GITHUB_REF_NAME is not v$version, the version in CMakeLists.txt" >&2
+            exit 1
+          fi
+          grep -q "^  SWANSTATION_COMMIT: $SWANSTATION_COMMIT\$" .github/workflows/real-core.yml || {
+            echo "real-core.yml tests another SwanStation commit than this release ships" >&2
+            exit 1
+          }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  ps1-files:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends g++-mipsel-linux-gnu
+      - name: Fetch nugget
+        run: |
+          git init -q nugget
+          git -C nugget fetch -q --depth 1 https://github.com/pcsx-redux/nugget.git "$NUGGET_COMMIT"
+          git -C nugget checkout -q FETCH_HEAD
+          git -C nugget submodule update -q --init --depth 1 --recursive
+      - name: Build OpenBIOS and the hello program
+        run: |
+          make -C nugget/openbios -j4 PREFIX=mipsel-linux-gnu FORMAT=elf32-tradlittlemips BOOT_MODE=fast all
+          make -C nugget/psyqo/examples/hello -j4 PREFIX=mipsel-linux-gnu FORMAT=elf32-tradlittlemips all
+      - run: |
+          mkdir out
+          cp nugget/openbios/openbios.bin out/openbios.bin
+          test "$(stat -c %s out/openbios.bin)" -le 524288
+          truncate -s 524288 out/openbios.bin
+          cp nugget/psyqo/examples/hello/hello.ps-exe out/hello.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ps1-files-for-release
+          path: out
+
+  package:
+    needs: [version, ps1-files]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - system: windows-x64
+            os: windows-2022
+            host: build/Release/anyps5-retro-host.exe
+            core: swanstation/build/swanstation_libretro.dll
+            unpacked-host: anyps5-retro-host.exe
+            unpacked-core: swanstation_libretro.dll
+            python: python
+          - system: linux-x64
+            os: ubuntu-22.04
+            host: build/anyps5-retro-host
+            core: swanstation/build/swanstation_libretro.so
+            unpacked-host: anyps5-retro-host
+            unpacked-core: swanstation_libretro.so
+            python: python3
+          - system: macos-arm64
+            os: macos-14
+            host: build/anyps5-retro-host
+            core: swanstation/build/swanstation_libretro.dylib
+            unpacked-host: anyps5-retro-host
+            unpacked-core: swanstation_libretro.dylib
+            python: python3
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      CONFIGURE: >-
+        -DCMAKE_BUILD_TYPE=Release
+        -DCMAKE_POLICY_DEFAULT_CMP0091=NEW
+        -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
+        -DCMAKE_OSX_ARCHITECTURES=arm64
+        -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: ps1-files-for-release
+          path: ps1-files
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ninja-build libegl1 libgl1 libgles2 libegl-mesa0 mesa-utils
+      - name: Fetch SwanStation
+        run: |
+          git init -q swanstation
+          git -C swanstation fetch -q --depth 1 https://github.com/libretro/swanstation.git "$SWANSTATION_COMMIT"
+          git -C swanstation checkout -q FETCH_HEAD
+          git -C swanstation submodule update -q --init --depth 1 --recursive
+      - name: Build SwanStation
+        run: |
+          cmake -S swanstation -B swanstation/build $CONFIGURE
+          cmake --build swanstation/build --config Release --parallel 4
+      - name: Build the host
+        run: |
+          cmake -S . -B build $CONFIGURE -DANYPS5_RETRO_HOST_TESTS=OFF
+          cmake --build build --config Release
+      - if: runner.os == 'Windows'
+        name: Check that the Windows files need no Visual C++ runtime
+        run: |
+          python -m pip install --disable-pip-version-check -q pefile==2024.8.26
+          python - "${{ matrix.host }}" "${{ matrix.core }}" <<'EOF'
+          import sys
+          import pefile
+          for path in sys.argv[1:]:
+              names = [entry.dll.decode().lower() for entry in pefile.PE(path).DIRECTORY_ENTRY_IMPORT]
+              runtime = [name for name in names if name.startswith(('vcruntime', 'msvcp', 'api-ms-win-crt', 'ucrtbase'))]
+              print(path, names)
+              if runtime:
+                  sys.exit(f'{path} imports {runtime}; the release must not need the Visual C++ runtime')
+          EOF
+      # macOS: the maintainers' Developer ID signing and notarization of the host and of SwanStation
+      # go here, before packing, because signing changes the files the .files lists (docs/host.md
+      # "Releases").
+      - name: Pack
+        run: |
+          ${{ matrix.python }} tools/package_release.py --version "${{ needs.version.outputs.version }}" \
+            --system ${{ matrix.system }} --host ${{ matrix.host }} --core ${{ matrix.core }} \
+            --core-licence swanstation/LICENSE --host-commit "$GITHUB_SHA" \
+            --swanstation-commit "$SWANSTATION_COMMIT" --out release
+      - name: Unpack the zip and boot the real core from it
+        run: |
+          stem="anyps5-retro-host-${{ needs.version.outputs.version }}-${{ matrix.system }}"
+          ${{ matrix.python }} -c "import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])" "release/$stem.zip" unpacked
+          chmod +x "unpacked/${{ matrix.unpacked-host }}"
+          ${{ matrix.python }} tests/real_core.py --host "unpacked/${{ matrix.unpacked-host }}" \
+            --core "unpacked/${{ matrix.unpacked-core }}" --bios ps1-files/openbios.bin \
+            --program ps1-files/hello.exe --log real-core.log --picture real-core.png
+      - if: failure()
+        run: tail -200 real-core.log || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.system }}
+          path: release
+          if-no-files-found: error
+
+  sums:
+    needs: [version, package]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: release
+          merge-multiple: true
+      - name: Write SHA256SUMS and check the release
+        run: |
+          python3 tools/package_release.py --sums release release/*.zip release/*.files
+          python3 tools/package_release.py --check release
+          test "$(ls release/*.zip | wc -l)" -eq 3
+          (cd release && sha256sum -c SHA256SUMS)
+      # The maintainers sign SHA256SUMS here, with AnyPS5-ARM's tools/release/sign.sh and the
+      # release key, which writes SHA256SUMS.sig beside it (docs/host.md "Releases").
+      - uses: actions/upload-artifact@v4
+        with:
+          name: anyps5-retro-host-${{ needs.version.outputs.version }}-unsigned
+          path: release
+          if-no-files-found: error

@@ -14,6 +14,9 @@ SwanStation.
   (valid and invalid), for the host's and the launcher's conformance tests.
 - [tools/check_fixtures.py](tools/check_fixtures.py): checks the fixtures
   against the document. Run `python3 tools/check_fixtures.py`.
+- [tools/package_release.py](tools/package_release.py): packs and checks a
+  release; [docs/host.md](docs/host.md) "Releases" says how releases are built
+  and where the maintainers sign them.
 - [tests/conformance.py](tests/conformance.py): the fake launcher. It plays
   every fixture session that tests the host against a built host.
 
