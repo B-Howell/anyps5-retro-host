@@ -20,7 +20,8 @@
  * RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO before the next frame is drawn. While the system directory
  * holds fake-hold-load, retro_load_game waits after reading the scale, and while it holds
  * fake-hold-reset, context_reset waits, each writing fake-held-load or fake-held-reset there
- * first, so a test can act, and look at the host, between those steps. */
+ * first, so a test can act, and look at the host, between those steps. fake-hold-run does the same
+ * inside retro_run, so a test can act while a frame is being run. */
 
 #include <libretro.h>
 
@@ -360,6 +361,7 @@ RETRO_API void retro_run(void) {
   unsigned i;
   bool cross;
   input_poll();
+  hold_while_asked("run");
   if (environment(RETRO_ENVIRONMENT_GET_VARIABLE, &hang) && hang.value && strcmp(hang.value, "yes") == 0) {
     for (;;) {
 #ifdef _WIN32

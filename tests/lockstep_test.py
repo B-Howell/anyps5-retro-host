@@ -259,7 +259,7 @@ def play(options):
             if split['host'][0]['ram'] == split['guest'][0]['ram']:
                 raise c.Failed('a different input on port 2 left the same RAM hash')
             print('a different input on port 2 shows up in the next sync')
-            reentry(first)
+            reentry(first, match)
             protocol_errors(match)
 
         for peer in (first, second):
@@ -292,25 +292,57 @@ def refusals(peer, match):
     print('lockstep refuses option, connectedPorts and states it cannot write or read')
 
 
-def reentry(peer):
-    """Leaving and entering lockstep while steps are being run: no frame of the old count may send
-    its sync into the new one, which starts at 0."""
+def reentry(peer, match):
+    """Leaving and entering lockstep while a frame is being run: the host answers only once that
+    frame has ended, so its sync comes before the reply, nothing of the old count follows, and the
+    console does not move again until the new count's first step."""
+    system = Path(match.paths['system'])
+    hold, held = system / 'fake-hold-run', system / 'fake-held-run'
     start = peer.call('lockstep', {'check': 1, 'paced': False})['frame']
-    for frame in range(start, start + 500):
-        peer.step(frame, script(frame))
-    if peer.call('lockstep', False) is not True:
-        raise c.Failed('leaving lockstep did not reply true')
+    hold.write_bytes(b'')
+    held.unlink(missing_ok=True)
+    try:
+        for frame in range(start, start + 50):
+            peer.step(frame, script(frame))
+        deadline = time.monotonic() + 10
+        while not held.exists():
+            if time.monotonic() > deadline:
+                raise c.Failed('the fake core never held inside a frame')
+            time.sleep(0.01)
+        peer.log.clear()
+        peer.next_id += 1
+        leave = peer.next_id
+        peer.host.send_message({'type': 'call', 'id': leave, 'method': 'lockstep', 'args': False})
+        try:
+            early = peer.pump(lambda m: m.get('type') == 'reply' and m.get('id') == leave, 1.0)
+            raise c.Failed(f'lockstep false was answered while a frame was being run: {early}')
+        except c.Idle:
+            pass
+    finally:
+        hold.unlink(missing_ok=True)
+    reply = peer.pump(lambda m: m.get('type') == 'reply' and m.get('id') == leave, 10)
+    if reply.get('result') is not True:
+        raise c.Failed(f'leaving lockstep gave {reply}')
+    if peer.log != [start]:
+        raise c.Failed(f'the frame being run should send its sync before the reply; got {peer.log}')
+    peer.log.clear()
     if peer.call('lockstep', {'check': 1, 'paced': False}) != {'frame': 0}:
         raise c.Failed('entering lockstep again did not start at frame 0')
-    peer.log.clear()
-    peer.syncs.clear()
+    before = match.work / 'reentry-1.state'
+    after = match.work / 'reentry-2.state'
+    peer.call('saveState', {'path': str(before)})
+    time.sleep(0.3)
+    peer.call('saveState', {'path': str(after)})
     peer.drain()
     if peer.log:
-        raise c.Failed(f'syncs of the old count arrived after entering again: {peer.log[:5]}')
+        raise c.Failed(f'syncs arrived after leaving lockstep: {peer.log}')
+    if before.read_bytes() != after.read_bytes():
+        raise c.Failed('the console ran a frame in lockstep without a step')
+    peer.syncs.clear()
     advance([peer], 0, 10)
     if peer.log != list(range(10)):
         raise c.Failed(f'the new count sent syncs {peer.log}')
-    print('leaving and entering lockstep mid-run keeps the old frames out of the new count')
+    print('leaving lockstep waits for the frame being run; nothing of the old count follows')
 
 
 def protocol_errors(match):

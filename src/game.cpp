@@ -324,10 +324,20 @@ void Game::RunGame() {
       const double fps = fps_ > 1 && fps_ < 1000 ? fps_ : 60.0;
       frame_time = std::chrono::duration<double>(1.0 / fps);
     }
-    // Held for the whole frame, so entering or leaving lockstep happens between two frames.
-    std::unique_lock<std::timed_mutex> running(run_mutex_);
+    // in_frame_ marks the frame, so entering or leaving lockstep happens between two frames. While
+    // a call waits for that, no frame starts.
+    {
+      std::unique_lock<std::mutex> lock(mutex_);
+      if (fence_waiters_ > 0) {
+        lock.unlock();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        continue;
+      }
+      in_frame_ = true;
+    }
     const NextStep step = TakeStep(kStepWaitMs);
     if (step.lockstep && !step.input) {
+      EndFrame();
       quiet_since_ = NowMs();
       next = std::chrono::steady_clock::now();
       continue;
@@ -344,7 +354,7 @@ void Game::RunGame() {
     run();
     step_input_.reset();
     if (step.input) FinishStep(step.frame);
-    running.unlock();
+    EndFrame();
     {
       std::lock_guard<std::mutex> lock(mutex_);
       if (disc_.inserted && *disc_.inserted < disc_.paths.size()) disc_.played = disc_.paths[*disc_.inserted];
@@ -1073,11 +1083,26 @@ bool Game::Ready() const {
 }
 
 
+void Game::EndFrame() {
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    in_frame_ = false;
+  }
+  fence_signal_.notify_all();
+}
+
+bool Game::AwaitFrameEnd(std::unique_lock<std::mutex>& lock) {
+  ++fence_waiters_;
+  step_signal_.notify_all();
+  const bool between =
+      fence_signal_.wait_for(lock, std::chrono::milliseconds(kFrameFenceMs), [this] { return !in_frame_; });
+  --fence_waiters_;
+  return between;
+}
+
 std::optional<uint64_t> Game::Lockstep(const LockstepConfig& config) {
-  std::unique_lock<std::timed_mutex> running(run_mutex_, std::defer_lock);
-  if (!running.try_lock_for(std::chrono::milliseconds(kFrameFenceMs))) return std::nullopt;
-  std::lock_guard<std::mutex> lock(mutex_);
-  if (ended_) return std::nullopt;
+  std::unique_lock<std::mutex> lock(mutex_);
+  if (!AwaitFrameEnd(lock) || ended_) return std::nullopt;
   if (!lockstep_) {
     next_frame_ = 0;
     steps_.clear();
@@ -1088,10 +1113,8 @@ std::optional<uint64_t> Game::Lockstep(const LockstepConfig& config) {
 
 bool Game::LeaveLockstep() {
   {
-    std::unique_lock<std::timed_mutex> running(run_mutex_, std::defer_lock);
-    if (!running.try_lock_for(std::chrono::milliseconds(kFrameFenceMs))) return false;
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (ended_) return false;
+    std::unique_lock<std::mutex> lock(mutex_);
+    if (!AwaitFrameEnd(lock) || ended_) return false;
     lockstep_.reset();
     steps_.clear();
   }
@@ -1116,12 +1139,14 @@ Game::NextStep Game::TakeStep(int64_t wait_ms) {
   if (!lockstep_) return next;
   if (steps_.empty()) {
     step_signal_.wait_for(lock, std::chrono::milliseconds(wait_ms),
-                          [this] { return !lockstep_ || !steps_.empty() || state_request_ || stop_; });
+                          [this] {
+                            return !lockstep_ || !steps_.empty() || state_request_ || stop_ || fence_waiters_ > 0;
+                          });
   }
   if (!lockstep_) return next;
   next.lockstep = true;
   next.paced = lockstep_->paced;
-  if (steps_.empty() || state_request_) return next;
+  if (steps_.empty() || state_request_ || fence_waiters_ > 0) return next;
   next.frame = next_frame_++;
   next.input = steps_.front();
   steps_.pop_front();

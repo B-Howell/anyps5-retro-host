@@ -301,8 +301,16 @@ class Game {
   void ServeStateRequest();
   std::optional<StateResult> WriteState(const std::string& path);
   std::optional<StateResult> ReadState(const std::string& path);
-  // Held by the game's thread while it runs a frame (see Lockstep and LeaveLockstep).
-  std::timed_mutex run_mutex_;
+  // True while the game's thread runs a frame (see Lockstep and LeaveLockstep). Calls waiting for
+  // the frame to end count themselves in fence_waiters_, and no frame starts while one waits.
+  // Both are guarded by mutex_; fence_signal_ is notified when a frame ends.
+  bool in_frame_ = false;
+  int fence_waiters_ = 0;
+  std::condition_variable fence_signal_;
+  void EndFrame();
+  // With lock holding mutex_: waits up to 4 seconds for the frame being run to end; true when it
+  // has, and then no frame starts until lock is released.
+  bool AwaitFrameEnd(std::unique_lock<std::mutex>& lock);
   std::condition_variable step_signal_;
   std::condition_variable state_signal_;
   std::optional<LockstepConfig> lockstep_;
