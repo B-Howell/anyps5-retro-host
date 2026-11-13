@@ -163,10 +163,11 @@ through kqueue. On Windows a thread waits on the launcher's process handle.
   giving up in the middle of a message would read the next body as a length.
   A read that times out before a message begins raises `Idle`, after which
   reading again is safe; one that times out in the middle raises `Failed`,
-  which a caller must not read past. `real_core.py` waits out quiet spells by
+  which a caller must not read past; the Windows reader keeps a partial
+  message and applies the same write limit to it. `real_core.py` waits out quiet spells by
   catching `Idle` only.
-  [`tests/framing_test.py`](../tests/framing_test.py) checks that rule on a
-  socketpair, without the host, on Linux and macOS.
+  [`tests/framing_test.py`](../tests/framing_test.py) checks that rule
+  without the host, on a socketpair on Linux and macOS and on a pipe on Windows.
 - [`tests/fake_core.c`](../tests/fake_core.c) is the core the sessions run:
   640 × 480 frames, one option, `.m3u` playlists through the disc interface,
   a memory card, rumble while Cross is held, and a `fake_hang` option that

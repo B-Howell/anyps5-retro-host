@@ -80,6 +80,7 @@ jobs:
       - run: cmake -S . -B build
       - run: cmake --build build --config Release
       - run: ctest --test-dir build -C Release --output-on-failure
+      - run: python tests/framing_test.py
       - run: python tests/conformance.py --host build/Release/anyps5-retro-host.exe --core build/Release/fake_core.dll --log build/host.log
       - run: python tests/host_test.py --host build/Release/anyps5-retro-host.exe --core build/Release/fake_core.dll --log build/host.log
       - if: failure()

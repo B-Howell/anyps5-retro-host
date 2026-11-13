@@ -275,6 +275,7 @@ class WindowsHost:
         self.chunks = []
         self.arrived = threading.Condition()
         self.closed = False
+        self.begun = None
         threading.Thread(target=self.pump, daemon=True).start()
 
     def pump(self):
@@ -311,14 +312,22 @@ class WindowsHost:
                 size = struct.unpack('<I', self.buffer[:4])[0]
                 if len(self.buffer) >= 4 + size:
                     body, self.buffer = self.buffer[4:4 + size], self.buffer[4 + size:]
+                    self.begun = time.monotonic() if self.buffer else None
                     return json.loads(body.decode('utf-8')), []
             with self.arrived:
                 while not self.chunks and not self.closed:
-                    left = deadline - time.monotonic()
-                    if left <= 0:
-                        raise Idle('the host sent nothing in time')
+                    if self.buffer:
+                        left = self.begun + WRITE_LIMIT - time.monotonic()
+                        if left <= 0:
+                            raise Failed('the host did not finish a message within the write limit')
+                    else:
+                        left = deadline - time.monotonic()
+                        if left <= 0:
+                            raise Idle('the host sent nothing in time')
                     self.arrived.wait(left)
                 if self.chunks:
+                    if not self.buffer:
+                        self.begun = time.monotonic()
                     self.buffer += b''.join(self.chunks)
                     self.chunks.clear()
                 elif self.closed:
