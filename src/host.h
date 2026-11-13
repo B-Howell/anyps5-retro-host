@@ -27,7 +27,9 @@ class Host final : public GameEvents {
  public:
   explicit Host(Channel& channel) : channel_(channel) {}
 
-  // Serves the connection until it ends; returns the process exit code.
+  // Serves the connection until it ends, with the game stopped and its memory card written;
+  // returns the process exit code. The watch thread and the launcher watchers still refer to
+  // the host, so the caller ends the process with ExitNow rather than destroying it.
   int Run();
 
   // The launcher has gone (end-of-stream, its exit, or SIGTERM): stop the game as shutdown does.
@@ -69,6 +71,10 @@ class Host final : public GameEvents {
 
   mutable std::mutex game_mutex_;
   std::shared_ptr<Game> game_;
+  // A released game whose core is stuck: kept until the host exits, since destroying it would
+  // wait for its thread.
+  std::shared_ptr<Game> abandoned_;
+  std::mutex shutdown_mutex_;
   std::atomic<int64_t> stop_requested_at_{-1};
   std::atomic<int64_t> leaving_since_{-1};
   std::atomic<bool> launcher_gone_{false};

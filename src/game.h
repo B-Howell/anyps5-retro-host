@@ -75,7 +75,8 @@ class Game {
   void Fail(const std::string& error, const std::string& code);
 
   // Joins the game's thread if it finishes within timeout_ms; false when it has not (a core that
-  // is stuck in retro_run never does).
+  // is stuck in retro_run never does). A game whose thread has not finished must not be
+  // destroyed: the destructor joins it.
   bool Join(int64_t timeout_ms);
 
   // Milliseconds of running, not paused, time since the core's last frame (or since start,
@@ -132,6 +133,7 @@ class Game {
   std::thread thread_;
 
   mutable std::mutex mutex_;
+  std::mutex join_mutex_;
   std::condition_variable finished_signal_;
   bool ready_ = false;
   bool ended_ = false;

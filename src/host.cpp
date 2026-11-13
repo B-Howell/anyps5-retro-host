@@ -222,7 +222,10 @@ Host::Reply Host::Dispatch(const std::string& method, const Json& args) {
     Need(args.IsNull(), "release takes no argument.");
     if (!game || !game->Ended()) return Result(Json(nullptr));
     Reply reply = Result(Json(nullptr));
-    reply.exit_after = !game->Join(1000);
+    if (!game->Join(1000)) {
+      abandoned_ = game;
+      reply.exit_after = true;
+    }
     {
       std::lock_guard<std::mutex> lock(game_mutex_);
       game_.reset();
@@ -307,6 +310,7 @@ std::shared_ptr<Game> Host::CurrentGame() const {
 }
 
 int Host::ShutDown(int code) {
+  std::lock_guard<std::mutex> once(shutdown_mutex_);
   int64_t none = -1;
   leaving_since_.compare_exchange_strong(none, NowMs());
   if (auto game = CurrentGame()) {

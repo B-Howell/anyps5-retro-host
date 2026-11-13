@@ -59,12 +59,16 @@ def fill(value, paths):
     return value
 
 
+def is_number(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
 def same_type(expected, actual):
     if isinstance(expected, bool) or isinstance(actual, bool):
         return isinstance(expected, bool) and isinstance(actual, bool)
-    if isinstance(expected, (int, float)):
-        return isinstance(actual, (int, float))
-    return type(expected) is type(actual) or expected is None or actual is None
+    if is_number(expected):
+        return is_number(actual)
+    return type(expected) is type(actual)
 
 
 def compare(expected, actual, loose, where=''):
@@ -80,17 +84,18 @@ def compare(expected, actual, loose, where=''):
                 raise Failed(f'{where}.{key} is missing')
             compare(value, actual[key], loose, f'{where}.{key}'.lstrip('.'))
         return
-    if expected != actual and not (isinstance(expected, (int, float)) and isinstance(actual, (int, float))
-                                   and not isinstance(expected, bool) and expected == actual):
+    if isinstance(expected, list):
+        if not isinstance(actual, list) or len(actual) != len(expected):
+            raise Failed(f'{where}: expected {expected!r}, got {actual!r}')
+        for at, (want, got) in enumerate(zip(expected, actual)):
+            compare(want, got, loose, f'{where}[{at}]')
+        return
+    if not same_type(expected, actual) or expected != actual:
         raise Failed(f'{where or "message"}: expected {expected!r}, got {actual!r}')
 
 
 class PosixHost:
-    trace = None
-
-    def __init__(self, program, log):
-        self.buffer = b''
-        self.descriptors = []
+    def __init__(self, program, log, trace=None):
         ours, theirs = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
         self.socket = ours
         child = theirs.fileno()
@@ -99,10 +104,10 @@ class PosixHost:
             os.dup2(child, 3)
 
         command = [str(program), '--ipc-fd', '3', '--parent-pid', str(os.getpid())]
-        if self.trace:
+        if trace:
             # strace takes the shell's process id with exec, so the host's parent is the pid it is given.
             command = ['sh', '-c', 'exec strace -f -qq -o "$1" -e trace=%network -- "$0" --ipc-fd 3 --parent-pid $$',
-                       str(program), str(self.trace)]
+                       str(program), str(trace)]
         self.process = subprocess.Popen(command,
                                         pass_fds=tuple(sorted({child, 3})), preexec_fn=to_three, stdout=log,
                                         stderr=log)
@@ -126,28 +131,43 @@ class PosixHost:
         body = json.dumps(message, separators=(',', ':'), ensure_ascii=False).encode('utf-8')
         self.send(struct.pack('<I', len(body)) + body, descriptors)
 
-    def read(self, timeout):
-        deadline = time.monotonic() + timeout
-        while True:
-            if len(self.buffer) >= 4:
-                size = struct.unpack('<I', self.buffer[:4])[0]
-                if len(self.buffer) >= 4 + size:
-                    body, self.buffer = self.buffer[4:4 + size], self.buffer[4 + size:]
-                    descriptors, self.descriptors = self.descriptors, []
-                    return json.loads(body.decode('utf-8')), descriptors
+    def receive(self, size, deadline, first):
+        # protocol.md "Framing": a read never asks for more than is left of the current part, and
+        # descriptors belong to the message whose first length byte they came with.
+        data = b''
+        descriptors = []
+        while len(data) < size:
             left = deadline - time.monotonic()
             if left <= 0 or not select.select([self.socket], [], [], left)[0]:
                 raise Failed('the host sent nothing in time')
             try:
-                data, control, _, _ = self.socket.recvmsg(65536, socket.CMSG_SPACE(4 * 4))
+                chunk, control, flags, _ = self.socket.recvmsg(size - len(data), socket.CMSG_SPACE(4 * 4))
             except ConnectionResetError:
-                data, control = b'', []
+                chunk, control, flags = b'', [], 0
+            if flags & socket.MSG_CTRUNC:
+                raise Failed('the host sent truncated ancillary data')
             for level, kind, payload in control:
-                if level == socket.SOL_SOCKET and kind == socket.SCM_RIGHTS:
-                    self.descriptors += array.array('i', payload[:len(payload) - len(payload) % 4]).tolist()
-            if not data:
+                if level != socket.SOL_SOCKET or kind != socket.SCM_RIGHTS:
+                    raise Failed('the host sent control data other than SCM_RIGHTS')
+                received = array.array('i', payload[:len(payload) - len(payload) % 4]).tolist()
+                if not (first and not data):
+                    for fd in received:
+                        os.close(fd)
+                    raise Failed('a descriptor came after the first byte of a message')
+                descriptors += received
+            if not chunk:
                 raise Failed('the host closed the connection')
-            self.buffer += data
+            data += chunk
+        return data, descriptors
+
+    def read(self, timeout):
+        deadline = time.monotonic() + timeout
+        header, descriptors = self.receive(4, deadline, True)
+        size = struct.unpack('<I', header)[0]
+        if not 2 <= size <= 1 << 20:
+            raise Failed(f'the host sent a length of {size}')
+        body, _ = self.receive(size, deadline, False)
+        return json.loads(body.decode('utf-8')), descriptors
 
     def exits(self, timeout):
         try:
@@ -163,11 +183,26 @@ class PosixHost:
 
 
     def ring(self, message, descriptors):
+        import fcntl
         if len(descriptors) != 1:
             raise Failed(f'a ring came with {len(descriptors)} descriptors')
         descriptor = descriptors[0]
-        if os.fstat(descriptor).st_size < message['bytes']:
-            raise Failed('the ring is smaller than its bytes')
+        size = os.fstat(descriptor).st_size
+        if SYSTEM == 'linux':
+            seals = fcntl.fcntl(descriptor, fcntl.F_GET_SEALS)
+            if size != message['bytes'] or not seals & fcntl.F_SEAL_SHRINK or not seals & fcntl.F_SEAL_SEAL:
+                raise Failed(f'the Linux ring is {size} bytes with seals {seals:#x}')
+        else:
+            if fcntl.fcntl(descriptor, fcntl.F_GETFL) & os.O_ACCMODE != os.O_RDWR:
+                raise Failed('the macOS ring is not open for reading and writing')
+            if not message['bytes'] <= size < message['bytes'] + mmap.PAGESIZE:
+                raise Failed(f'the macOS ring is {size} bytes')
+            try:
+                os.ftruncate(descriptor, message['bytes'])
+            except OSError:
+                pass
+            else:
+                raise Failed('the macOS ring took a second ftruncate')
         memory = mmap.mmap(descriptor, message['bytes'], mmap.MAP_SHARED, mmap.PROT_READ | mmap.PROT_WRITE)
         os.close(descriptor)
         return Ring(memory)
@@ -256,6 +291,19 @@ class WindowsHost:
         view = kernel.MapViewOfFile(section, 0x0004 | 0x0002, 0, 0, message['bytes'])
         if not view:
             raise Failed(f'MapViewOfFile failed ({ctypes.get_last_error()})')
+
+        class Region(ctypes.Structure):
+            _fields_ = [('BaseAddress', ctypes.c_void_p), ('AllocationBase', ctypes.c_void_p),
+                        ('AllocationProtect', ctypes.wintypes.DWORD), ('PartitionId', ctypes.wintypes.WORD),
+                        ('RegionSize', ctypes.c_size_t), ('State', ctypes.wintypes.DWORD),
+                        ('Protect', ctypes.wintypes.DWORD), ('Type', ctypes.wintypes.DWORD)]
+
+        region = Region()
+        kernel.VirtualQuery.argtypes = [ctypes.c_void_p, ctypes.POINTER(Region), ctypes.c_size_t]
+        if not kernel.VirtualQuery(view, ctypes.byref(region), ctypes.sizeof(region)):
+            raise Failed('VirtualQuery failed')
+        if region.State != 0x1000 or region.RegionSize < message['bytes']:
+            raise Failed(f'the ring is not committed memory of {message["bytes"]} bytes')
         return Ring((ctypes.c_ubyte * message['bytes']).from_address(view))
 
     def exits(self, timeout):
@@ -290,20 +338,32 @@ class Ring:
                 'slotBytes': self.u64(16), 'pixelFormat': self.u32(32)}
 
     def latest(self):
-        index = self.u32(24)
-        if index == NONE:
+        # The launcher's read of protocol.md "Frame ring": pin the slot through reading, then load
+        # its fields once and check them against the slot size.
+        for _ in range(3):
+            index = self.u32(24)
+            if index == NONE:
+                return None
+            if index > 2:
+                raise Failed(f'latest is {index}')
+            struct.pack_into('<I', self.memory, 28, index)
+            if self.u32(24) == index:
+                break
+        else:
             return None
-        if index > 2:
-            raise Failed(f'latest is {index}')
         at = 40 + 24 * index
-        return {'width': self.u32(at), 'height': self.u32(at + 4), 'visible': self.u32(at + 8),
+        slot = {'width': self.u32(at), 'height': self.u32(at + 4), 'visible': self.u32(at + 8),
                 'epoch': self.u32(at + 12), 'sequence': self.u64(at + 16)}
+        if not (1 <= slot['width'] <= 8192 and 1 <= slot['height'] <= 8192) or \
+                slot['width'] * slot['height'] * 4 > self.u64(16) or slot['visible'] not in (0, 1):
+            raise Failed(f'the latest slot is {slot}')
+        return slot
 
 
-def play(session, program, core, log):
+def play(session, program, core, log, trace=None):
     work = Path(tempfile.mkdtemp(prefix='retro-host-'))
     paths = place(work, core)
-    host = (WindowsHost if WINDOWS else PosixHost)(program, log)
+    host = WindowsHost(program, log) if WINDOWS else PosixHost(program, log, trace)
     ring = None
     steps = session['steps']
     poll_id = 1000
@@ -363,9 +423,8 @@ def play(session, program, core, log):
             if message.get('type') == 'frame':
                 if ring is None:
                     raise Failed('a frame came before any ring')
-                slot = ring.latest()
-                if slot is None or not (1 <= slot['width'] <= 8192 and 1 <= slot['height'] <= 8192):
-                    raise Failed(f'the latest slot is {slot}')
+                if ring.latest() is None:
+                    raise Failed('a frame was announced with no frame in the ring')
         outcome = session['outcome']
         if outcome == 'protocolError':
             code = host.exits(10)
@@ -402,8 +461,6 @@ def main():
     options.host = options.host.resolve()
     options.core = options.core.resolve()
     log = open(options.log, 'ab') if options.log else subprocess.DEVNULL
-    if options.strace:
-        PosixHost.trace = options.strace
     failures = 0
     played = 0
     for path in sorted(options.sessions.glob('*.json')):
@@ -414,7 +471,8 @@ def main():
             continue
         played += 1
         try:
-            play(session, options.host, options.core, log)
+            trace = options.strace.with_name(f'{options.strace.name}.{path.stem}') if options.strace else None
+            play(session, options.host, options.core, log, trace)
             print(f'ok    {path.stem}')
         except Failed as problem:
             failures += 1

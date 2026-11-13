@@ -47,6 +47,8 @@ AudioOutput::~AudioOutput() { Close(); }
 
 void AudioOutput::Open(double sample_rate) {
   Close();
+  paused_ = false;
+  std::lock_guard<std::mutex> lock(device_mutex_);
   if (!(sample_rate >= 8000 && sample_rate <= 192000)) return;
   auto device = std::make_unique<Device>();
   device->owner = this;
@@ -67,11 +69,12 @@ void AudioOutput::Open(double sample_rate) {
     ma_pcm_rb_uninit(&device->buffer);
     return;
   }
+  ma_device_set_master_volume(&device->device, muted_ ? 0.0f : level_.load());
   device_ = std::move(device);
-  SetVolume(level_, muted_);
 }
 
 void AudioOutput::Close() {
+  std::lock_guard<std::mutex> lock(device_mutex_);
   if (!device_) return;
   ma_device_uninit(&device_->device);
   ma_pcm_rb_uninit(&device_->buffer);
@@ -79,6 +82,7 @@ void AudioOutput::Close() {
 }
 
 void AudioOutput::Write(const int16_t* samples, size_t frames) {
+  std::lock_guard<std::mutex> lock(device_mutex_);
   if (!device_ || paused_) return;
   while (frames > 0) {
     ma_uint32 count = static_cast<ma_uint32>(std::min<size_t>(frames, 1u << 16));
@@ -92,6 +96,7 @@ void AudioOutput::Write(const int16_t* samples, size_t frames) {
 }
 
 void AudioOutput::SetVolume(float level, bool muted) {
+  std::lock_guard<std::mutex> lock(device_mutex_);
   level_ = level;
   muted_ = muted;
   if (device_) ma_device_set_master_volume(&device_->device, muted ? 0.0f : level);

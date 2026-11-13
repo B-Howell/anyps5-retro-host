@@ -76,6 +76,7 @@ Game::Game(GameConfig config, PixelFormat format, GameEvents& events, AudioOutpu
 
 Game::~Game() {
   stop_ = true;
+  std::lock_guard<std::mutex> join(join_mutex_);
   if (thread_.joinable()) thread_.join();
 }
 
@@ -669,6 +670,7 @@ bool Game::Join(int64_t timeout_ms) {
     return false;
   }
   lock.unlock();
+  std::lock_guard<std::mutex> join(join_mutex_);
   if (thread_.joinable()) thread_.join();
   return true;
 }

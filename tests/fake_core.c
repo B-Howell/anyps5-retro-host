@@ -4,9 +4,16 @@
 /* A libretro core for the host's tests. It draws 640x480 frames, plays silence, offers one
  * option, takes .m3u playlists through the disc control interface, keeps a 128 KiB memory card
  * and rumbles port 1's large motor while Cross is held. A system directory without fake-bios.bin
- * makes it log what SwanStation logs without a BIOS. */
+ * makes it log what SwanStation logs without a BIOS. Setting fake_hang to "yes" makes retro_run
+ * never return, as a stuck core would. */
 
 #include <libretro.h>
+
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <unistd.h>
+#endif
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -82,6 +89,14 @@ static struct retro_core_option_v2_definition definitions[] = {
      NULL,
      {{"blue", "Blue"}, {"green", "Green"}, {NULL, NULL}},
      "blue"},
+    {"fake_hang",
+     "Hang",
+     NULL,
+     "Makes retro_run never return.",
+     NULL,
+     NULL,
+     {{"no", "No"}, {"yes", "Yes"}, {NULL, NULL}},
+     "no"},
     {NULL, NULL, NULL, NULL, NULL, NULL, {{NULL, NULL}}, NULL},
 };
 static struct retro_core_options_v2 options = {NULL, definitions};
@@ -215,10 +230,20 @@ RETRO_API unsigned retro_get_region(void) { return RETRO_REGION_NTSC; }
 
 RETRO_API void retro_run(void) {
   struct retro_variable color = {"fake_color", NULL};
+  struct retro_variable hang = {"fake_hang", NULL};
   uint32_t fill;
   unsigned i;
   bool cross;
   input_poll();
+  if (environment(RETRO_ENVIRONMENT_GET_VARIABLE, &hang) && hang.value && strcmp(hang.value, "yes") == 0) {
+    for (;;) {
+#ifdef _WIN32
+      Sleep(1000);
+#else
+      sleep(1);
+#endif
+    }
+  }
   environment(RETRO_ENVIRONMENT_GET_VARIABLE, &color);
   fill = color.value && strcmp(color.value, "green") == 0 ? 0x0000C000u : 0x000000C0u;
   for (i = 0; i < WIDTH * HEIGHT; ++i) pixels[i] = fill + (frame_count & 0xFF) * 0x10000u;

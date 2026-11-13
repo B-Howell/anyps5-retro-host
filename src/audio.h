@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 
 struct ma_device;
 
@@ -35,6 +36,7 @@ class AudioOutput {
 
  private:
   static void Fill(::ma_device* device, void* out, const void* in, uint32_t frames);
+  std::mutex device_mutex_;
   std::unique_ptr<Device> device_;
   std::atomic<float> level_{1.0f};
   std::atomic<bool> muted_{false};

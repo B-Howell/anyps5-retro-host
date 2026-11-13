@@ -19,5 +19,7 @@ int main(int argc, char** argv) {
   if (!channel) return 64;
   retro_host::Host host(*channel);
   retro_host::WatchLauncher(*arguments, [&host] { host.LauncherGone(); });
-  return host.Run();
+  const int code = host.Run();
+  std::fflush(nullptr);
+  retro_host::ExitNow(code);
 }
