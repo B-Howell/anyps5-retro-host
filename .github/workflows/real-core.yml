@@ -47,6 +47,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - os: ubuntu-22.04
+            core: swanstation/build/swanstation_libretro.so
+            host: build/anyps5-retro-host
+            python: python3
           - os: ubuntu-24.04
             core: swanstation/build/swanstation_libretro.so
             host: build/anyps5-retro-host
@@ -95,6 +99,6 @@ jobs:
       - if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: real-core-${{ runner.os }}
+          name: real-core-${{ matrix.os }}
           path: build/real-core.png
           if-no-files-found: ignore
