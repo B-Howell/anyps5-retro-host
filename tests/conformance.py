@@ -25,6 +25,7 @@ WINDOWS = os.name == 'nt'
 SYSTEM = 'windows' if WINDOWS else ('macos' if sys.platform == 'darwin' else 'linux')
 IGNORED = {'frame', 'rumble'}
 NONE = 0xFFFFFFFF
+WRITE_LIMIT = 5.0
 
 
 class Failed(Exception):
@@ -155,7 +156,9 @@ class PosixHost:
 
     def receive(self, size, deadline, first):
         # protocol.md "Framing": a read never asks for more than is left of the current part, and
-        # descriptors belong to the message whose first length byte they came with.
+        # descriptors belong to the message whose first length byte they came with. The deadline
+        # is for a message to begin; once its first byte is here the host has the write limit to
+        # send the rest, and giving up sooner would leave the stream in the middle of a message.
         data = b''
         descriptors = []
         while len(data) < size:
@@ -188,6 +191,8 @@ class PosixHost:
             if problem:
                 close_all(descriptors)
                 raise Failed(problem)
+            if first and not data:
+                deadline = max(deadline, time.monotonic() + WRITE_LIMIT)
             data += chunk
         return data, descriptors
 
@@ -198,7 +203,7 @@ class PosixHost:
             size = struct.unpack('<I', header)[0]
             if not 2 <= size <= 1 << 20:
                 raise Failed(f'the host sent a length of {size}')
-            body, _ = self.receive(size, deadline, False)
+            body, _ = self.receive(size, max(deadline, time.monotonic() + WRITE_LIMIT), False)
             return json.loads(body.decode('utf-8')), descriptors
         except (Failed, ValueError):
             close_all(descriptors)

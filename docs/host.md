@@ -40,8 +40,23 @@ through kqueue. On Windows a thread waits on the launcher's process handle.
   draws into the host's framebuffer, which grows with the core's largest
   geometry; each frame is read back with `glReadPixels`, turned the right way
   up, and published to the ring like a software frame. `status.hardware` is
-  then `true` and the internal resolution option works. When no context can be
-  made, the host turns the request down and SwanStation draws in software;
+  then `true` and the internal resolution option works. On macOS the host asks
+  CGL for an accelerated renderer (`kCGLPFAAccelerated`) first and, only when
+  there is none, for Apple's software renderer
+  (`kCGLPFARendererID` = `kCGLRendererGenericFloatID`, "Apple Software
+  Renderer" in `CGLRenderers.h`, OpenGL 4.1 core). A Mac whose GPU has an
+  OpenGL renderer takes the first; a Mac virtual machine whose paravirtual GPU offers Metal but
+  no OpenGL renderer takes the second. GitHub's `macos-latest` runner is such a
+  machine: its only CGL renderer is `0x01020400` (`kCGLRendererGenericFloatID`
+  under `kCGLRendererIDMatchingMask`), not accelerated, and asking for
+  acceleration fails with `kCGLBadPixelFormat`. This matches Linux, where EGL
+  takes Mesa's software rasterizer when there is no GPU driver, so on all
+  systems `status.hardware` means the core draws with its OpenGL renderer,
+  whether a GPU or the CPU runs it. The software renderer keeps the internal
+  resolution option and the core's OpenGL accuracy settings working; the
+  host does not prefer SwanStation's own software renderer over it, as no
+  system has a way to know which is faster on a given machine. When no context
+  can be made, the host turns the request down and SwanStation draws in software;
   `resolutionError` then says a scale above 1x needs the GPU. A context that was
   made but then fails ends the game with `errorCode` `other`: when no framebuffer
   can be made for the core's largest size, when a later geometry change cannot
@@ -105,7 +120,10 @@ through kqueue. On Windows a thread waits on the launcher's process handle.
   socketpair at descriptor 3, or two pipes passed with a handle list on
   Windows), plays every session whose `tests` includes `host`, and checks the
   outcome. `--strace` (Linux) records the host's network calls for the CI
-  check.
+  check. A read's timeout is for a message to begin: once its first byte has
+  come, the reader waits the 5-second write limit of protocol.md "Framing" for
+  the rest, because giving up in the middle of a message would read the next
+  body as a length.
 - [`tests/fake_core.c`](../tests/fake_core.c) is the core the sessions run:
   640 × 480 frames, one option, `.m3u` playlists through the disc interface,
   a memory card, rumble while Cross is held, and a `fake_hang` option that
@@ -131,8 +149,11 @@ through kqueue. On Windows a thread waits on the launcher's process handle.
   two pictures a second or more apart are not black and differ (the
   program animates its background), and that `hardware` and `resolutionError`
   agree (a machine without an OpenGL context draws in software and must say
-  so). The `hello` picture is one flat colour, so it cannot show which way up
-  a picture is. After a clean `stop` the test therefore starts a second game,
+  so). With `--expect-gpu`, which CI passes on Linux and macOS, the test also
+  fails when the host made no OpenGL context, so neither system can slip back
+  to the core's software renderer unnoticed. The Windows runner makes no
+  OpenGL 3.3 context, so there the core draws in software. The `hello`
+  picture is one flat colour, so it cannot show which way up a picture is. After a clean `stop` the test therefore starts a second game,
   a program `make_test_disc.py` writes itself (`corner_program`), which fills
   the screen blue and only its top-left corner red; the test checks those
   colours near all four corners, which a picture turned upside down, mirrored
