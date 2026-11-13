@@ -1,0 +1,93 @@
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2026 AnyPS5 Desktop contributors
+
+# Boots the real SwanStation core through the host on each system. The BIOS and the program are
+# built here from pcsx-redux's nugget (MIT): OpenBIOS and the psyqo "hello" example. No Sony BIOS
+# or game is used.
+name: real-core
+on: [push, pull_request]
+permissions:
+  contents: read
+env:
+  NUGGET_COMMIT: 875bfcbe3ea5d1a0de0de0f3c88c9f977fb9abf4
+  SWANSTATION_COMMIT: 631f0fb31b809e0f889d7c551fe695788e39c1d3
+jobs:
+  ps1-files:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends g++-mipsel-linux-gnu
+      - name: Fetch nugget
+        run: |
+          git init -q nugget
+          git -C nugget fetch -q --depth 1 https://github.com/pcsx-redux/nugget.git "$NUGGET_COMMIT"
+          git -C nugget checkout -q FETCH_HEAD
+          git -C nugget submodule update -q --init --depth 1 --recursive
+      - name: Build OpenBIOS and the hello program
+        run: |
+          make -C nugget/openbios -j4 PREFIX=mipsel-linux-gnu FORMAT=elf32-tradlittlemips all
+          make -C nugget/psyqo/examples/hello -j4 PREFIX=mipsel-linux-gnu FORMAT=elf32-tradlittlemips all
+      - name: Pad OpenBIOS to the 512 KiB a BIOS chip holds, which SwanStation requires
+        run: |
+          mkdir out
+          cp nugget/openbios/openbios.bin out/openbios.bin
+          test "$(stat -c %s out/openbios.bin)" -le 524288
+          truncate -s 524288 out/openbios.bin
+          cp nugget/psyqo/examples/hello/hello.ps-exe out/hello.exe
+          cp nugget/LICENSE out/LICENSE
+          ls -l out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ps1-files
+          path: out
+
+  run:
+    needs: ps1-files
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            core: swanstation/build/swanstation_libretro.so
+            host: build/anyps5-retro-host
+            python: python3
+          - os: macos-latest
+            core: swanstation/build/swanstation_libretro.dylib
+            host: build/anyps5-retro-host
+            python: python3
+          - os: windows-2022
+            core: swanstation/build/swanstation_libretro.dll
+            host: build/Release/anyps5-retro-host.exe
+            python: python
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: ps1-files
+          path: ps1-files
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ninja-build libegl1 libgl1 libgles2 libegl-mesa0 mesa-utils
+      - name: Fetch SwanStation
+        run: |
+          git init -q swanstation
+          git -C swanstation fetch -q --depth 1 https://github.com/libretro/swanstation.git "$SWANSTATION_COMMIT"
+          git -C swanstation checkout -q FETCH_HEAD
+          git -C swanstation submodule update -q --init --depth 1 --recursive
+      - name: Build SwanStation
+        run: |
+          cmake -S swanstation -B swanstation/build -DCMAKE_BUILD_TYPE=Release
+          cmake --build swanstation/build --config Release --parallel 4
+      - name: Build the host
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --config Release
+      - name: Run the real core
+        run: ${{ matrix.python }} tests/real_core.py --host ${{ matrix.host }} --core ${{ matrix.core }} --bios ps1-files/openbios.bin --program ps1-files/hello.exe --log build/real-core.log
+      - if: failure()
+        run: tail -200 build/real-core.log || true
