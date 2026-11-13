@@ -53,6 +53,7 @@ struct Egl {
   unsigned (*MakeCurrent)(Display, Surface, Surface, Context) = nullptr;
   const char* (*QueryString)(Display, int32_t) = nullptr;
   Display (*GetPlatformDisplay)(uint32_t, void*, const intptr_t*) = nullptr;
+  unsigned (*ReleaseThread)() = nullptr;
 };
 
 class EglGpu final : public Gpu {
@@ -65,6 +66,10 @@ class EglGpu final : public Gpu {
       if (surface_) egl_.DestroySurface(display_, surface_);
       egl_.Terminate(display_);
     }
+    // The last EGL call on this thread: libglvnd before 1.5 (Ubuntu 22.04 has 1.4) leaves this
+    // thread's state under a pthread key whose destructor is in libEGL, so unloading libEGL with
+    // that state still set crashes the thread when it exits.
+    if (egl_.ReleaseThread) egl_.ReleaseThread();
     if (opengl_) dlclose(opengl_);
     if (egl_.library) dlclose(egl_.library);
   }
@@ -82,7 +87,7 @@ class EglGpu final : public Gpu {
         !load(egl_.CreateContext, "eglCreateContext") || !load(egl_.DestroyContext, "eglDestroyContext") ||
         !load(egl_.CreatePbufferSurface, "eglCreatePbufferSurface") ||
         !load(egl_.DestroySurface, "eglDestroySurface") || !load(egl_.MakeCurrent, "eglMakeCurrent") ||
-        !load(egl_.QueryString, "eglQueryString")) {
+        !load(egl_.QueryString, "eglQueryString") || !load(egl_.ReleaseThread, "eglReleaseThread")) {
       return false;
     }
     egl_.GetPlatformDisplay = reinterpret_cast<decltype(egl_.GetPlatformDisplay)>(dlsym(egl_.library, "eglGetPlatformDisplay"));
