@@ -1,0 +1,75 @@
+name: diag-u2204
+on: push
+permissions:
+  contents: read
+env:
+  NUGGET_COMMIT: 875bfcbe3ea5d1a0de0de0f3c88c9f977fb9abf4
+  SWANSTATION_COMMIT: 631f0fb31b809e0f889d7c551fe695788e39c1d3
+jobs:
+  ps1-files:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends g++-mipsel-linux-gnu
+      - run: |
+          git init -q nugget
+          git -C nugget fetch -q --depth 1 https://github.com/pcsx-redux/nugget.git "$NUGGET_COMMIT"
+          git -C nugget checkout -q FETCH_HEAD
+          git -C nugget submodule update -q --init --depth 1 --recursive
+          make -C nugget/openbios -j4 PREFIX=mipsel-linux-gnu FORMAT=elf32-tradlittlemips BOOT_MODE=fast all
+          make -C nugget/psyqo/examples/hello -j4 PREFIX=mipsel-linux-gnu FORMAT=elf32-tradlittlemips all
+          mkdir out
+          cp nugget/openbios/openbios.bin out/openbios.bin
+          truncate -s 524288 out/openbios.bin
+          cp nugget/psyqo/examples/hello/hello.ps-exe out/hello.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ps1-files
+          path: out
+  run:
+    needs: ps1-files
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: ps1-files
+          path: ps1-files
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ninja-build libegl1 libgl1 libgles2 libegl-mesa0 mesa-utils gdb
+      - run: dpkg -l | grep -E 'mesa|libegl|libglvnd|libgl1' ; uname -a
+      - run: |
+          git init -q swanstation
+          git -C swanstation fetch -q --depth 1 https://github.com/libretro/swanstation.git "$SWANSTATION_COMMIT"
+          git -C swanstation checkout -q FETCH_HEAD
+          git -C swanstation submodule update -q --init --depth 1 --recursive
+          cmake -S swanstation -B swanstation/build -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          cmake --build swanstation/build --parallel 4
+      - run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          cmake --build build
+      - name: Run with core dumps
+        continue-on-error: true
+        run: |
+          sudo mkdir -p /tmp/cores && sudo chmod 777 /tmp/cores
+          sudo sysctl -w kernel.core_pattern=/tmp/cores/core.%e.%p
+          ulimit -c unlimited
+          EGL_LOG_LEVEL=debug python3 tests/real_core.py --host build/anyps5-retro-host --core swanstation/build/swanstation_libretro.so --bios ps1-files/openbios.bin --program ps1-files/hello.exe --log build/real-core.log
+      - if: always()
+        run: |
+          tail -60 build/real-core.log || true
+          ls -l /tmp/cores || true
+          for c in /tmp/cores/core.*; do
+            [ -f "$c" ] || continue
+            gdb -batch -ex 'info sharedlibrary' -ex 'thread apply all bt full' build/anyps5-retro-host "$c" 2>&1 | head -600
+          done
+      - name: Run with ASan host
+        if: always()
+        continue-on-error: true
+        run: |
+          cmake -S . -B asan -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_FLAGS="-fsanitize=address -fno-omit-frame-pointer" -DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address
+          cmake --build asan
+          ASAN_OPTIONS=detect_leaks=0:abort_on_error=0 python3 tests/real_core.py --host asan/anyps5-retro-host --core swanstation/build/swanstation_libretro.so --bios ps1-files/openbios.bin --program ps1-files/hello.exe --log asan/real-core.log || true
+          grep -n -E 'AddressSanitizer|ERROR|SUMMARY' -A60 asan/real-core.log | head -300 || true
+          tail -30 asan/real-core.log
