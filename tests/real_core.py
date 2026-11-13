@@ -37,10 +37,14 @@ system.mkdir()
 shutil.copy(options.bios, system / 'openbios.bin')
 disc = work / 'program.cue'
 make_test_disc.build(options.program, disc.with_suffix('.bin'), disc)
+corner = work / 'corner.exe'
+corner.write_bytes(make_test_disc.corner_program())
+corner_disc = work / 'corner.cue'
+make_test_disc.build(corner, corner_disc.with_suffix('.bin'), corner_disc)
 log = open(options.log, 'wb')
 host = (c.WindowsHost if c.WINDOWS else c.PosixHost)(host_path, log)
 ids = iter(range(1, 1 << 30))
-state = {'ring': None, 'frames': 0, 'pinged': time.monotonic(), 'pings': iter(range(1, 1 << 30))}
+state = {'ring': None, 'frames': 0, 'epoch': None, 'pinged': time.monotonic(), 'pings': iter(range(1, 1 << 30))}
 
 
 def pump(until=None, timeout=5.0):
@@ -108,7 +112,9 @@ def picture():
     else:
         return None
     at = 40 + 24 * index
-    width, height = ring.u32(at), ring.u32(at + 4)
+    width, height, epoch = ring.u32(at), ring.u32(at + 4), ring.u32(at + 12)
+    if epoch != state['epoch']:
+        return None
     if not (1 <= width <= 8192 and 1 <= height <= 8192) or width * height * 4 > ring.slot_bytes:
         raise c.Failed(f'slot {index} is {width}x{height}')
     offset = 4096 + index * ring.slot_bytes
@@ -116,6 +122,55 @@ def picture():
     if options.picture:
         save_png(width, height, data, ring.snapshot['pixelFormat'] == 2)
     return width, height, data
+
+
+def start(game):
+    """Starts game at 2x and waits for its first frame; returns the status then."""
+    result = call('start', {'core': str(Path(options.core).resolve()), 'system': str(system),
+                            'saves': str(work / 'saves'), 'disc': str(game),
+                            'options': {'swanstation_BIOS_PathNTSCU': 'openbios.bin',
+                                        'swanstation_BIOS_PathNTSCJ': 'openbios.bin',
+                                        'swanstation_BIOS_PathPAL': 'openbios.bin',
+                                        'swanstation_GPU_ResolutionScale': '2'}})
+    state['epoch'] = result['epoch']
+    status = wait_status(lambda s: s['ready'] or s['ended'], 60, 'the game was not ready')
+    if status['ended']:
+        raise c.Failed(f'the game ended at start: {status["errorCode"]!r} {status.get("error")!r}')
+    print(f'ready: hardware={status["hardware"]} resolutionError={status["resolutionError"]!r}')
+    if not status['hardware'] and not status['resolutionError']:
+        raise c.Failed('software drawing at 2x must explain itself in resolutionError')
+    if status['hardware'] and status['resolutionError']:
+        raise c.Failed('GPU drawing must leave resolutionError empty')
+    return status
+
+
+def stop():
+    call('stop')
+    status = wait_status(lambda s: s['ended'], 10, 'the game did not end after stop')
+    if status['errorCode']:
+        raise c.Failed(f'stop ended with {status["errorCode"]!r}')
+    call('release')
+
+
+def colour(seen, x, y):
+    """The red, green and blue of the pixel at x, y of a picture from picture()."""
+    width, _, data = seen
+    at = (y * width + x) * 4
+    red, green, blue = data[at], data[at + 1], data[at + 2]
+    return (blue, green, red) if state['ring'].snapshot['pixelFormat'] == 2 else (red, green, blue)
+
+
+def is_corner_picture(seen):
+    """The corner program's picture the right way up: red only near the top-left corner."""
+    width, height, _ = seen
+    red, blue = (255, 0, 0), (0, 0, 255)
+    left, right, top, bottom = width // 20, width - 1 - width // 20, height // 20, height - 1 - height // 20
+    return (near(colour(seen, left, top), red) and near(colour(seen, right, top), blue)
+            and near(colour(seen, left, bottom), blue) and near(colour(seen, right, bottom), blue))
+
+
+def near(got, want):
+    return all(abs(a - b) < 48 for a, b in zip(got, want))
 
 
 def save_png(width, height, data, bgra):
@@ -137,18 +192,7 @@ try:
     host.send_message({'type': 'hello', 'minVersion': 1, 'maxVersion': 1, 'pixelFormats': ['bgra8', 'rgba8']})
     pump(lambda m: m.get('type') == 'welcome')
     call('volume', {'level': 0.0, 'muted': True})
-    call('start', {'core': str(Path(options.core).resolve()), 'system': str(system), 'saves': str(work / 'saves'),
-                   'disc': str(disc),
-                   'options': {'swanstation_BIOS_PathNTSCU': 'openbios.bin', 'swanstation_BIOS_PathNTSCJ': 'openbios.bin',
-                               'swanstation_BIOS_PathPAL': 'openbios.bin', 'swanstation_GPU_ResolutionScale': '2'}})
-    status = wait_status(lambda s: s['ready'] or s['ended'], 60, 'the game was not ready')
-    if status['ended']:
-        raise c.Failed(f'the game ended at start: {status["errorCode"]!r} {status.get("error")!r}')
-    print(f'ready: hardware={status["hardware"]} resolutionError={status["resolutionError"]!r}')
-    if not status['hardware'] and not status['resolutionError']:
-        raise c.Failed('software drawing at 2x must explain itself in resolutionError')
-    if status['hardware'] and status['resolutionError']:
-        raise c.Failed('GPU drawing must leave resolutionError empty')
+    status = start(disc)
     before = state['frames']
     drain(10)
     shown = state['frames'] - before
@@ -167,11 +211,22 @@ try:
         raise c.Failed('no two pictures that are not black differ: the game is not running')
     if status['hardware'] and (width < 640 or height < 480):
         raise c.Failed('a 2x GPU picture is at least 640x480')
-    call('stop')
-    status = wait_status(lambda s: s['ended'], 10, 'the game did not end after stop')
-    if status['errorCode']:
-        raise c.Failed(f'stop ended with {status["errorCode"]!r}')
-    call('release')
+    stop()
+    # A second game, on a new context where the host has the GPU: the corner program shows whether
+    # pictures reach the ring the right way up and in the right colours.
+    start(corner_disc)
+    seen = None
+    deadline = time.monotonic() + 15
+    while not (seen and is_corner_picture(seen)) and time.monotonic() < deadline:
+        drain(1)
+        seen = picture() or seen
+    if not seen:
+        raise c.Failed('the corner program showed no picture')
+    print(f'corner picture {seen[0]}x{seen[1]}: top-left {colour(seen, seen[0] // 20, seen[1] // 20)}, '
+          f'bottom-right {colour(seen, seen[0] - 1 - seen[0] // 20, seen[1] - 1 - seen[1] // 20)}')
+    if not is_corner_picture(seen):
+        raise c.Failed('the corner program is not red at the top-left only: the picture is flipped or its colours are wrong')
+    stop()
     host.send_message({'type': 'shutdown'})
     code = host.exits(15)
     if code != 0:

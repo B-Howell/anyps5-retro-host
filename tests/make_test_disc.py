@@ -95,6 +95,45 @@ def text(value, length):
     return value.encode('ascii').ljust(length, b' ')
 
 
+def corner_program():
+    """A PS-EXE that fills the 320x240 screen blue and the 64x32 block at its top-left corner red,
+    then waits forever, so a test can tell which way up a picture is. Each GPU port write (GP1 at
+    0x1F801814, GP0 at 0x1F801810) is followed by a short wait, as the GPU takes one command at a
+    time."""
+    code = []
+
+    def word(op, rs, rt, imm):
+        code.append(op << 26 | rs << 21 | rt << 16 | imm & 0xFFFF)
+
+    def write(value, port):
+        word(0x0F, 0, 9, value >> 16)  # lui $t1
+        word(0x0D, 9, 9, value)  # ori $t1, $t1
+        word(0x2B, 8, 9, port)  # sw $t1, port($t0)
+        word(0x09, 0, 10, 0x4000)  # addiu $t2, $zero, 0x4000
+        word(0x09, 10, 10, -1)  # addiu $t2, $t2, -1
+        word(0x05, 10, 0, -2)  # bne $t2, $zero, back one
+        code.append(0)
+
+    word(0x0F, 0, 8, 0x1F80)  # lui $t0, 0x1F80
+    word(0x0D, 8, 8, 0x1810)  # ori $t0, $t0, 0x1810
+    # GP1: reset, 320x240 NTSC 15-bit, display start 0,0, standard ranges, display on.
+    for value in (0x00000000, 0x08000001, 0x05000000, 0x06C60260, 0x07040010, 0x03000000):
+        write(value, 4)
+    # GP0 fill rectangle: colour (0x02BBGGRR), top-left (y << 16 | x), size (h << 16 | w).
+    for value in (0x02FF0000, 0x00000000, 0x00F00140, 0x020000FF, 0x00000000, 0x00200040):
+        write(value, 0)
+    code += [0x1000FFFF, 0]  # b self
+    body = b''.join(struct.pack('<I', value) for value in code)
+    body = body.ljust(-(-len(body) // SECTOR) * SECTOR, b'\0')
+    header = bytearray(SECTOR)
+    header[0:8] = b'PS-X EXE'
+    struct.pack_into('<4I', header, 0x10, 0x80010000, 0, 0x80010000, len(body))
+    struct.pack_into('<2I', header, 0x30, 0x801FFFF0, 0)
+    marker = b'Sony Computer Entertainment Inc. for North America area'
+    header[0x4C:0x4C + len(marker)] = marker
+    return bytes(header) + body
+
+
 def build(program, bin_path, cue_path):
     exe = Path(program).read_bytes()
     if exe[:8] != b'PS-X EXE':
@@ -115,7 +154,7 @@ def build(program, bin_path, cue_path):
     pvd[120:124] = both16(1)
     pvd[124:128] = both16(1)
     pvd[128:132] = both16(SECTOR)
-    pvd[132:140] = both32(len(path_l) - 2)
+    pvd[132:140] = both32(len(path_l))
     struct.pack_into('<I', pvd, 140, 18)
     struct.pack_into('>I', pvd, 148, 19)
     pvd[156:190] = record(b'\x00', root_lba, SECTOR, True)
