@@ -328,11 +328,11 @@ absolute or UNC name as it is.
 
 **Known risk: UNC names.** On Windows, a `.cue` or `.m3u` can name a UNC
 path (`\\server\share\track.bin`), and the host opens it as written. Windows
-then connects to that server and signs in to it with the player's Windows
-account, which hands the server the account name and a response it can try
-to crack offline. A shared `.cue` or `.m3u` can do this without the player
-seeing it. Version 1 does not prevent it; a player should only open `.cue`
-and `.m3u` files from sources they trust.
+then connects to that server and tries to sign in to it with the player's
+Windows account. When that sign-in uses NTLM, the server gets the account name
+and a response it can try to crack offline. A shared `.cue` or `.m3u` can
+do this without the player seeing it. Version 1 does not prevent it; a player
+should only open `.cue` and `.m3u` files from sources they trust.
 
 ## Messages
 
