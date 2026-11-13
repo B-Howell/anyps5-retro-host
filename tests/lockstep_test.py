@@ -122,12 +122,20 @@ def advance(peers, first, count, inputs=scripted, batch=120, timeout=120):
         for frame in range(start, end):
             for peer in peers:
                 peer.step(frame, inputs(peer, frame))
-        for peer in peers:
-            while end - 1 not in peer.syncs:
+        # Read every host in turn: one left unread blocks on a full socket and, after protocol.md's
+        # 5-second write limit, exits.
+        waiting = list(peers)
+        while waiting:
+            for peer in list(waiting):
+                if end - 1 in peer.syncs:
+                    waiting.remove(peer)
+                    continue
                 if time.monotonic() > deadline:
                     raise c.Failed(f'{peer.name}: no sync for frame {end - 1}')
-                peer.pump(lambda m: m.get('type') == 'sync', max(0.1, deadline - time.monotonic()))
-            peer.drain()
+                try:
+                    peer.pump(lambda m: m.get('type') == 'sync', 0.05)
+                except c.Idle:
+                    pass
     return {peer.name: [peer.syncs[f] for f in range(first, first + count)] for peer in peers}
 
 

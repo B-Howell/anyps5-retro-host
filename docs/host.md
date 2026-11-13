@@ -9,7 +9,7 @@ The host implements [protocol version 1](protocol.md) with the `ps1` and
 | Thread | Does |
 | --- | --- |
 | Control (`main`) | Reads each message, answers calls and pings in order, and enforces the connection's order rules |
-| Game | Started once the `start` reply is sent. Opens the core and the disc, then `retro_init`, `retro_load_game` and `retro_run` paced to the core's frame rate, or in lockstep one `retro_run` per step. Publishes frames, sends `ring`, `frame`, `rumble` and `sync`, and saves and loads states between frames |
+| Game | Started once the `start` reply is sent. Opens the core and the disc, then `retro_init`, `retro_load_game` and `retro_run` paced to the core's frame rate, or in lockstep one `retro_run` per step. Publishes frames, sends `ring`, `frame`, `rumble` and `sync`, and saves and loads states between frames. It marks each frame (`in_frame_`), and the control thread's `lockstep` calls wait on a condition variable for the frame to end, so the change falls between two frames |
 | Watch | Every 100 ms: the 5 s write limit, the stall and first-frame game limits, the `stop` limit, and the 10 s limit for leaving |
 
 On Linux and macOS a fourth thread waits for `SIGTERM` (sent by
@@ -185,7 +185,9 @@ through kqueue. On Windows a thread waits on the launcher's process handle.
   largest geometry 1024 × 512 times the scale), and tells the host of a new
   scale through `SET_SYSTEM_AV_INFO` before the next frame. `fake-hold-load`
   and `fake-hold-reset` files make it wait after reading the scale in
-  `retro_load_game` and in `context_reset`, so a test can act between them.
+  `retro_load_game` and in `context_reset`, so a test can act between them;
+  `fake-hold-run` makes it wait inside `retro_run`, so a test can act while a
+  frame is being run.
 - [`tests/host_test.py`](../tests/host_test.py) covers what the fixtures do
   not: a stuck core (the stall limit, then `release` replying and the host
   exiting), a core that is not a library and a missing disc (each ending the
@@ -205,7 +207,11 @@ through kqueue. On Windows a thread waits on the launcher's process handle.
   frame, then a saved state loaded back and replayed on one, and loaded into
   a newly started game on the other; every frame's `sync` must match. With
   the fake core it also checks that input reaches the console, the refusals
-  of lockstep and its protocol errors. With `--bios` and `--program` it runs
+  of lockstep and its protocol errors, and, holding the fake core inside a
+  frame, that leaving lockstep is answered only once that frame has ended and
+  that nothing of the old frame count follows. It reads every host in turn
+  while it waits, since an unread host exits at the 5-second write limit.
+  With `--bios` and `--program` it runs
   the real SwanStation on the `make_test_disc.py` disc, which the
   `real-core` workflow does for 600 frames on each system. For lockstep the
   fake core keeps four words of "system RAM" (the frame count, a mix of every
