@@ -85,6 +85,7 @@ jobs:
             core: swanstation/build/swanstation_libretro.dll
             unpacked-host: anyps5-retro-host.exe
             unpacked-core: swanstation_libretro.dll
+            ring-access: build/Release/ring_access.dll
             python: python
           - system: linux-x64
             os: ubuntu-22.04
@@ -92,6 +93,7 @@ jobs:
             core: swanstation/build/swanstation_libretro.so
             unpacked-host: anyps5-retro-host
             unpacked-core: swanstation_libretro.so
+            ring-access: build/ring_access.so
             python: python3
           - system: macos-arm64
             os: macos-14
@@ -99,6 +101,7 @@ jobs:
             core: swanstation/build/swanstation_libretro.dylib
             unpacked-host: anyps5-retro-host
             unpacked-core: swanstation_libretro.dylib
+            ring-access: build/ring_access.so
             python: python3
     runs-on: ${{ matrix.os }}
     defaults:
@@ -134,7 +137,7 @@ jobs:
           cmake --build swanstation/build --config Release --parallel 4
       - name: Build the host
         run: |
-          cmake -S . -B build $CONFIGURE -DANYPS5_RETRO_HOST_TESTS=OFF
+          cmake -S . -B build $CONFIGURE
           cmake --build build --config Release
       - if: runner.os == 'Windows'
         name: Check that the Windows files need no Visual C++ runtime
@@ -164,6 +167,7 @@ jobs:
           stem="anyps5-retro-host-${{ needs.version.outputs.version }}-${{ matrix.system }}"
           ${{ matrix.python }} -c "import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])" "release/$stem.zip" unpacked
           chmod +x "unpacked/${{ matrix.unpacked-host }}"
+          cp "${{ matrix.ring-access }}" unpacked/
           ${{ matrix.python }} tests/real_core.py --host "unpacked/${{ matrix.unpacked-host }}" \
             --core "unpacked/${{ matrix.unpacked-core }}" --bios ps1-files/openbios.bin \
             --program ps1-files/hello.exe --log real-core.log --picture real-core.png
