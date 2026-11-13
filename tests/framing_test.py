@@ -78,6 +78,9 @@ def finish(host, far, writer):
     writer.join()
     if c.WINDOWS:
         os.close(far)
+        with host.arrived:
+            host.arrived.wait_for(lambda: host.closed)
+        os.close(host.from_host)
     else:
         far.close()
         host.socket.close()
