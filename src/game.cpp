@@ -264,6 +264,7 @@ void Game::RunGame() {
   auto next = std::chrono::steady_clock::now();
   int64_t last_card_check = NowMs();
   while (end_code.empty() && !stop_) {
+    if (gpu_) gpu_->Pump();
     if (NowMs() - last_card_check >= kCardSaveMs) {
       SaveCard();
       last_card_check = NowMs();

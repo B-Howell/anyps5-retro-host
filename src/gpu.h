@@ -34,6 +34,10 @@ class Gpu {
   // Releases the framebuffer; called before the context goes away.
   void ReleaseFramebuffer();
 
+  // Answers the messages the system sends to the context's window, where it needs one; called on
+  // the game's thread between frames, so the window never looks hung to other programs.
+  virtual void Pump() {}
+
  protected:
   bool LoadFunctions();
 
