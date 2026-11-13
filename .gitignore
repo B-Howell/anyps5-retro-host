@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2026 AnyPS5 Desktop contributors
+
+/build/
+__pycache__/

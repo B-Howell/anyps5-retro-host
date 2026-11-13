@@ -201,7 +201,10 @@
         }
       },
       "anyValueFor": [
-        "id"
+        "id",
+        "result.options",
+        "result.hardware",
+        "result.aspect"
       ]
     },
     {
@@ -277,7 +280,10 @@
         }
       },
       "anyValueFor": [
-        "id"
+        "id",
+        "result.options",
+        "result.hardware",
+        "result.aspect"
       ]
     },
     {

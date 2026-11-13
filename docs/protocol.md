@@ -53,9 +53,12 @@ killing. It never uses the `pid` in [`welcome`](#welcome) for those. A
 connection or listening socket. The only channel the host has is the one the
 launcher hands it. Reading a game or BIOS file that the operating system
 serves from a network share (SMB, NFS) is ordinary file access, not a
-network connection under this rule. The host repository's CI checks that the
-host opens no sockets while it runs the conformance sessions (for example
-with `strace -f -e trace=%network` on Linux).
+network connection under this rule, and neither is playing sound through the
+system's sound service over its local socket (PulseAudio or PipeWire on
+Linux). The host repository's CI traces the host's network calls with
+`strace -f -e trace=%network` on Linux while it runs the conformance
+sessions, and fails on any `AF_INET`, `AF_INET6`, `AF_PACKET` or
+`AF_NETLINK` socket, and on any `bind` or `listen`.
 
 ### Starting the host
 
@@ -152,9 +155,9 @@ storage: from its own directory on Windows and Linux, and from
   host with a known fault cannot be put back in its place.
 
 On Windows the launcher hashes each file from a handle it opened without
-`FILE_SHARE_WRITE` or `FILE_SHARE_DELETE`, and keeps that handle open until
-the host has answered the first `start`. So the file it checked is the file
-that runs. On Linux the launcher hashes the host executable from a
+`FILE_SHARE_WRITE` or `FILE_SHARE_DELETE`, and keeps those handles open
+until the first game's `status` shows `ready` or `ended`; the host has loaded
+the core by then. So the file it checked is the file that runs. On Linux the launcher hashes the host executable from a
 descriptor it opened with `O_CLOEXEC` at a number above 3 (moved there with
 `F_DUPFD_CLOEXEC` if it came out lower, so the `dup2` to descriptor 3 cannot
 replace it), and starts the host through that same
@@ -426,6 +429,7 @@ log. These codes are defined:
 | `argument` | The argument is missing, the wrong type, or outside the range this document gives |
 | `busy` | `start` was called while a game is loaded |
 | `start` | The game could not be started; `message` says why |
+| `tooLarge` | The result would not fit in one message (1 MiB); this does not happen with reasonable data |
 
 The host MUST reply to every call within 5 seconds. Long work, such as
 loading a game, runs after the reply, and `status` reports how it is going.
@@ -562,7 +566,7 @@ Loads and starts a PS1 game.
 | `core` | path | The SwanStation library the launcher checked |
 | `disc` | path | A `.cue`, `.chd`, `.pbp` or `.m3u` file |
 | `system` | path | The core's system directory (BIOS files) |
-| `saves` | path | Where memory cards are kept; the host creates it if needed |
+| `saves` | path | Where memory cards are kept; the host creates it if needed. Memory card 1 is the file `<disc's name without its extension>.srm` in it, as libretro frontends name it, and is checked for changes every 5 seconds between frames, also while paused, and written whenever the game ends. A card file the host cannot read is left as it is and never written over |
 | `options` | object of strings, optional | Core option values saved by the player, by key, including the internal resolution (`swanstation_GPU_ResolutionScale`). Unknown keys and values are ignored |
 | `initialDisc` | integer 0 to 127, optional | Only for an `.m3u`: the index of the playlist entry to insert at boot. With any other `disc` it is an `argument` error |
 
@@ -581,7 +585,12 @@ Errors:
 - `busy`, if a game is loaded, running or ended. The launcher calls
   `release` for an ended game before the next `start`.
 - `argument`.
-- `start`, if the core cannot be loaded or the disc file cannot be opened.
+- `start`, if this host has already started its last game (see above).
+
+The host replies before it opens the core or the disc, so a reply always comes
+within the time limit. A core that cannot be loaded, or that is not a libretro
+version 1 core, ends the game with `errorCode` `core`; a disc file that cannot
+be opened ends it with `errorCode` `disc`.
 
 ### status
 
@@ -614,9 +623,9 @@ No argument. Returns `null` when no game is loaded, or:
 | `errorCode` | Meaning |
 | --- | --- |
 | `""` | The game has not ended, or ended without an error (it was stopped) |
-| `bios` | No usable BIOS was found in `system` |
+| `bios` | No BIOS was found in `system`, the way the core looks for one. A file the core takes as a BIOS but that is damaged shows as `didNotStart` instead |
 | `disc` | The disc, or a file it names, could not be read |
-| `core` | The core failed while loading or running the game |
+| `core` | The core could not be loaded, or failed while loading or running the game |
 | `stalled` | The game stopped producing frames (see [Timeouts](#timeouts)) |
 | `didNotStart` | The game produced no first frame in time |
 | `frameTooLarge` | The game's frame was larger than 8192 × 8192 |
@@ -630,8 +639,10 @@ launcher's client reports it.
 Each option has `title` (string), `values` (array of strings), `labels`
 (array of strings, the same length as `values`), `selected` (index into
 `values` of the value chosen, which may still be pending), `activeValue` (the
-value in use now) and `restart` (true when a change only takes effect when the
-game is started again).
+value the host gives the core now; a core's own per-game compatibility
+settings can still override it) and `restart` (true when a change only takes
+effect when the game is started again; until then the host keeps giving the
+core the value the game started with).
 
 `discs` has `labels` (array of strings), `inserted` (index of the inserted
 disc, or null while the tray is open), `insertedDiscPath` (string or null),
@@ -686,6 +697,11 @@ The game MUST end within 5 seconds of the call.
 No argument. Forgets an ended game, so `status` returns `null` and a new
 `start` can follow. It does nothing while the game is still running. Returns
 `null`.
+
+A game that ended by a [game limit](#timeouts) may have left its core stuck
+inside `retro_run`, where the host cannot unload it. Then the host sends the
+reply to `release` and exits. No game is loaded at that point, so the
+launcher does not show an error, and it starts a new host for the next game.
 
 ## Frame ring
 
@@ -896,7 +912,19 @@ test provides on its own system:
 - Steps from the fake are sent as written. Steps from the side under test are
   what it must send. A fake host's `welcome` carries its real process id.
 - The side under test may also send `ping`, `pong` and `input` at any time.
-  A test ignores those unless a step names them.
+  A test ignores those unless a step names them. A host under test also
+  sends `frame` (one per published frame) and `rumble` (as its core asks),
+  so a test ignores those too unless the next step names one.
+- When the host is under test, a `ring` step's `header` is checked only for
+  `magic`, `version`, `slotCount`, `headerBytes`, `slotBytes` and
+  `pixelFormat`. The host keeps publishing, so by the time a test reads the
+  ring, the other fields have moved on. At each `frame` step the test checks
+  the slot named by `latest`, as the [launcher's checks](#checks-the-launcher-makes)
+  do.
+- A host under test runs whatever core the test provides as `${core}`. The
+  host repository's CI uses a small test core, not SwanStation. So a status
+  reply that a host is tested on lists the fields that depend on the core
+  (`result.options`, `result.hardware`, `result.aspect`) in `anyValueFor`.
 - `steps` run in order. Each step is one of:
 
 | Step | Meaning |

@@ -1,0 +1,82 @@
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2026 AnyPS5 Desktop contributors
+
+name: host
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          persist-credentials: false
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ninja-build strace
+      - run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+      - run: cmake --build build
+      - run: ctest --test-dir build --output-on-failure
+      - name: Conformance sessions, with the host's network calls traced
+        run: python3 tests/conformance.py --host build/anyps5-retro-host --core build/fake_core.so --log build/host.log --strace build/network.trace
+      - run: python3 tests/host_test.py --host build/anyps5-retro-host --core build/fake_core.so --log build/host.log
+      - name: The host opens no network socket and listens on nothing (protocol.md, "Network")
+        run: |
+          if cat build/network.trace* | grep -E 'socket\((AF_INET|AF_INET6|AF_PACKET|AF_NETLINK)|(^| )(listen|bind)\('; then
+            exit 1
+          fi
+      - if: failure()
+        run: tail -200 build/host.log || true
+
+  thread-sanitizer:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          persist-credentials: false
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ninja-build
+      - run: >-
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
+          "-DCMAKE_CXX_FLAGS=-fsanitize=thread -g -O1" "-DCMAKE_C_FLAGS=-fsanitize=thread -g -O1"
+      - run: cmake --build build
+      - name: Host tests and conformance sessions under ThreadSanitizer
+        env:
+          TSAN_OPTIONS: halt_on_error=1 exitcode=66
+        run: |
+          setarch "$(uname -m)" -R python3 tests/host_test.py --host build/anyps5-retro-host --core build/fake_core.so --log build/host.log
+          setarch "$(uname -m)" -R python3 tests/conformance.py --host build/anyps5-retro-host --core build/fake_core.so --log build/host.log
+          if grep -q "WARNING: ThreadSanitizer" build/host.log; then grep -A40 "WARNING: ThreadSanitizer" build/host.log; exit 1; fi
+      - if: failure()
+        run: tail -200 build/host.log || true
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          persist-credentials: false
+      - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+      - run: cmake --build build
+      - run: ctest --test-dir build --output-on-failure
+      - run: python3 tests/conformance.py --host build/anyps5-retro-host --core build/fake_core.so --log build/host.log
+      - run: python3 tests/host_test.py --host build/anyps5-retro-host --core build/fake_core.so --log build/host.log
+      - if: failure()
+        run: tail -200 build/host.log || true
+
+  windows:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          persist-credentials: false
+      - run: cmake -S . -B build
+      - run: cmake --build build --config Release
+      - run: ctest --test-dir build -C Release --output-on-failure
+      - run: python tests/conformance.py --host build/Release/anyps5-retro-host.exe --core build/Release/fake_core.dll --log build/host.log
+      - run: python tests/host_test.py --host build/Release/anyps5-retro-host.exe --core build/Release/fake_core.dll --log build/host.log
+      - if: failure()
+        shell: bash
+        run: tail -200 build/host.log || true
