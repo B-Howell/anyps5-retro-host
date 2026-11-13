@@ -119,6 +119,7 @@ def main():
     parser.add_argument('names', nargs='*')
     options = parser.parse_args()
     log = open(options.log, 'ab') if options.log else c.subprocess.DEVNULL
+    c.load_atomics(options.core.resolve())
     failures = 0
     tests = [test for test in (stuck_core, many_games) if not options.names or test.__name__ in options.names]
     for test in tests:

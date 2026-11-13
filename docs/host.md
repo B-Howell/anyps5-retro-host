@@ -63,4 +63,18 @@ through kqueue. On Windows a thread waits on the launcher's process handle.
   check.
 - [`tests/fake_core.c`](../tests/fake_core.c) is the core the sessions run:
   640 × 480 frames, one option, `.m3u` playlists through the disc interface,
-  a memory card, and rumble while Cross is held.
+  a memory card, rumble while Cross is held, and a `fake_hang` option that
+  makes `retro_run` never return.
+- [`tests/host_test.py`](../tests/host_test.py) covers what the fixtures do
+  not: a stuck core (the stall limit, then `release` replying and the host
+  exiting), and eight games in a row with `volume`, `pause` and `stop` calls in
+  between. Run it like `conformance.py`.
+- [`tests/ring_access.c`](../tests/ring_access.c) gives the fake launcher the
+  sequentially consistent loads and stores of `latest` and `reading` that
+  protocol.md asks for; Python cannot make them on shared memory itself. It
+  is built next to `fake_core`, where both scripts look for it.
+- CI runs everything on Linux, macOS (arm64) and Windows, and the Linux tests
+  again under ThreadSanitizer. GCC 11's ThreadSanitizer reports a false
+  "double lock" in `Game::Join`: libstdc++ 11 waits with
+  `pthread_cond_clockwait`, which that version does not intercept. Use GCC 12
+  or later, or clang 14 or later.

@@ -5,6 +5,7 @@
 
 import argparse
 import array
+import ctypes
 import json
 import mmap
 import os
@@ -28,6 +29,27 @@ NONE = 0xFFFFFFFF
 
 class Failed(Exception):
     pass
+
+
+ATOMICS = None
+
+
+def load_atomics(core):
+    global ATOMICS
+    name = 'ring_access.dll' if WINDOWS else 'ring_access.so'
+    ATOMICS = ctypes.CDLL(str(core.parent / name))
+    ATOMICS.ring_load.restype = ctypes.c_uint32
+    ATOMICS.ring_load.argtypes = [ctypes.c_void_p]
+    ATOMICS.ring_store.restype = None
+    ATOMICS.ring_store.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+
+
+def close_all(descriptors):
+    for fd in descriptors:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
 
 
 def runs_here(session):
@@ -141,33 +163,45 @@ class PosixHost:
             if left <= 0 or not select.select([self.socket], [], [], left)[0]:
                 raise Failed('the host sent nothing in time')
             try:
-                chunk, control, flags, _ = self.socket.recvmsg(size - len(data), socket.CMSG_SPACE(4 * 4))
+                chunk, control, flags, _ = self.socket.recvmsg(size - len(data), socket.CMSG_SPACE(4 * 4),
+                                                               getattr(socket, 'MSG_CMSG_CLOEXEC', 0))
             except ConnectionResetError:
                 chunk, control, flags = b'', [], 0
-            if flags & socket.MSG_CTRUNC:
-                raise Failed('the host sent truncated ancillary data')
+            problem = None
             for level, kind, payload in control:
                 if level != socket.SOL_SOCKET or kind != socket.SCM_RIGHTS:
-                    raise Failed('the host sent control data other than SCM_RIGHTS')
+                    problem = 'the host sent control data other than SCM_RIGHTS'
+                    continue
                 received = array.array('i', payload[:len(payload) - len(payload) % 4]).tolist()
-                if not (first and not data):
+                if not WINDOWS and not hasattr(socket, 'MSG_CMSG_CLOEXEC'):
+                    import fcntl
                     for fd in received:
-                        os.close(fd)
-                    raise Failed('a descriptor came after the first byte of a message')
+                        fcntl.fcntl(fd, fcntl.F_SETFD, fcntl.FD_CLOEXEC)
                 descriptors += received
-            if not chunk:
-                raise Failed('the host closed the connection')
+                if not (first and not data):
+                    problem = 'a descriptor came after the first byte of a message'
+            if flags & socket.MSG_CTRUNC:
+                problem = 'the host sent truncated ancillary data'
+            if not chunk and problem is None:
+                problem = 'the host closed the connection'
+            if problem:
+                close_all(descriptors)
+                raise Failed(problem)
             data += chunk
         return data, descriptors
 
     def read(self, timeout):
         deadline = time.monotonic() + timeout
         header, descriptors = self.receive(4, deadline, True)
-        size = struct.unpack('<I', header)[0]
-        if not 2 <= size <= 1 << 20:
-            raise Failed(f'the host sent a length of {size}')
-        body, _ = self.receive(size, deadline, False)
-        return json.loads(body.decode('utf-8')), descriptors
+        try:
+            size = struct.unpack('<I', header)[0]
+            if not 2 <= size <= 1 << 20:
+                raise Failed(f'the host sent a length of {size}')
+            body, _ = self.receive(size, deadline, False)
+            return json.loads(body.decode('utf-8')), descriptors
+        except (Failed, ValueError):
+            close_all(descriptors)
+            raise
 
     def exits(self, timeout):
         try:
@@ -205,7 +239,7 @@ class PosixHost:
                 raise Failed('the macOS ring took a second ftruncate')
         memory = mmap.mmap(descriptor, message['bytes'], mmap.MAP_SHARED, mmap.PROT_READ | mmap.PROT_WRITE)
         os.close(descriptor)
-        return Ring(memory)
+        return Ring(memory, ctypes.addressof(ctypes.c_char.from_buffer(memory)))
 
 
 class WindowsHost:
@@ -304,7 +338,7 @@ class WindowsHost:
             raise Failed('VirtualQuery failed')
         if region.State != 0x1000 or region.RegionSize < message['bytes']:
             raise Failed(f'the ring is not committed memory of {message["bytes"]} bytes')
-        return Ring((ctypes.c_ubyte * message['bytes']).from_address(view))
+        return Ring((ctypes.c_ubyte * message['bytes']).from_address(view), view)
 
     def exits(self, timeout):
         try:
@@ -324,8 +358,16 @@ class WindowsHost:
 
 
 class Ring:
-    def __init__(self, memory):
+    def __init__(self, memory, address):
         self.memory = memory
+        self.address = address
+        self.slot_bytes = self.u64(16)
+
+    def load(self, offset):
+        return ATOMICS.ring_load(self.address + offset)
+
+    def store(self, offset, value):
+        ATOMICS.ring_store(self.address + offset, value)
 
     def u32(self, offset):
         return struct.unpack_from('<I', self.memory, offset)[0]
@@ -341,13 +383,13 @@ class Ring:
         # The launcher's read of protocol.md "Frame ring": pin the slot through reading, then load
         # its fields once and check them against the slot size.
         for _ in range(3):
-            index = self.u32(24)
+            index = self.load(24)
             if index == NONE:
                 return None
             if index > 2:
                 raise Failed(f'latest is {index}')
-            struct.pack_into('<I', self.memory, 28, index)
-            if self.u32(24) == index:
+            self.store(28, index)
+            if self.load(24) == index:
                 break
         else:
             return None
@@ -355,7 +397,7 @@ class Ring:
         slot = {'width': self.u32(at), 'height': self.u32(at + 4), 'visible': self.u32(at + 8),
                 'epoch': self.u32(at + 12), 'sequence': self.u64(at + 16)}
         if not (1 <= slot['width'] <= 8192 and 1 <= slot['height'] <= 8192) or \
-                slot['width'] * slot['height'] * 4 > self.u64(16) or slot['visible'] not in (0, 1):
+                slot['width'] * slot['height'] * 4 > self.slot_bytes or slot['visible'] not in (0, 1):
             raise Failed(f'the latest slot is {slot}')
         return slot
 
@@ -460,6 +502,7 @@ def main():
     options = parser.parse_args()
     options.host = options.host.resolve()
     options.core = options.core.resolve()
+    load_atomics(options.core)
     log = open(options.log, 'ab') if options.log else subprocess.DEVNULL
     failures = 0
     played = 0
