@@ -12,7 +12,10 @@
  * With one, it draws as SwanStation draws a 640-pixel-wide screen: frames of 640 x 480 times the
  * scale, and a largest geometry of PS1 VRAM, 1024 x 512, times the scale
  * (libretro_host_interface.cpp, GetSystemAVInfo). A new scale reaches the host through
- * RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO before the next frame is drawn. */
+ * RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO before the next frame is drawn. While the system directory
+ * holds fake-hold-load, retro_load_game waits after reading the scale, and while it holds
+ * fake-hold-reset, context_reset waits, each writing fake-held-load or fake-held-reset there
+ * first, so a test can act, and look at the host, between those steps. */
 
 #include <libretro.h>
 
@@ -167,6 +170,26 @@ static bool in_system_directory(const char* name) {
   return true;
 }
 
+static void hold_while_asked(const char* step) {
+  const char* system = NULL;
+  char name[64];
+  char path[1100];
+  FILE* file;
+  unsigned waited;
+  snprintf(name, sizeof name, "fake-hold-%s", step);
+  if (!in_system_directory(name) || !environment(RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY, &system)) return;
+  snprintf(path, sizeof path, "%s/fake-held-%s", system, step);
+  file = fopen(path, "wb");
+  if (file) fclose(file);
+  for (waited = 0; waited < 1000 && in_system_directory(name); ++waited) {
+#ifdef _WIN32
+    Sleep(10);
+#else
+    usleep(10000);
+#endif
+  }
+}
+
 RETRO_API void retro_init(void) {
   struct retro_log_callback log;
   unsigned version = 0;
@@ -233,6 +256,7 @@ static bool read_scale(void) {
 }
 
 static void context_reset(void) {
+  hold_while_asked("reset");
   gl_bind_framebuffer = (void(GL_CALL*)(unsigned, unsigned))hw.get_proc_address("glBindFramebuffer");
   gl_viewport = (void(GL_CALL*)(int, int, int, int))hw.get_proc_address("glViewport");
   gl_clear_color = (void(GL_CALL*)(float, float, float, float))hw.get_proc_address("glClearColor");
@@ -284,6 +308,7 @@ RETRO_API bool retro_load_game(const struct retro_game_info* game) {
   }
   if (gpu_wanted) {
     read_scale();
+    hold_while_asked("load");
     hw.context_type = RETRO_HW_CONTEXT_OPENGL_CORE;
     hw.version_major = 3;
     hw.version_minor = 3;
