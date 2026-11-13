@@ -121,7 +121,7 @@ def write_zip(path, files):
             info.compress_type = zipfile.ZIP_DEFLATED
             info.create_system = 3
             info.external_attr = mode << 16
-            archive.writestr(info, data)
+            archive.writestr(info, data, compresslevel=9)
 
 
 def package(args):
