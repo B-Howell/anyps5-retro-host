@@ -96,7 +96,7 @@ jobs:
             ring-access: build/ring_access.so
             python: python3
           - system: macos-arm64
-            os: macos-14
+            os: macos-latest
             host: build/anyps5-retro-host
             core: swanstation/build/swanstation_libretro.dylib
             unpacked-host: anyps5-retro-host
