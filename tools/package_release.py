@@ -10,7 +10,8 @@
 writes anyps5-retro-host-<version>-<system>.zip and anyps5-retro-host-<version>-<system>.files into
 <folder>. The zip holds the host, SwanStation, the two licences, SOURCE.txt and, with --core-notices,
 every licence, copying, copyright or notice file under that folder (the libraries SwanStation
-builds in) as licenses/swanstation-dep/<path with - for />; the .files lists
+builds in) as licenses/swanstation-dep/<path with - for />, and each --notice NAME=PATH as
+licenses/NAME; the .files lists
 every file in the zip as `shasum -a 256` prints it, `<64 hex digits>  <name>`, with `/` between
 directories. The zip is the same bytes for the same inputs: entries sorted by name, one fixed
 time, and fixed permissions.
@@ -85,7 +86,18 @@ def release_files(args):
          source_text(args.version, args.system, args.host_commit, args.swanstation_commit).encode('utf-8'),
          PLAIN),
         *dependency_notices(args.core_notices),
+        *extra_notices(args.notice),
     ]
+
+
+def extra_notices(entries):
+    notices = []
+    for entry in entries or []:
+        name, separator, path = entry.partition('=')
+        if not separator or not name or '/' in name or '\\' in name:
+            raise SystemExit(f'--notice {entry} must be <file name>=<path>')
+        notices.append((f'licenses/{name}', Path(path).read_bytes(), PLAIN))
+    return notices
 
 
 NOTICE = re.compile(r'^(licen[cs]e|copying|copyright|notice)', re.IGNORECASE)
@@ -209,6 +221,7 @@ def main():
     parser.add_argument('--core')
     parser.add_argument('--core-licence')
     parser.add_argument('--core-notices', metavar='FOLDER')
+    parser.add_argument('--notice', action='append', metavar='NAME=PATH')
     parser.add_argument('--host-commit')
     parser.add_argument('--swanstation-commit')
     parser.add_argument('--out')

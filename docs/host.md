@@ -218,7 +218,10 @@ release can be packed and checked by hand the same way.
   `SWANSTATION_COMMIT`, `licenses/` with the host's and SwanStation's licences
   and every licence, copying, copyright or notice file under SwanStation's
   `dep/` (the libraries it builds in, such as libchdr, xxHash and VIXL, as
-  `licenses/swanstation-dep/<path>`), and `SOURCE.txt` naming the host commit,
+  `licenses/swanstation-dep/<path>`), the Apache-2.0 text for SwanStation's
+  Vulkan headers (`licenses/swanstation-vulkan-headers-Apache-2.0.txt`: the
+  headers name the licence only by URL, so the workflow fetches SPDX's copy at
+  a fixed tag and checks its sha256), and `SOURCE.txt` naming the host commit,
   the SwanStation commit and the source archive. Everything sits at the
   top of the zip except the licences. The zip is the same bytes for the same
   inputs (entries sorted by name, one fixed time, fixed permissions), so a
@@ -237,9 +240,9 @@ release can be packed and checked by hand the same way.
   commits, with all their submodules and without `.git`, into
   `anyps5-retro-host-<version>-source.tar.gz` (sorted, with fixed times and
   owners). It is the complete corresponding source the GPL asks for, and is
-  published with the binaries. Libraries whose notice sits only in their
-  source files (stb, glad, xbyak, the Vulkan loader, libretro-common) carry it
-  there.
+  published with the binaries, and carries the same Apache-2.0 text at its
+  top. stb, glad and libretro-common, which are public domain or MIT, keep
+  their notices in their source files, which the archive holds.
 - **Result.** The artifact `anyps5-retro-host-<version>-unsigned` holds the
   three zips, the three `.files`, the source archive and `SHA256SUMS`, written as `shasum -a 256`
   writes it and sorted by name as AnyPS5-ARM's `tools/release/sign.sh` sorts

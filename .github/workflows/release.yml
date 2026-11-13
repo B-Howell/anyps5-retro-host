@@ -24,6 +24,10 @@ permissions:
 env:
   NUGGET_COMMIT: 875bfcbe3ea5d1a0de0de0f3c88c9f977fb9abf4
   SWANSTATION_COMMIT: 631f0fb31b809e0f889d7c551fe695788e39c1d3
+  # SwanStation's Vulkan headers (dep/vulkan-loader) are Apache-2.0 and name the licence only by
+  # URL, so its text is shipped too: SPDX's copy at a fixed tag, checked by its sha256.
+  APACHE_URL: https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/Apache-2.0.txt
+  APACHE_SHA256: 074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff
 jobs:
   version:
     runs-on: ubuntu-24.04
@@ -153,6 +157,10 @@ jobs:
               if runtime:
                   sys.exit(f'{path} imports {runtime}; the release must not need the Visual C++ runtime')
           EOF
+      - name: Fetch the Apache-2.0 text
+        run: |
+          curl -fsSL "$APACHE_URL" -o apache-2.0.txt
+          echo "$APACHE_SHA256  apache-2.0.txt" | ${{ matrix.python }} -c "import hashlib, sys; digest, name = sys.stdin.read().split(); sys.exit(hashlib.sha256(open(name, 'rb').read()).hexdigest() != digest)"
       # macOS: the maintainers' Developer ID signing and notarization of the host and of SwanStation
       # go here, before packing, because signing changes the files the .files lists (docs/host.md
       # "Releases").
@@ -160,7 +168,8 @@ jobs:
         run: |
           ${{ matrix.python }} tools/package_release.py --version "${{ needs.version.outputs.version }}" \
             --system ${{ matrix.system }} --host ${{ matrix.host }} --core ${{ matrix.core }} \
-            --core-licence swanstation/LICENSE --core-notices swanstation/dep --host-commit "$GITHUB_SHA" \
+            --core-licence swanstation/LICENSE --core-notices swanstation/dep \
+            --notice swanstation-vulkan-headers-Apache-2.0.txt=apache-2.0.txt --host-commit "$GITHUB_SHA" \
             --swanstation-commit "$SWANSTATION_COMMIT" --out release
       - name: Unpack the zip and boot the real core from it
         run: |
@@ -200,6 +209,8 @@ jobs:
         run: |
           stem="anyps5-retro-host-${{ needs.version.outputs.version }}-source"
           mkdir -p "$stem" release
+          curl -fsSL "$APACHE_URL" -o "$stem/swanstation-vulkan-headers-Apache-2.0.txt"
+          echo "$APACHE_SHA256  $stem/swanstation-vulkan-headers-Apache-2.0.txt" | sha256sum -c -
           mv host swanstation "$stem/"
           tar --exclude=.git --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -cf - "$stem"             | gzip -9n > "release/$stem.tar.gz"
       - uses: actions/upload-artifact@v4
