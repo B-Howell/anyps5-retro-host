@@ -644,11 +644,14 @@ settings can still override it) and `restart` (true when a change only takes
 effect when the game is started again; until then the host keeps giving the
 core the value the game started with).
 
-For the internal resolution (`swanstation_GPU_ResolutionScale`), `values`
-lists only the scales whose largest frame the host can pass on: at most
-8192 × 8192 and no larger than the GPU can draw. A saved value larger than
-those starts the game at the largest one listed, and `resolutionError` says
-why until the player chooses another value.
+For the internal resolution (`swanstation_GPU_ResolutionScale`), while
+`hardware` is `true`, `values` lists only the whole-number scales whose
+largest frame the host can pass on (at most 8192 × 8192 and no larger than
+the GPU can draw), and any value that is not a whole number. A saved value
+larger than those starts the game at the largest one listed, and
+`resolutionError` says why until the player chooses another value. Without
+the GPU, or when not even the smallest scale fits, every value is listed; a
+frame larger than 8192 × 8192 then ends the game with `frameTooLarge`.
 
 `discs` has `labels` (array of strings), `inserted` (index of the inserted
 disc, or null while the tray is open), `insertedDiscPath` (string or null),

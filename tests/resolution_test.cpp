@@ -50,6 +50,15 @@ int main() {
   const auto pending = LimitResolution(scales, 11, 1, 2048, 1024, 8192, 8192);
   Expect(pending && pending->selected == 7 && pending->refused_width == 12288, "a pending 12x is judged from the 2x geometry");
 
+  Expect(at_16 && !at_16->active_offered, "the core's 16x is not offered");
+  Expect(at_2 && at_2->active_offered, "the core's 2x is offered");
+  Expect(pending && pending->active_offered, "a pending 12x leaves the core's 2x offered");
+
+  const auto chosen_2 = LimitResolution(scales, 1, 15, 16384, 8192, 8192, 8192);
+  Expect(chosen_2 && chosen_2->selected == 1 && !chosen_2->active_offered && chosen_2->refused_width == 0,
+         "2x chosen while the core draws at 16x is kept, and the core's 16x is not offered");
+  Expect(chosen_2 && chosen_2->width == 2048 && chosen_2->height == 1024, "the geometry is the chosen 2x one");
+
   Expect(!LimitResolution(scales, 0, 0, 16384, 16384, 8192, 8192), "no scale fits: nothing to offer");
   Expect(!LimitResolution({"auto", "1", "2"}, 0, 0, 1024, 512, 8192, 8192), "an active value that is not a scale cannot be judged");
   const auto mixed = LimitResolution({"1", "auto", "16"}, 2, 2, 16384, 8192, 8192, 8192);

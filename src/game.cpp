@@ -964,14 +964,17 @@ std::optional<std::pair<uint32_t, uint32_t>> Game::LimitResolution(uint32_t max_
     }
     option.values = std::move(values);
     option.labels = std::move(labels);
-    if (!moved) return std::nullopt;
+    if (moved) {
+      options_changed_ = true;
+      resolution_refused_ = asked + " would make the game's picture up to " +
+                            std::to_string(limit->refused_width) + " x " + std::to_string(limit->refused_height) +
+                            ", more than the " + std::to_string(width_limit) + " x " + std::to_string(height_limit) +
+                            " the host can pass on with this GPU, so the game uses " +
+                            option.labels[option.selected] + ".";
+    }
+    if (limit->active_offered) return std::nullopt;
     option.active = option.values[option.selected];
     options_changed_ = true;
-    resolution_refused_ = asked + " would make the game's picture up to " + std::to_string(limit->refused_width) +
-                          " x " + std::to_string(limit->refused_height) + ", more than the " +
-                          std::to_string(width_limit) + " x " + std::to_string(height_limit) +
-                          " the host can pass on with this GPU, so the game uses " +
-                          option.labels[option.selected] + ".";
     return std::make_pair(limit->width, limit->height);
   }
   return std::nullopt;
