@@ -141,6 +141,9 @@ def start(game):
         raise c.Failed('software drawing at 2x must explain itself in resolutionError')
     if status['hardware'] and status['resolutionError']:
         raise c.Failed('GPU drawing must leave resolutionError empty')
+    scales = status['options']['swanstation_GPU_ResolutionScale']['values']
+    if status['hardware'] and max(int(value) for value in scales) > 8:
+        raise c.Failed(f'scales whose largest geometry, 1024 x 512 times the scale, passes 8192 are offered: {scales}')
     return status
 
 

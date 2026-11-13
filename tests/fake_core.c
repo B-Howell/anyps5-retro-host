@@ -5,7 +5,14 @@
  * option, takes .m3u playlists through the disc control interface, keeps a 128 KiB memory card
  * and rumbles port 1's large motor while Cross is held. It logs SwanStation's messages for a BIOS
  * it uses (fake-bios.bin in the system directory) or for none. Setting fake_hang to "yes" makes retro_run
- * never return, as a stuck core would. */
+ * never return, as a stuck core would.
+ *
+ * When the system directory holds fake-gpu, it also offers SwanStation's internal resolution
+ * option (swanstation_GPU_ResolutionScale, 1x to 16x) and asks for an OpenGL 3.3 core context.
+ * With one, it draws as SwanStation draws a 640-pixel-wide screen: frames of 640 x 480 times the
+ * scale, and a largest geometry of PS1 VRAM, 1024 x 512, times the scale
+ * (libretro_host_interface.cpp, GetSystemAVInfo). A new scale reaches the host through
+ * RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO before the next frame is drawn. */
 
 #include <libretro.h>
 
@@ -21,6 +28,16 @@
 
 #define WIDTH 640
 #define HEIGHT 480
+#define VRAM_WIDTH 1024
+#define VRAM_HEIGHT 512
+#define GL_FRAMEBUFFER 0x8D40
+#define GL_COLOR_BUFFER_BIT 0x4000
+
+#ifdef _WIN32
+#define GL_CALL __stdcall
+#else
+#define GL_CALL
+#endif
 #define CARD_BYTES (128 * 1024)
 #define MAX_DISCS 8
 
@@ -41,6 +58,14 @@ static unsigned disc_count;
 static unsigned disc_index;
 static unsigned initial_disc;
 static bool tray_open;
+static bool gpu_wanted;
+static bool gpu_ready;
+static unsigned scale = 1;
+static struct retro_hw_render_callback hw;
+static void(GL_CALL* gl_bind_framebuffer)(unsigned, unsigned);
+static void(GL_CALL* gl_viewport)(int, int, int, int);
+static void(GL_CALL* gl_clear_color)(float, float, float, float);
+static void(GL_CALL* gl_clear)(unsigned);
 
 static bool set_eject_state(bool open) {
   tray_open = open;
@@ -107,7 +132,19 @@ static struct retro_core_option_v2_definition definitions[] = {
      "no"},
     {NULL, NULL, NULL, NULL, NULL, NULL, {{NULL, NULL}}, NULL},
 };
-static struct retro_core_options_v2 options = {NULL, definitions};
+static struct retro_core_option_v2_definition resolution = {
+    "swanstation_GPU_ResolutionScale",
+    "Internal Resolution Scale",
+    NULL,
+    "Scales the picture for the hardware renderer.",
+    NULL,
+    NULL,
+    {{"1", "1x"}, {"2", "2x"}, {"3", "3x"}, {"4", "4x"}, {"5", "5x"}, {"6", "6x"}, {"7", "7x"}, {"8", "8x"},
+     {"9", "9x"}, {"10", "10x"}, {"11", "11x"}, {"12", "12x"}, {"13", "13x"}, {"14", "14x"}, {"15", "15x"},
+     {"16", "16x"}, {NULL, NULL}},
+    "1"};
+static struct retro_core_option_v2_definition offered[sizeof definitions / sizeof definitions[0] + 1];
+static struct retro_core_options_v2 options = {NULL, offered};
 
 RETRO_API unsigned retro_api_version(void) { return RETRO_API_VERSION; }
 
@@ -118,10 +155,30 @@ RETRO_API void retro_set_audio_sample_batch(retro_audio_sample_batch_t callback)
 RETRO_API void retro_set_input_poll(retro_input_poll_t callback) { input_poll = callback; }
 RETRO_API void retro_set_input_state(retro_input_state_t callback) { input_state = callback; }
 
+static bool in_system_directory(const char* name) {
+  const char* system = NULL;
+  char path[1100];
+  FILE* file;
+  if (!environment(RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY, &system) || !system) return false;
+  snprintf(path, sizeof path, "%s/%s", system, name);
+  file = fopen(path, "rb");
+  if (!file) return false;
+  fclose(file);
+  return true;
+}
+
 RETRO_API void retro_init(void) {
   struct retro_log_callback log;
   unsigned version = 0;
+  const size_t count = sizeof definitions / sizeof definitions[0] - 1;
   log_printf = environment(RETRO_ENVIRONMENT_GET_LOG_INTERFACE, &log) ? log.log : NULL;
+  gpu_wanted = in_system_directory("fake-gpu");
+  gpu_ready = false;
+  scale = 1;
+  memset(&hw, 0, sizeof hw);
+  memset(offered, 0, sizeof offered);
+  memcpy(offered, definitions, count * sizeof definitions[0]);
+  if (gpu_wanted) offered[count] = resolution;
   if (environment(RETRO_ENVIRONMENT_GET_CORE_OPTIONS_VERSION, &version) && version >= 2) {
     environment(RETRO_ENVIRONMENT_SET_CORE_OPTIONS_V2, &options);
   }
@@ -147,11 +204,12 @@ RETRO_API void retro_get_system_info(struct retro_system_info* info) {
 }
 
 RETRO_API void retro_get_system_av_info(struct retro_system_av_info* info) {
+  const unsigned drawn = hw.context_type ? scale : 1;
   memset(info, 0, sizeof *info);
-  info->geometry.base_width = WIDTH;
-  info->geometry.base_height = HEIGHT;
-  info->geometry.max_width = WIDTH;
-  info->geometry.max_height = HEIGHT;
+  info->geometry.base_width = WIDTH * drawn;
+  info->geometry.base_height = HEIGHT * drawn;
+  info->geometry.max_width = hw.context_type ? VRAM_WIDTH * scale : WIDTH;
+  info->geometry.max_height = hw.context_type ? VRAM_HEIGHT * scale : HEIGHT;
   info->geometry.aspect_ratio = 4.0f / 3.0f;
   info->timing.fps = 60.0;
   info->timing.sample_rate = 44100.0;
@@ -164,17 +222,25 @@ RETRO_API void retro_set_controller_port_device(unsigned port, unsigned device) 
 
 RETRO_API void retro_reset(void) { frame_count = 0; }
 
-static bool has_bios(void) {
-  const char* system = NULL;
-  char path[1100];
-  FILE* file;
-  if (!environment(RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY, &system) || !system) return false;
-  snprintf(path, sizeof path, "%s/fake-bios.bin", system);
-  file = fopen(path, "rb");
-  if (!file) return false;
-  fclose(file);
+static bool read_scale(void) {
+  struct retro_variable variable = {"swanstation_GPU_ResolutionScale", NULL};
+  unsigned wanted = 1;
+  if (environment(RETRO_ENVIRONMENT_GET_VARIABLE, &variable) && variable.value) wanted = (unsigned)atoi(variable.value);
+  if (wanted < 1 || wanted > 16) wanted = 1;
+  if (wanted == scale) return false;
+  scale = wanted;
   return true;
 }
+
+static void context_reset(void) {
+  gl_bind_framebuffer = (void(GL_CALL*)(unsigned, unsigned))hw.get_proc_address("glBindFramebuffer");
+  gl_viewport = (void(GL_CALL*)(int, int, int, int))hw.get_proc_address("glViewport");
+  gl_clear_color = (void(GL_CALL*)(float, float, float, float))hw.get_proc_address("glClearColor");
+  gl_clear = (void(GL_CALL*)(unsigned))hw.get_proc_address("glClear");
+  gpu_ready = gl_bind_framebuffer && gl_viewport && gl_clear_color && gl_clear;
+}
+
+static void context_destroy(void) { gpu_ready = false; }
 
 static bool ends_with(const char* text, const char* suffix) {
   size_t a = strlen(text), b = strlen(suffix), i;
@@ -216,8 +282,18 @@ RETRO_API bool retro_load_game(const struct retro_game_info* game) {
   if (environment(RETRO_ENVIRONMENT_SET_HW_RENDER, NULL) || environment(RETRO_ENVIRONMENT_GET_PREFERRED_HW_RENDER, NULL)) {
     return false;
   }
+  if (gpu_wanted) {
+    read_scale();
+    hw.context_type = RETRO_HW_CONTEXT_OPENGL_CORE;
+    hw.version_major = 3;
+    hw.version_minor = 3;
+    hw.context_reset = context_reset;
+    hw.context_destroy = context_destroy;
+    hw.bottom_left_origin = true;
+    if (!environment(RETRO_ENVIRONMENT_SET_HW_RENDER, &hw)) memset(&hw, 0, sizeof hw);
+  }
   if (log_printf) {
-    if (has_bios()) log_printf(RETRO_LOG_INFO, "Using BIOS 'fake-bios.bin': fake BIOS\n");
+    if (in_system_directory("fake-bios.bin")) log_printf(RETRO_LOG_INFO, "Using BIOS 'fake-bios.bin': fake BIOS\n");
     else log_printf(RETRO_LOG_INFO, "No BIOS image found for NTSC-U/C region\n");
   }
   if (ends_with(game->path, ".m3u")) {
@@ -262,8 +338,23 @@ RETRO_API void retro_run(void) {
   environment(RETRO_ENVIRONMENT_GET_VARIABLE, &color);
   environment(RETRO_ENVIRONMENT_GET_VARIABLE, &region);
   fill = color.value && strcmp(color.value, "green") == 0 ? 0x0000C000u : 0x000000C0u;
-  for (i = 0; i < WIDTH * HEIGHT; ++i) pixels[i] = fill + (frame_count & 0xFF) * 0x10000u;
-  video(pixels, WIDTH, HEIGHT, WIDTH * sizeof(uint32_t));
+  if (gpu_ready) {
+    bool changed = false;
+    if (environment(RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE, &changed) && changed && read_scale()) {
+      struct retro_system_av_info info;
+      retro_get_system_av_info(&info);
+      environment(RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO, &info);
+    }
+    gl_bind_framebuffer(GL_FRAMEBUFFER, (unsigned)hw.get_current_framebuffer());
+    gl_viewport(0, 0, (int)(WIDTH * scale), (int)(HEIGHT * scale));
+    gl_clear_color((float)(frame_count & 0xFF) / 255.0f, (float)((fill >> 8) & 0xFF) / 255.0f,
+                   (float)(fill & 0xFF) / 255.0f, 1.0f);
+    gl_clear(GL_COLOR_BUFFER_BIT);
+    video(RETRO_HW_FRAME_BUFFER_VALID, WIDTH * scale, HEIGHT * scale, 0);
+  } else {
+    for (i = 0; i < WIDTH * HEIGHT; ++i) pixels[i] = fill + (frame_count & 0xFF) * 0x10000u;
+    video(pixels, WIDTH, HEIGHT, WIDTH * sizeof(uint32_t));
+  }
   audio_batch(silence, 735);
   cross = input_state(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_B) != 0;
   if (rumble.set_rumble_state && cross != (rumbling != 0)) {

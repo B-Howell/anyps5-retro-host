@@ -13,6 +13,10 @@
 #include <cstring>
 #include <iterator>
 #include <new>
+#include <tuple>
+#include <utility>
+
+#include "resolution.h"
 
 namespace retro_host {
 
@@ -247,7 +251,18 @@ void Game::RunGame() {
   }
   std::string end_error;
   std::string end_code;
-  if (gpu_ && gpu_->Reserve(info.geometry.max_width, info.geometry.max_height, hw_depth_, hw_stencil_)) {
+  uint32_t reserve_width = info.geometry.max_width;
+  uint32_t reserve_height = info.geometry.max_height;
+  if (gpu_) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (const auto geometry = LimitResolution(info.geometry.max_width, info.geometry.max_height)) {
+      std::tie(reserve_width, reserve_height) = *geometry;
+    }
+  } else {
+    std::lock_guard<std::mutex> lock(mutex_);
+    software_ = true;
+  }
+  if (gpu_ && gpu_->Reserve(reserve_width, reserve_height, hw_depth_, hw_stencil_)) {
     hardware_ = true;
     if (hw_context_reset_) hw_context_reset_();
   } else if (gpu_) {
@@ -837,6 +852,7 @@ bool Game::SetOption(const std::string& key, const std::string& value) {
       options_changed_ = true;
       display_refresh_ = true;
     }
+    if (option.key == kResolutionOption) resolution_refused_.clear();
     return true;
   }
   return false;
@@ -926,8 +942,44 @@ void Game::DropGpu() {
   gpu_.reset();
 }
 
+std::optional<std::pair<uint32_t, uint32_t>> Game::LimitResolution(uint32_t max_width, uint32_t max_height) {
+  const uint32_t width_limit = std::min(kMaxFrameSide, gpu_->MaxWidth());
+  const uint32_t height_limit = std::min(kMaxFrameSide, gpu_->MaxHeight());
+  for (auto& option : options_) {
+    if (option.key != kResolutionOption || option.fixed || option.restart || !option.read) continue;
+    const auto active = std::find(option.values.begin(), option.values.end(), option.active);
+    if (active == option.values.end()) return std::nullopt;
+    const auto limit = retro_host::LimitResolution(option.values, option.selected,
+                                                   static_cast<size_t>(active - option.values.begin()), max_width,
+                                                   max_height, width_limit, height_limit);
+    if (!limit) return std::nullopt;
+    const std::string asked = option.labels[option.selected];
+    const bool moved = limit->selected != option.selected;
+    std::vector<std::string> values;
+    std::vector<std::string> labels;
+    for (const size_t i : limit->offered) {
+      if (i == limit->selected) option.selected = values.size();
+      values.push_back(option.values[i]);
+      labels.push_back(option.labels[i]);
+    }
+    option.values = std::move(values);
+    option.labels = std::move(labels);
+    if (!moved) return std::nullopt;
+    option.active = option.values[option.selected];
+    options_changed_ = true;
+    resolution_refused_ = asked + " would make the game's picture up to " + std::to_string(limit->refused_width) +
+                          " x " + std::to_string(limit->refused_height) + ", more than the " +
+                          std::to_string(width_limit) + " x " + std::to_string(height_limit) +
+                          " the host can pass on with this GPU, so the game uses " +
+                          option.labels[option.selected] + ".";
+    return std::make_pair(limit->width, limit->height);
+  }
+  return std::nullopt;
+}
+
 std::string Game::ResolutionError() const {
-  if (hardware_) return "";
+  if (!resolution_refused_.empty()) return resolution_refused_;
+  if (!software_) return "";
   for (const auto& option : options_) {
     if (option.key == kResolutionOption && option.values[option.selected] != "1") {
       return "No OpenGL context could be made, so the game draws in software, which has no internal resolution above 1x.";

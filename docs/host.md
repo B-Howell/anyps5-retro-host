@@ -23,6 +23,7 @@ through kqueue. On Windows a thread waits on the launcher's process handle.
 | [`src/main.cpp`](../src/main.cpp) | The command line, the process setup, then the host |
 | [`src/host.cpp`](../src/host.cpp) | The protocol: `hello`, the order rules, every method's argument checks and replies, and the limits |
 | [`src/game.cpp`](../src/game.cpp) | One loaded game: the libretro callbacks, core options, disc control, the memory card, input, rumble and pixel conversion |
+| [`src/resolution.cpp`](../src/resolution.cpp) | Which internal resolutions a GPU game is offered (see "Resolution limits" below) |
 | [`src/ring.cpp`](../src/ring.cpp) | The frame ring writer: the header from protocol.md's byte table, slot choice, and capped doubling when a frame needs more room |
 | [`src/json.cpp`](../src/json.cpp) | A strict JSON reader (duplicate keys, lone surrogates, invalid UTF-8 and non-finite numbers are errors) and writer |
 | [`src/paths.cpp`](../src/paths.cpp) | The path rules of protocol.md "Paths" for Windows and POSIX |
@@ -40,9 +41,10 @@ through kqueue. On Windows a thread waits on the launcher's process handle.
   draws into the host's framebuffer, which grows with the core's largest
   geometry; each frame is read back with `glReadPixels`, turned the right way
   up, and published to the ring like a software frame. `status.hardware` is
-  then `true` and the internal resolution option works. When no context can be
-  made, the host turns the request down and SwanStation draws in software;
-  `resolutionError` then says a scale above 1x needs the GPU. A context that was
+  then `true` and the internal resolution option works, within the limits
+  below. When no context can be made, the host turns the request down and
+  SwanStation draws in software; `resolutionError` then says a scale above 1x
+  needs the GPU, and keeps saying so after that game ends. A context that was
   made but then fails ends the game with `errorCode` `other`: when no framebuffer
   can be made for the core's largest size, when a later geometry change cannot
   get a bigger one, or when reading a frame back reports an OpenGL error (a lost
@@ -56,6 +58,35 @@ through kqueue. On Windows a thread waits on the launcher's process handle.
   never shows as hung, and the window ignores `WM_CLOSE`, which `taskkill`
   without `/f` sends and which would otherwise destroy the window under the
   context.
+- **Resolution limits.** SwanStation's internal resolution goes up to 16x, and
+  its largest geometry is PS1 VRAM, 1024 × 512, times the scale
+  (`GetSystemAVInfo` in `src/libretro/libretro_host_interface.cpp`): 16384 ×
+  8192 at 16x. Its frames are the screen's size times the scale, so a 640-wide
+  screen, such as the Sony BIOS logo, is 10240 pixels wide at 16x. Measured on
+  Windows with an NVIDIA GPU (largest texture 32768): Crash Team Racing set to
+  16x ended at the BIOS logo with `frameTooLarge` before its first frame, ran at
+  11x (7040 × 5258) and 12x (7680 × 5736), and the OpenBIOS test program, which
+  shows a 320-wide screen, ran at 16x (5120 × 3840). A GPU whose largest
+  framebuffer is smaller than the core's largest geometry ended the game at
+  start with `other` instead. So, once the core has given its largest geometry
+  for the value it was given and the context is made, the host offers only the
+  scales whose largest geometry, the reported one times scale / that value,
+  fits within 8192 × 8192 and the context's `GL_MAX_RENDERBUFFER_SIZE` and
+  `GL_MAX_VIEWPORT_DIMS`: 1x to 8x with SwanStation on any GPU that can draw
+  8192 × 8192. libretro promises no frame is larger than the largest geometry,
+  so no offered scale can end a game with `frameTooLarge`; 9x to 12x, which
+  only some screens can use, are not offered. A start value that does not fit
+  is changed to the largest that does, before the core's first frame (the host
+  reserves the framebuffer for that one, calls `context_reset`, and the core
+  takes the new value at the first `retro_run`, as it does an `option` call);
+  `resolutionError` says which value was asked for, how large its pictures could
+  be, the limit, and the value used, until the player chooses an internal
+  resolution again. SwanStation still makes its renderer at the asked-for scale
+  in `context_reset` (it clamps to the GPU's largest texture itself) and
+  remakes it a frame later. The values the core gives before it reports its
+  geometry are listed whole. Values that are not whole numbers cannot be
+  judged and stay offered, and when no value fits nothing changes and the game
+  ends as before.
 - **Options.** The host reports core options version 2 and takes the
   definitions the core gives (`SET_CORE_OPTIONS_V2` or `_V2_INTL`, English
   text). `start.options` sets the starting values. An `option` call is
@@ -100,6 +131,8 @@ through kqueue. On Windows a thread waits on the launcher's process handle.
 ## Tests
 
 - `json_test` checks the JSON and path rules.
+- `resolution_test` checks which scales [`src/resolution.cpp`](../src/resolution.cpp)
+  offers for a geometry and a limit, and which value it moves to.
 - [`tests/conformance.py`](../tests/conformance.py) is the fake launcher of
   protocol.md "Fixtures". It starts the host as a launcher would (a
   socketpair at descriptor 3, or two pipes passed with a handle list on
@@ -109,12 +142,22 @@ through kqueue. On Windows a thread waits on the launcher's process handle.
 - [`tests/fake_core.c`](../tests/fake_core.c) is the core the sessions run:
   640 × 480 frames, one option, `.m3u` playlists through the disc interface,
   a memory card, rumble while Cross is held, and a `fake_hang` option that
-  makes `retro_run` never return.
+  makes `retro_run` never return. With a `fake-gpu` file in the system folder
+  it also offers `swanstation_GPU_ResolutionScale` (1x to 16x) and asks for an
+  OpenGL 3.3 core context; with one it clears the host's framebuffer and gives
+  SwanStation's sizes for a 640-wide screen (frames 640 × 480 times the scale,
+  largest geometry 1024 × 512 times the scale), and tells the host of a new
+  scale through `SET_SYSTEM_AV_INFO` before the next frame.
 - [`tests/host_test.py`](../tests/host_test.py) covers what the fixtures do
   not: a stuck core (the stall limit, then `release` replying and the host
   exiting), a core that is not a library and a missing disc (each ending the
   game with `errorCode` `core` or `disc`), and eight games in a row with
-  `volume`, `pause` and `stop` calls in between. Run it like `conformance.py`.
+  `volume`, `pause` and `stop` calls in between, and the resolution limits
+  (`gpu_limits`): the fake core started at 16x must start at 8x, offer 1x to
+  8x, explain itself in `resolutionError`, draw 5120-wide frames, refuse 16x
+  through `option`, take 2x and clear `resolutionError`. Without an OpenGL
+  context that test is skipped, unless `--require-gpu` is given, as the Linux
+  CI job does with Mesa installed. Run it like `conformance.py`.
 - [`tests/ring_access.c`](../tests/ring_access.c) gives the fake launcher the
   sequentially consistent loads and stores of `latest` and `reading` that
   protocol.md asks for; Python cannot make them on shared memory itself. It
