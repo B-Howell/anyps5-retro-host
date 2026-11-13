@@ -206,13 +206,20 @@ release can be packed and checked by hand the same way.
 
 - **Systems.** `windows-x64` (Windows Server 2022, MSVC, with the static C and
   C++ runtime so no Visual C++ redistributable is needed; the workflow fails
-  if the host or SwanStation imports it), `linux-x64` (Ubuntu 22.04, so glibc
-  2.35 or later is enough) and `macos-arm64` (macOS 11 or later).
+  if the host or SwanStation imports it), `linux-x64` (Ubuntu 24.04, so it
+  needs glibc 2.39 or later) and `macos-arm64` (macOS 11 or later). A Linux
+  build on Ubuntu 22.04 was tried for older systems: it drew the first game,
+  then the host's connection closed when SwanStation switched from its
+  hardware renderer to software at `stop`, so it is not used until that is
+  understood.
 - **What a zip holds.** The host (`anyps5-retro-host.exe` on Windows,
   `anyps5-retro-host` elsewhere), SwanStation
   (`swanstation_libretro.dll`, `.so` or `.dylib`) built from
-  `SWANSTATION_COMMIT`, `licenses/` with both licences, and `SOURCE.txt`
-  naming the host commit and the SwanStation commit. Everything sits at the
+  `SWANSTATION_COMMIT`, `licenses/` with the host's and SwanStation's licences
+  and every licence, copying, copyright or notice file under SwanStation's
+  `dep/` (the libraries it builds in, such as libchdr, xxHash and VIXL, as
+  `licenses/swanstation-dep/<path>`), and `SOURCE.txt` naming the host commit,
+  the SwanStation commit and the source archive. Everything sits at the
   top of the zip except the licences. The zip is the same bytes for the same
   inputs (entries sorted by name, one fixed time, fixed permissions), so a
   rebuild can be compared with a release.
@@ -226,8 +233,15 @@ release can be packed and checked by hand the same way.
   workflow for a release and must match it. Pushes and pull requests that
   change the workflow or the packer run it too, and `workflow_dispatch` runs it
   by hand.
+- **Source.** The `source` job packs the host and SwanStation at the released
+  commits, with all their submodules and without `.git`, into
+  `anyps5-retro-host-<version>-source.tar.gz` (sorted, with fixed times and
+  owners). It is the complete corresponding source the GPL asks for, and is
+  published with the binaries. Libraries whose notice sits only in their
+  source files (stb, glad, xbyak, the Vulkan loader, libretro-common) carry it
+  there.
 - **Result.** The artifact `anyps5-retro-host-<version>-unsigned` holds the
-  three zips, the three `.files` and `SHA256SUMS`, written as `shasum -a 256`
+  three zips, the three `.files`, the source archive and `SHA256SUMS`, written as `shasum -a 256`
   writes it and sorted by name as AnyPS5-ARM's `tools/release/sign.sh` sorts
   it. `python3 tools/package_release.py --check <folder>` checks a folder of
   them as a launcher checks a download, without the signature.
@@ -236,14 +250,15 @@ release can be packed and checked by hand the same way.
 unsigned and nothing is published. A maintainer with the release key:
 
 1. Downloads the `unsigned` artifact.
-2. Runs `tools/release/sign.sh -o <folder> <folder>/*.zip <folder>/*.files`
+2. Runs `tools/release/sign.sh -o <folder> <folder>/*.zip <folder>/*.files <folder>/*.tar.gz`
    from AnyPS5-ARM. It writes the same `SHA256SUMS` again (same lines, same
    order) and `SHA256SUMS.sig`, `ed25519 <key id> <base64 signature>` a line,
    with the keys listed in its `tools/release/release-signing.pub`, which are
    the keys built into the launchers (`lib/core/release_keys.dart` in the
    Flutter launcher).
-3. Publishes a GitHub release `v<version>` with the zips, the `.files`,
-   `SHA256SUMS` and `SHA256SUMS.sig`.
+3. Publishes a GitHub release `v<version>` with the zips, the `.files`, the
+   source archive, `SHA256SUMS` and `SHA256SUMS.sig`. The source archive must
+   be published with every release that carries the binaries.
 
 On macOS the host and SwanStation must also carry a Developer ID signature with
 the hardened runtime, and the host must be notarized (protocol.md "macOS

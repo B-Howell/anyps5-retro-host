@@ -88,7 +88,7 @@ jobs:
             ring-access: build/Release/ring_access.dll
             python: python
           - system: linux-x64
-            os: ubuntu-22.04
+            os: ubuntu-24.04
             host: build/anyps5-retro-host
             core: swanstation/build/swanstation_libretro.so
             unpacked-host: anyps5-retro-host
@@ -160,7 +160,7 @@ jobs:
         run: |
           ${{ matrix.python }} tools/package_release.py --version "${{ needs.version.outputs.version }}" \
             --system ${{ matrix.system }} --host ${{ matrix.host }} --core ${{ matrix.core }} \
-            --core-licence swanstation/LICENSE --host-commit "$GITHUB_SHA" \
+            --core-licence swanstation/LICENSE --core-notices swanstation/dep --host-commit "$GITHUB_SHA" \
             --swanstation-commit "$SWANSTATION_COMMIT" --out release
       - name: Unpack the zip and boot the real core from it
         run: |
@@ -179,8 +179,37 @@ jobs:
           path: release
           if-no-files-found: error
 
+  # The complete corresponding source of what the zips hold (GPL-2.0 and GPL-3.0): the host and
+  # SwanStation at the released commits, with their submodules, published beside the zips.
+  source:
+    needs: version
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          persist-credentials: false
+          path: host
+      - name: Fetch SwanStation
+        run: |
+          git init -q swanstation
+          git -C swanstation fetch -q --depth 1 https://github.com/libretro/swanstation.git "$SWANSTATION_COMMIT"
+          git -C swanstation checkout -q FETCH_HEAD
+          git -C swanstation submodule update -q --init --depth 1 --recursive
+      - name: Pack the source
+        run: |
+          stem="anyps5-retro-host-${{ needs.version.outputs.version }}-source"
+          mkdir -p "$stem" release
+          mv host swanstation "$stem/"
+          tar --exclude=.git --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -cf - "$stem"             | gzip -9n > "release/$stem.tar.gz"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-source
+          path: release
+          if-no-files-found: error
+
   sums:
-    needs: [version, package]
+    needs: [version, package, source]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -193,7 +222,7 @@ jobs:
           merge-multiple: true
       - name: Write SHA256SUMS and check the release
         run: |
-          python3 tools/package_release.py --sums release release/*.zip release/*.files
+          python3 tools/package_release.py --sums release release/*.zip release/*.files release/*-source.tar.gz
           python3 tools/package_release.py --check release
           test "$(ls release/*.zip | wc -l)" -eq 3
           (cd release && sha256sum -c SHA256SUMS)

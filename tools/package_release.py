@@ -4,10 +4,13 @@
 """Packs one system's host release as protocol.md "Finding and checking the host" says.
 
     python3 tools/package_release.py --version 1.0.0 --system windows-x64 --host <host> --core <core>
-        --core-licence <SwanStation's LICENSE> --swanstation-commit <sha> --host-commit <sha> --out <folder>
+        --core-licence <SwanStation's LICENSE> [--core-notices <SwanStation's dep folder>]
+        --swanstation-commit <sha> --host-commit <sha> --out <folder>
 
 writes anyps5-retro-host-<version>-<system>.zip and anyps5-retro-host-<version>-<system>.files into
-<folder>. The zip holds the host, SwanStation, the two licences and SOURCE.txt; the .files lists
+<folder>. The zip holds the host, SwanStation, the two licences, SOURCE.txt and, with --core-notices,
+every licence, copying, copyright or notice file under that folder (the libraries SwanStation
+builds in) as licenses/swanstation-dep/<path with - for />; the .files lists
 every file in the zip as `shasum -a 256` prints it, `<64 hex digits>  <name>`, with `/` between
 directories. The zip is the same bytes for the same inputs: entries sorted by name, one fixed
 time, and fixed permissions.
@@ -20,8 +23,8 @@ sorts them (LC_ALL=C sort -k2), so signing it there gives the same SHA256SUMS.
     python3 tools/package_release.py --check <folder>
 
 checks a release folder as a launcher checks a download, without the signature: SHA256SUMS lists
-each zip and .files with their digests, and every zip holds exactly the files its .files lists,
-with those digests.
+each zip and .files with their digests (and at most one source archive), and every zip holds
+exactly the files its .files lists, with those digests.
 """
 
 import argparse
@@ -64,7 +67,9 @@ def source_text(version, system, host_commit, swanstation_commit):
         f'https://github.com/libretro/swanstation at commit {swanstation_commit},\n'
         'the commit this host release was tested with.\n'
         '\n'
-        'The source of both is at those commits. licenses/ holds their licences.\n'
+        'The complete source of both, with their submodules, is published beside this zip in the\n'
+        f'release as anyps5-retro-host-{version}-source.tar.gz. licenses/ holds the licences of the\n'
+        'host, of SwanStation and of the libraries SwanStation builds in.\n'
     )
 
 
@@ -79,7 +84,22 @@ def release_files(args):
         ('SOURCE.txt',
          source_text(args.version, args.system, args.host_commit, args.swanstation_commit).encode('utf-8'),
          PLAIN),
+        *dependency_notices(args.core_notices),
     ]
+
+
+NOTICE = re.compile(r'^(licen[cs]e|copying|copyright|notice)', re.IGNORECASE)
+
+
+def dependency_notices(folder):
+    if folder is None:
+        return []
+    root = Path(folder)
+    found = sorted(path for path in root.rglob('*') if path.is_file() and NOTICE.match(path.name))
+    if not found:
+        raise SystemExit(f'--core-notices {folder} holds no licence file')
+    return [(f'licenses/swanstation-dep/{"-".join(path.relative_to(root).parts)}', path.read_bytes(), PLAIN)
+            for path in found]
 
 
 def write_zip(path, files):
@@ -128,6 +148,7 @@ def write_sums(folder, paths):
     sys.stdout.write(sums_text(entries))
 
 
+SOURCE_NAME = re.compile(r'^anyps5-retro-host-[0-9]+\.[0-9]+\.[0-9]+-source\.tar\.gz$')
 RELEASE_NAME = re.compile(r'^anyps5-retro-host-([0-9]+\.[0-9]+\.[0-9]+)-([a-z]+-[a-z0-9]+)\.(zip|files)$')
 
 
@@ -148,14 +169,22 @@ def check(folder):
     folder = Path(folder)
     sums = parse_sums((folder / 'SHA256SUMS').read_text('utf-8'), allow_slash=False)
     stems = {}
+    sources = 0
     for name, digest in sums.items():
         actual = sha256((folder / name).read_bytes())
         if actual != digest:
             raise SystemExit(f'{name} does not match SHA256SUMS')
+        if SOURCE_NAME.match(name):
+            sources += 1
+            continue
         match = RELEASE_NAME.match(name)
         if not match or match.group(2) not in SYSTEMS:
             raise SystemExit(f'SHA256SUMS lists {name}, which is not a host release file')
         stems.setdefault(name.rsplit('.', 1)[0], set()).add(match.group(3))
+    if not stems:
+        raise SystemExit('SHA256SUMS lists no host release')
+    if sources > 1:
+        raise SystemExit('SHA256SUMS lists more than one source archive')
     for stem, kinds in sorted(stems.items()):
         if kinds != {'zip', 'files'}:
             raise SystemExit(f'{stem} needs both its .zip and its .files')
@@ -179,6 +208,7 @@ def main():
     parser.add_argument('--host')
     parser.add_argument('--core')
     parser.add_argument('--core-licence')
+    parser.add_argument('--core-notices', metavar='FOLDER')
     parser.add_argument('--host-commit')
     parser.add_argument('--swanstation-commit')
     parser.add_argument('--out')
