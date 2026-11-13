@@ -2,15 +2,18 @@
 # SPDX-FileCopyrightText: 2026 AnyPS5 Desktop contributors
 
 """Runs the real SwanStation core through the host with a freely licensed BIOS (OpenBIOS) and
-program, put on a disc image by make_test_disc.py, and checks that it starts, draws a picture that is not blank, stops and exits cleanly.
+program, put on a disc image by make_test_disc.py, and checks that it starts, draws a picture
+that is not blank, stops and exits cleanly.
 The renderer is whichever the machine allows: with no OpenGL context the host must say why a scale
 above 1x does not apply."""
 
 import argparse
 import shutil
+import struct
 import sys
 import tempfile
 import time
+import zlib
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -23,6 +26,7 @@ parser.add_argument('--core', required=True)
 parser.add_argument('--bios', required=True, help='OpenBIOS, 512 KiB')
 parser.add_argument('--program', required=True, help='A PS-EXE that draws to the screen')
 parser.add_argument('--log', required=True)
+parser.add_argument('--picture', help='Where to save the last picture read, as a PNG')
 options = parser.parse_args()
 
 host_path = Path(options.host).resolve()
@@ -109,7 +113,23 @@ def picture():
         raise c.Failed(f'slot {index} is {width}x{height}')
     offset = 4096 + index * ring.slot_bytes
     data = bytes(ring.memory[offset:offset + width * height * 4])
+    if options.picture:
+        save_png(width, height, data, ring.snapshot['pixelFormat'] == 2)
     return width, height, len({data[i:i + 3] for i in range(0, len(data), 4)})
+
+
+def save_png(width, height, data, bgra):
+    if bgra:
+        swapped = bytearray(data)
+        swapped[0::4], swapped[2::4] = data[2::4], data[0::4]
+        data = bytes(swapped)
+    rows = b''.join(b'\0' + data[y * width * 4:(y + 1) * width * 4] for y in range(height))
+
+    def chunk(kind, body):
+        return struct.pack('>I', len(body)) + kind + body + struct.pack('>I', zlib.crc32(kind + body))
+
+    Path(options.picture).write_bytes(b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', width, height, 8, 6, 0, 0, 0))
+                                      + chunk(b'IDAT', zlib.compress(rows, 6)) + chunk(b'IEND', b''))
 
 
 failed = False
