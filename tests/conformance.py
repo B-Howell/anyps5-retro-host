@@ -399,6 +399,8 @@ def main():
     parser.add_argument('--strace', type=Path, help='Linux: trace the network calls of the host into this file')
     parser.add_argument('names', nargs='*')
     options = parser.parse_args()
+    options.host = options.host.resolve()
+    options.core = options.core.resolve()
     log = open(options.log, 'ab') if options.log else subprocess.DEVNULL
     if options.strace:
         PosixHost.trace = options.strace
