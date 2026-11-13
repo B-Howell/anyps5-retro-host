@@ -326,6 +326,14 @@ A file named inside a `.cue` or `.m3u` is found as the core finds it: a
 relative name against the directory of the file that names it, and an
 absolute or UNC name as it is.
 
+**Known risk: UNC names.** On Windows, a `.cue` or `.m3u` can name a UNC
+path (`\\server\share\track.bin`), and the host opens it as written. Windows
+then connects to that server and signs in to it with the player's Windows
+account, which hands the server the account name and a response it can try
+to crack offline. A shared `.cue` or `.m3u` can do this without the player
+seeing it. Version 1 does not prevent it; a player should only open `.cue`
+and `.m3u` files from sources they trust.
+
 ## Messages
 
 | Type | Direction | Reply |
@@ -634,6 +642,8 @@ No argument. Returns `null` when no game is loaded, or:
 | `didNotStart` | The game produced no first frame in time |
 | `frameTooLarge` | The game's frame was larger than 8192 × 8192 |
 | `other` | Any other cause |
+| `hostExited` | Only the launcher's client reports it: the host exited without being asked or sent a protocol error (see [Host failure](#host-failure)) |
+| `hostHung` | Only the launcher's client reports it: the host missed one of the launcher's time limits and the launcher closed it (see [Host failure](#host-failure)) |
 
 The host always sends every field above (`discs` only for a multi-disc
 game), including for a game that ended before its first frame. The shorter
