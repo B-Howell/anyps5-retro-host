@@ -264,12 +264,9 @@ Host::Reply Host::Start(const Json& args) {
   }
   if (CurrentGame()) return Failure("busy", "A game is already loaded.");
   if (games_started_ >= kMaxId) return Failure("start", "This host has started its last game.");
-  if (!CanRead(config.disc)) return Failure("start", "The disc file cannot be opened.");
   config.epoch = games_started_ + 1;
   rings_->Clear();
   auto game = std::make_shared<Game>(config, rings_->format(), *this, audio_);
-  std::string error;
-  if (!game->Start(error)) return Failure("start", error);
   for (unsigned port = 0; port < 2; ++port) game->SetInput(port, inputs_[port]);
   ++games_started_;
   {

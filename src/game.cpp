@@ -50,7 +50,7 @@ bool OnRumble(unsigned port, enum retro_rumble_effect effect, uint16_t strength)
 
 constexpr unsigned kDualShock = RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_ANALOG, 0);
 constexpr int64_t kCardSaveMs = 5000;
-constexpr size_t kPathBytes = 32768;
+constexpr size_t kPathBytes = 3 * 32767 + 1;
 constexpr char kResolutionOption[] = "swanstation_GPU_ResolutionScale";
 
 #ifdef _WIN32
@@ -96,7 +96,7 @@ Game::~Game() {
   if (thread_.joinable()) thread_.join();
 }
 
-bool Game::Start(std::string& error) {
+bool Game::LoadCore(std::string& error) {
   if (!library_.Open(config_.core, error)) return false;
   const char* const required[] = {"retro_api_version", "retro_set_environment", "retro_set_video_refresh",
                                   "retro_set_audio_sample", "retro_set_audio_sample_batch", "retro_set_input_poll",
@@ -132,6 +132,15 @@ void Game::Run() {
 }
 
 void Game::RunGame() {
+  std::string error;
+  if (!LoadCore(error)) {
+    Finish(error, "core");
+    return;
+  }
+  if (!CanRead(config_.disc)) {
+    Finish("The disc file cannot be opened.", "disc");
+    return;
+  }
   Get<void (*)(retro_environment_t)>("retro_set_environment")(OnEnvironment);
   Get<void (*)(retro_video_refresh_t)>("retro_set_video_refresh")(OnVideo);
   Get<void (*)(retro_audio_sample_t)>("retro_set_audio_sample")(OnAudioSample);
@@ -185,8 +194,7 @@ void Game::RunGame() {
   Get<void (*)(retro_system_av_info*)>("retro_get_system_av_info")(&info);
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (info.geometry.aspect_ratio > 0) aspect_ = info.geometry.aspect_ratio;
-    else if (info.geometry.base_height) aspect_ = static_cast<double>(info.geometry.base_width) / info.geometry.base_height;
+    SetAspect(info.geometry);
   }
   RefreshDiscs();
   fps_ = info.timing.fps;
@@ -326,6 +334,9 @@ void Game::RefreshDiscs() {
     next.inserted.reset();
   } else {
     next.inserted = control.get_image_index();
+  }
+  if (!next.inserted || *next.inserted >= next.paths.size() || next.played != next.paths[*next.inserted]) {
+    next.played.clear();
   }
   std::lock_guard<std::mutex> lock(mutex_);
   disc_ = next;
@@ -477,7 +488,7 @@ bool Game::Environment(unsigned command, void* data) {
     case RETRO_ENVIRONMENT_SET_GEOMETRY: {
       const auto* geometry = static_cast<const retro_game_geometry*>(data);
       std::lock_guard<std::mutex> lock(mutex_);
-      if (geometry->aspect_ratio > 0) aspect_ = geometry->aspect_ratio;
+      SetAspect(*geometry);
       return true;
     }
     case RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO: {
@@ -486,7 +497,7 @@ bool Game::Environment(unsigned command, void* data) {
       sample_rate_ = info->timing.sample_rate;
       timing_changed_ = true;
       std::lock_guard<std::mutex> lock(mutex_);
-      if (info->geometry.aspect_ratio > 0) aspect_ = info->geometry.aspect_ratio;
+      SetAspect(info->geometry);
       return true;
     }
     case RETRO_ENVIRONMENT_SET_INPUT_DESCRIPTORS:
@@ -505,7 +516,7 @@ bool Game::Environment(unsigned command, void* data) {
 }
 
 void Game::Video(const void* data, unsigned width, unsigned height, size_t pitch) {
-  quiet_since_ = NowMs();
+  if (published_) quiet_since_ = NowMs();
   if (!data) return;
   if (width == 0 || height == 0) return;
   if (width > kMaxFrameSide || height > kMaxFrameSide) {
@@ -548,6 +559,8 @@ void Game::Video(const void* data, unsigned width, unsigned height, size_t pitch
     frame_failure_ = shown;
     return;
   }
+  published_ = true;
+  quiet_since_ = NowMs();
   {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!ready_) {
@@ -736,6 +749,14 @@ int64_t Game::QuietMs() const {
   std::lock_guard<std::mutex> lock(pause_mutex_);
   const int64_t until = paused_ ? paused_at_.load() : NowMs();
   return std::max<int64_t>(0, until - quiet_since_);
+}
+
+void Game::SetAspect(const retro_game_geometry& geometry) {
+  if (geometry.aspect_ratio > 0) {
+    aspect_ = geometry.aspect_ratio;
+  } else if (geometry.base_width && geometry.base_height) {
+    aspect_ = static_cast<double>(geometry.base_width) / geometry.base_height;
+  }
 }
 
 std::string Game::ResolutionError() const {

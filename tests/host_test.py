@@ -88,6 +88,22 @@ def stuck_core(program, core, log):
         session.close()
 
 
+def unloadable(program, core, log):
+    session = Session(program, core, log)
+    try:
+        cases = [('core', dict(session.paths, core=session.paths['disc'])),
+                 ('disc', dict(session.paths, disc=str(Path(session.paths['disc']).with_name('missing.cue'))))]
+        for code, paths in cases:
+            epoch = session.call('start', {'core': paths['core'], 'disc': paths['disc'], 'system': paths['system'],
+                                           'saves': paths['saves']})['epoch']
+            status = session.wait(lambda s: s and s['ended'], 5)
+            if status['errorCode'] != code or status['ready'] or 'aspect' not in status:
+                raise c.Failed(f'game {epoch} ended with {status}, not errorCode {code}')
+            session.call('release')
+    finally:
+        session.close()
+
+
 def many_games(program, core, log):
     session = Session(program, core, log)
     try:
@@ -121,7 +137,7 @@ def main():
     log = open(options.log, 'ab') if options.log else c.subprocess.DEVNULL
     c.load_atomics(options.core.resolve())
     failures = 0
-    tests = [test for test in (stuck_core, many_games) if not options.names or test.__name__ in options.names]
+    tests = [test for test in (stuck_core, unloadable, many_games) if not options.names or test.__name__ in options.names]
     for test in tests:
         try:
             test(options.host.resolve(), options.core.resolve(), log)

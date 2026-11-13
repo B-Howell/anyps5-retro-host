@@ -9,7 +9,7 @@ capability. It is a small C++17 program with three threads:
 | Thread | Does |
 | --- | --- |
 | Control (`main`) | Reads each message, answers calls and pings in order, and enforces the connection's order rules |
-| Game | Runs the core: `retro_init`, `retro_load_game`, then `retro_run` paced to the core's frame rate. Publishes frames and sends `ring`, `frame` and `rumble` |
+| Game | Started once the `start` reply is sent. Opens the core and the disc, then `retro_init`, `retro_load_game` and `retro_run` paced to the core's frame rate. Publishes frames and sends `ring`, `frame` and `rumble` |
 | Watch | Every 100 ms: the 5 s write limit, the stall and first-frame game limits, the `stop` limit, and the 10 s limit for leaving |
 
 On Linux and macOS a fourth thread waits for `SIGTERM` (sent by
@@ -67,8 +67,9 @@ through kqueue. On Windows a thread waits on the launcher's process handle.
   makes `retro_run` never return.
 - [`tests/host_test.py`](../tests/host_test.py) covers what the fixtures do
   not: a stuck core (the stall limit, then `release` replying and the host
-  exiting), and eight games in a row with `volume`, `pause` and `stop` calls in
-  between. Run it like `conformance.py`.
+  exiting), a core that is not a library and a missing disc (each ending the
+  game with `errorCode` `core` or `disc`), and eight games in a row with
+  `volume`, `pause` and `stop` calls in between. Run it like `conformance.py`.
 - [`tests/ring_access.c`](../tests/ring_access.c) gives the fake launcher the
   sequentially consistent loads and stores of `latest` and `reading` that
   protocol.md asks for; Python cannot make them on shared memory itself. It

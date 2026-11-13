@@ -584,7 +584,12 @@ Errors:
 - `busy`, if a game is loaded, running or ended. The launcher calls
   `release` for an ended game before the next `start`.
 - `argument`.
-- `start`, if the core cannot be loaded or the disc file cannot be opened.
+- `start`, if this host has already started its last game (see above).
+
+The host replies before it opens the core or the disc, so a reply always comes
+within the time limit. A core that cannot be loaded, or that is not a libretro
+version 1 core, ends the game with `errorCode` `core`; a disc file that cannot
+be opened ends it with `errorCode` `disc`.
 
 ### status
 
@@ -619,7 +624,7 @@ No argument. Returns `null` when no game is loaded, or:
 | `""` | The game has not ended, or ended without an error (it was stopped) |
 | `bios` | No usable BIOS was found in `system` |
 | `disc` | The disc, or a file it names, could not be read |
-| `core` | The core failed while loading or running the game |
+| `core` | The core could not be loaded, or failed while loading or running the game |
 | `stalled` | The game stopped producing frames (see [Timeouts](#timeouts)) |
 | `didNotStart` | The game produced no first frame in time |
 | `frameTooLarge` | The game's frame was larger than 8192 × 8192 |

@@ -39,6 +39,9 @@ void AudioOutput::Fill(ma_device* device, void* out, const void*, ma_uint32 fram
   }
   if (silent) done = 0;
   std::memset(samples + done * 2, 0, (frames - done) * 2 * sizeof(int16_t));
+  const float gain = state->owner->muted_ ? 0.0f : state->owner->level_.load();
+  if (gain >= 1.0f) return;
+  for (ma_uint32 i = 0; i < done * 2; ++i) samples[i] = static_cast<int16_t>(samples[i] * gain);
 }
 
 AudioOutput::AudioOutput() = default;
@@ -47,7 +50,6 @@ AudioOutput::~AudioOutput() { Close(); }
 
 void AudioOutput::Open(double sample_rate) {
   Close();
-  paused_ = false;
   std::lock_guard<std::mutex> lock(device_mutex_);
   if (!(sample_rate >= 8000 && sample_rate <= 192000)) return;
   auto device = std::make_unique<Device>();
@@ -69,7 +71,6 @@ void AudioOutput::Open(double sample_rate) {
     ma_pcm_rb_uninit(&device->buffer);
     return;
   }
-  ma_device_set_master_volume(&device->device, muted_ ? 0.0f : level_.load());
   device_ = std::move(device);
 }
 
@@ -96,10 +97,8 @@ void AudioOutput::Write(const int16_t* samples, size_t frames) {
 }
 
 void AudioOutput::SetVolume(float level, bool muted) {
-  std::lock_guard<std::mutex> lock(device_mutex_);
   level_ = level;
   muted_ = muted;
-  if (device_) ma_device_set_master_volume(&device_->device, muted ? 0.0f : level);
 }
 
 void AudioOutput::SetPaused(bool paused) { paused_ = paused; }

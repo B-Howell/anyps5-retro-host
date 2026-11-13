@@ -20,6 +20,8 @@
 #include "platform.h"
 #include "ring.h"
 
+struct retro_game_geometry;
+
 namespace retro_host {
 
 struct GameConfig {
@@ -56,11 +58,9 @@ class Game {
   Game(GameConfig config, PixelFormat format, GameEvents& events, AudioOutput& audio);
   ~Game();
 
-  // Opens the core library. Returns false, with error set, when the core cannot be loaded or is
-  // not a libretro core.
-  bool Start(std::string& error);
   // Starts the game's thread, once the reply to start has been sent, so no frame of this game
-  // reaches the launcher before its epoch does.
+  // reaches the launcher before its epoch does. The thread opens the core and the disc; when it
+  // cannot, the game ends with errorCode core or disc.
   void Begin();
 
   Json Status() const;
@@ -118,6 +118,9 @@ class Game {
 
   void Run();
   void RunGame();
+  bool LoadCore(std::string& error);
+  // Takes the core's aspect ratio, or base_width / base_height when it gives none (libretro).
+  void SetAspect(const ::retro_game_geometry& geometry);
   void Finish(const std::string& error, const std::string& code);
   void ApplyPendingWork();
   // Writes memory card 1 when it changed since the last write, or always; false when it could
@@ -168,6 +171,7 @@ class Game {
   bool timing_changed_ = false;
   std::vector<uint8_t> converted_;
   FrameResult frame_failure_ = FrameResult::kShown;
+  bool published_ = false;
   bool card_kept_ = true;
   mutable std::mutex pause_mutex_;
   bool bios_missing_ = false;
