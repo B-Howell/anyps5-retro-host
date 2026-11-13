@@ -144,6 +144,7 @@ def start_args(args, name=None):
         for key, value in obj(args['options'], 'start.options').items():
             string(value, f'start.options.{key}')
     if 'lockstep' in args:
+        obj(args['lockstep'], 'start.lockstep')
         lockstep_args(args['lockstep'], 'start.lockstep')
     if 'initialDisc' in args:
         integer(args['initialDisc'], 0, 127, 'start.initialDisc')

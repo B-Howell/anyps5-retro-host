@@ -759,13 +759,16 @@ Argument: `{"check":<integer 1 to 3600>,"paced":<boolean, optional>}`, or
   often a `sync` is sent: after every frame whose number is a multiple of it.
   `paced` (default `true`) keeps the game to its core's frame rate even when
   steps queue up; `false` runs queued steps as fast as the machine can, as a
-  player catching up does. Returns `{"frame":<integer>}`, the frame the next
-  `step` is for, which is 0 when the game has just entered lockstep. Returns
-  `false` when the game has ended.
+  player catching up does. The change takes effect between two frames: the
+  host waits for the frame being run to end before it replies. Returns
+  `{"frame":<integer>}`, the frame the next `step` is for, which is 0 when the
+  game has just entered lockstep. Returns `false` when the game has ended, or
+  when the frame being run did not end within 4 seconds.
 - With `false`, the game leaves lockstep and drops the steps it has not run.
   It then runs on its own, with the input of the last `input` messages, and
-  with as many connected ports as the last step it ran had. Returns `true`,
-  or `false` when the game has ended.
+  with as many connected ports as the last step it ran had. It too takes
+  effect between two frames. Returns `true`, or `false` when the game has
+  ended or the frame being run did not end within 4 seconds.
 
 `start.lockstep` takes the same object.
 
@@ -780,7 +783,8 @@ between two frames, before any step still queued.
   `{"frame":<integer>,"bytes":<integer>}`, with the file's size.
 - `loadState` reads such a file into the game, drops the steps not yet run,
   and sets the lockstep frame count to the frame in the file, so the next
-  `step` is for that frame. Returns the same object.
+  `step` is for that frame. A file whose frame is above 4294967295 is not
+  loaded. Returns the same object.
 
 Both return `false` when the game is not in lockstep or has ended, when the
 file cannot be written or read, or when the core refuses the state. They also
@@ -800,7 +804,7 @@ The file is the 48-byte header below, then the core's
 | --- | --- | --- |
 | 0 | 8 | The bytes `AP5STATE` |
 | 8 | 4 | 1, the file's version |
-| 12 | 4 | 1 when the next 8 bytes hold the last picture's hash, else 0 |
+| 12 | 4 | 1 when offset 24 holds the last picture's hash, else 0 |
 | 16 | 8 | The lockstep frame the state continues with |
 | 24 | 8 | The `video` hash of the last picture before the state was saved |
 | 32 | 8 | The size of the core's data that follows |

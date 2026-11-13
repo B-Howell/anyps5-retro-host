@@ -73,9 +73,12 @@ constexpr size_t kErrorBytes = 1024;
 // thread waits for one before it looks at other work again, and the state file's header.
 constexpr size_t kMaxSteps = 600;
 constexpr int64_t kStepWaitMs = 10;
+// How long entering or leaving lockstep waits for the frame being run to end.
+constexpr int64_t kFrameFenceMs = 4000;
 constexpr char kStateMagic[8] = {'A', 'P', '5', 'S', 'T', 'A', 'T', 'E'};
 constexpr uint32_t kStateVersion = 1;
 constexpr size_t kStateHeaderBytes = 48;
+constexpr uint64_t kMaxLockstepFrame = 4294967295ULL;
 constexpr uint64_t kFnvOffset = 14695981039346656037ULL;
 constexpr uint64_t kFnvPrime = 1099511628211ULL;
 
@@ -321,6 +324,8 @@ void Game::RunGame() {
       const double fps = fps_ > 1 && fps_ < 1000 ? fps_ : 60.0;
       frame_time = std::chrono::duration<double>(1.0 / fps);
     }
+    // Held for the whole frame, so entering or leaving lockstep happens between two frames.
+    std::unique_lock<std::timed_mutex> running(run_mutex_);
     const NextStep step = TakeStep(kStepWaitMs);
     if (step.lockstep && !step.input) {
       quiet_since_ = NowMs();
@@ -339,6 +344,7 @@ void Game::RunGame() {
     run();
     step_input_.reset();
     if (step.input) FinishStep(step.frame);
+    running.unlock();
     {
       std::lock_guard<std::mutex> lock(mutex_);
       if (disc_.inserted && *disc_.inserted < disc_.paths.size()) disc_.played = disc_.paths[*disc_.inserted];
@@ -1068,6 +1074,8 @@ bool Game::Ready() const {
 
 
 std::optional<uint64_t> Game::Lockstep(const LockstepConfig& config) {
+  std::unique_lock<std::timed_mutex> running(run_mutex_, std::defer_lock);
+  if (!running.try_lock_for(std::chrono::milliseconds(kFrameFenceMs))) return std::nullopt;
   std::lock_guard<std::mutex> lock(mutex_);
   if (ended_) return std::nullopt;
   if (!lockstep_) {
@@ -1080,6 +1088,8 @@ std::optional<uint64_t> Game::Lockstep(const LockstepConfig& config) {
 
 bool Game::LeaveLockstep() {
   {
+    std::unique_lock<std::timed_mutex> running(run_mutex_, std::defer_lock);
+    if (!running.try_lock_for(std::chrono::milliseconds(kFrameFenceMs))) return false;
     std::lock_guard<std::mutex> lock(mutex_);
     if (ended_) return false;
     lockstep_.reset();
@@ -1227,6 +1237,7 @@ std::optional<StateResult> Game::ReadState(const std::string& path) {
   const auto unserialize = Get<bool (*)(const void*, size_t)>("retro_unserialize");
   if (!unserialize) return std::nullopt;
   const uint64_t frame = GetLe(*file, 16, 8);
+  if (frame > kMaxLockstepFrame) return std::nullopt;
   savestate_context_ = RETRO_SAVESTATE_CONTEXT_ROLLBACK_NETPLAY;
   const bool loaded = unserialize(file->data() + kStateHeaderBytes, file->size() - kStateHeaderBytes);
   savestate_context_ = RETRO_SAVESTATE_CONTEXT_NORMAL;

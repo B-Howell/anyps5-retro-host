@@ -37,6 +37,7 @@ class Peer:
         self.host = (c.WindowsHost if c.WINDOWS else c.PosixHost)(program, log)
         self.next_id = 0
         self.syncs = {}
+        self.log = []
         self.epoch = None
         self.host.send_message({'type': 'hello', 'minVersion': 1, 'maxVersion': 1, 'pixelFormats': ['rgba8']})
         welcome = self.pump(lambda m: m.get('type') in ('welcome', 'unsupported'))
@@ -54,6 +55,7 @@ class Peer:
             c.close_all(descriptors)
             if message.get('type') == 'sync':
                 self.syncs[message['frame']] = message
+                self.log.append(message['frame'])
             if wanted is None or wanted(message):
                 return message
 
@@ -256,6 +258,7 @@ def play(options):
             if split['host'][0]['ram'] == split['guest'][0]['ram']:
                 raise c.Failed('a different input on port 2 left the same RAM hash')
             print('a different input on port 2 shows up in the next sync')
+            reentry(first)
             protocol_errors(match)
 
         for peer in (first, second):
@@ -286,6 +289,27 @@ def refusals(peer, match):
     if peer.call('loadState', {'path': str(bad)}) is not False:
         raise c.Failed('a state file with the wrong size was loaded')
     print('lockstep refuses option, connectedPorts and states it cannot write or read')
+
+
+def reentry(peer):
+    """Leaving and entering lockstep while steps are being run: no frame of the old count may send
+    its sync into the new one, which starts at 0."""
+    start = peer.call('lockstep', {'check': 1, 'paced': False})['frame']
+    for frame in range(start, start + 500):
+        peer.step(frame, script(frame))
+    if peer.call('lockstep', False) is not True:
+        raise c.Failed('leaving lockstep did not reply true')
+    if peer.call('lockstep', {'check': 1, 'paced': False}) != {'frame': 0}:
+        raise c.Failed('entering lockstep again did not start at frame 0')
+    peer.log.clear()
+    peer.syncs.clear()
+    peer.drain()
+    if peer.log:
+        raise c.Failed(f'syncs of the old count arrived after entering again: {peer.log[:5]}')
+    advance([peer], 0, 10)
+    if peer.log != list(range(10)):
+        raise c.Failed(f'the new count sent syncs {peer.log}')
+    print('leaving and entering lockstep mid-run keeps the old frames out of the new count')
 
 
 def protocol_errors(match):

@@ -110,9 +110,12 @@ class Game {
   void SetInput(unsigned port, const PortInput& input);
 
   // Puts a running game in lockstep, or changes how it runs there; the frame count starts at 0
-  // when it enters. Returns the next frame the game will run, or nothing when it has ended.
+  // when it enters. Both this and LeaveLockstep wait for the frame being run to end, so no frame
+  // straddles the change. Returns the next frame the game will run, or nothing when it has ended
+  // or its frame did not end within 4 seconds.
   std::optional<uint64_t> Lockstep(const LockstepConfig& config);
-  // Leaves lockstep and drops the steps not yet run; false when the game has ended.
+  // Leaves lockstep and drops the steps not yet run; false when the game has ended or its frame
+  // did not end within 4 seconds.
   bool LeaveLockstep();
   // Queues the input for one lockstep frame.
   StepResult Step(uint64_t frame, const StepInput& input);
@@ -298,6 +301,8 @@ class Game {
   void ServeStateRequest();
   std::optional<StateResult> WriteState(const std::string& path);
   std::optional<StateResult> ReadState(const std::string& path);
+  // Held by the game's thread while it runs a frame (see Lockstep and LeaveLockstep).
+  std::timed_mutex run_mutex_;
   std::condition_variable step_signal_;
   std::condition_variable state_signal_;
   std::optional<LockstepConfig> lockstep_;

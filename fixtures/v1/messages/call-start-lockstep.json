@@ -1,0 +1,26 @@
+{
+  "description": "Start a game in lockstep from a cold boot: it runs no frame before the first step, and sends a sync after every frame.",
+  "from": "launcher",
+  "message": {
+    "type": "call",
+    "id": 2,
+    "method": "start",
+    "args": {
+      "core": "${core}",
+      "disc": "${disc}",
+      "system": "${system}",
+      "saves": "${saves}",
+      "lockstep": {
+        "check": 1,
+        "paced": true
+      }
+    }
+  },
+  "reply": {
+    "type": "reply",
+    "id": 2,
+    "result": {
+      "epoch": 1
+    }
+  }
+}

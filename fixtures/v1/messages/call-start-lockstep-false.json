@@ -1,0 +1,28 @@
+{
+  "description": "start.lockstep takes only an object; false is the lockstep method's way to leave.",
+  "from": "launcher",
+  "invalid": "start.lockstep must be an object",
+  "message": {
+    "type": "call",
+    "id": 2,
+    "method": "start",
+    "args": {
+      "core": "${core}",
+      "disc": "${disc}",
+      "system": "${system}",
+      "saves": "${saves}",
+      "lockstep": false
+    }
+  },
+  "reply": {
+    "type": "reply",
+    "id": 2,
+    "error": {
+      "code": "argument",
+      "message": "start.lockstep must be an object."
+    }
+  },
+  "anyValueFor": [
+    "error.message"
+  ]
+}

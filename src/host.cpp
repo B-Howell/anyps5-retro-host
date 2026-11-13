@@ -62,26 +62,28 @@ std::string NeedPath(const Json& args, const char* field, const char* method = "
 }
 
 // One controller port's state as input and step give it: buttons and the four stick axes.
-std::optional<PortInput> ParsePort(const Json& message) {
+bool ParsePort(const Json& message, PortInput& input) {
   const Json* buttons = message.Find("buttons");
-  const auto button_bits = buttons ? buttons->Integer(0, 65535) : std::nullopt;
-  if (!button_bits) return std::nullopt;
-  PortInput input;
+  if (!buttons) return false;
+  const auto button_bits = buttons->Integer(0, 65535);
+  if (!button_bits) return false;
   input.buttons = static_cast<uint16_t>(*button_bits);
   const char* const axes[] = {"leftX", "leftY", "rightX", "rightY"};
   for (int i = 0; i < 4; ++i) {
     const Json* axis = message.Find(axes[i]);
-    const auto value = axis ? axis->Integer(-32768, 32767) : std::nullopt;
-    if (!value) return std::nullopt;
+    if (!axis) return false;
+    const auto value = axis->Integer(-32768, 32767);
+    if (!value) return false;
     input.sticks[i] = static_cast<int16_t>(*value);
   }
-  return input;
+  return true;
 }
 
 LockstepConfig NeedLockstep(const Json& args, const std::string& where) {
   Need(args.IsObject(), where + " must be an object.");
   const Json* check = args.Find("check");
-  const auto every = check ? check->Integer(1, 3600) : std::nullopt;
+  Need(check != nullptr, where + ".check must be an integer from 1 to 3600.");
+  const auto every = check->Integer(1, 3600);
   Need(every.has_value(), where + ".check must be an integer from 1 to 3600.");
   LockstepConfig config;
   config.check = static_cast<uint32_t>(*every);
@@ -205,27 +207,28 @@ Host::Outcome Host::Call(const Json& message) {
 
 Host::Outcome Host::Input(const Json& message) {
   const Json* port = message.Find("port");
-  const auto port_index = port ? port->Integer(0, 1) : std::nullopt;
-  const auto input = ParsePort(message);
-  if (!port_index || !input) return Outcome::kProtocolError;
-  inputs_[*port_index] = *input;
-  if (auto game = CurrentGame()) game->SetInput(static_cast<unsigned>(*port_index), *input);
+  if (!port) return Outcome::kProtocolError;
+  const auto port_index = port->Integer(0, 1);
+  PortInput input;
+  if (!port_index || !ParsePort(message, input)) return Outcome::kProtocolError;
+  const unsigned index = static_cast<unsigned>(*port_index);
+  inputs_[index] = input;
+  if (auto game = CurrentGame()) game->SetInput(index, input);
   return Outcome::kContinue;
 }
 
 Host::Outcome Host::Step(const Json& message) {
   const Json* frame = message.Find("frame");
   const Json* ports = message.Find("ports");
-  const auto number = frame ? frame->Integer(0, kMaxFrame) : std::nullopt;
+  if (!frame) return Outcome::kProtocolError;
+  const auto number = frame->Integer(0, kMaxFrame);
   if (!number || !ports || !ports->IsArray() || ports->AsArray().empty() || ports->AsArray().size() > 2) {
     return Outcome::kProtocolError;
   }
   StepInput input;
   input.connected = static_cast<unsigned>(ports->AsArray().size());
   for (size_t port = 0; port < input.connected; ++port) {
-    const auto state = ParsePort(ports->AsArray()[port]);
-    if (!state) return Outcome::kProtocolError;
-    input.ports[port] = *state;
+    if (!ParsePort(ports->AsArray()[port], input.ports[port])) return Outcome::kProtocolError;
   }
   const auto game = CurrentGame();
   if (!game) return Outcome::kProtocolError;
