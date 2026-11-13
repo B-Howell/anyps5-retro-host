@@ -60,7 +60,7 @@ class PipeChannel final : public Channel {
     while (sent < frame.size()) {
       DWORD wrote = 0;
       const DWORD chunk = static_cast<DWORD>(std::min<size_t>(frame.size() - sent, 1u << 20));
-      if (!WriteFile(write_, frame.data() + sent, chunk, &wrote, nullptr) || wrote == 0) return false;
+      if (!::WriteFile(write_, frame.data() + sent, chunk, &wrote, nullptr) || wrote == 0) return false;
       sent += wrote;
     }
     return true;
@@ -72,7 +72,7 @@ class PipeChannel final : public Channel {
     while (got < size) {
       DWORD read = 0;
       const DWORD chunk = static_cast<DWORD>(std::min<size_t>(size - got, 1u << 20));
-      if (!ReadFile(read_, out + got, chunk, &read, nullptr) || read == 0) return ReadResult::kEnd;
+      if (!::ReadFile(read_, out + got, chunk, &read, nullptr) || read == 0) return ReadResult::kEnd;
       got += read;
     }
     return ReadResult::kMessage;
@@ -200,7 +200,7 @@ bool CreateDirectories(const std::string& path) {
   return IsDirectory(path);
 }
 
-std::optional<std::string> ReadFile(const std::string& path) {
+std::optional<std::string> ReadWholeFile(const std::string& path) {
   std::ifstream in(std::filesystem::path(Wide(path)), std::ios::binary);
   if (!in) return std::nullopt;
   std::ostringstream data;

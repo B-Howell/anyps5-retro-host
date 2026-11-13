@@ -325,7 +325,7 @@ bool CreateDirectories(const std::string& path) {
   return IsDirectory(path);
 }
 
-std::optional<std::string> ReadFile(const std::string& path) {
+std::optional<std::string> ReadWholeFile(const std::string& path) {
   std::ifstream in(path, std::ios::binary);
   if (!in) return std::nullopt;
   std::ostringstream data;

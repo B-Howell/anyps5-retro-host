@@ -150,7 +150,7 @@ void Game::RunGame() {
   void* card = Get<void* (*)(unsigned)>("retro_get_memory_data")(RETRO_MEMORY_SAVE_RAM);
   const size_t card_size = Get<size_t (*)(unsigned)>("retro_get_memory_size")(RETRO_MEMORY_SAVE_RAM);
   if (card && card_size) {
-    if (const auto saved = ReadFile(CardPath()); saved && saved->size() == card_size) {
+    if (const auto saved = ReadWholeFile(CardPath()); saved && saved->size() == card_size) {
       std::memcpy(card, saved->data(), card_size);
     }
     card_.assign(static_cast<const char*>(card), card_size);
@@ -289,7 +289,7 @@ void Game::RefreshDiscs() {
 }
 
 std::optional<std::string> Game::PlaylistEntry(unsigned index) const {
-  const auto text = ReadFile(config_.disc);
+  const auto text = ReadWholeFile(config_.disc);
   if (!text) return std::nullopt;
   unsigned at = 0;
   size_t start = 0;
@@ -575,15 +575,22 @@ Json Game::Status() const {
                     {"progressPercent", nullptr},
                     {"options", std::move(options)}};
   if (disc_.labels.size() > 1) {
-    const Json inserted = disc_.inserted ? Json(static_cast<uint64_t>(*disc_.inserted)) : Json(nullptr);
-    const Json path = disc_.inserted && *disc_.inserted < disc_.paths.size() ? Json(disc_.paths[*disc_.inserted])
-                                                                              : Json(nullptr);
-    status.emplace_back("discs", JsonObject{{"labels", JsonArray(disc_.labels.begin(), disc_.labels.end())},
-                                            {"inserted", inserted},
-                                            {"insertedDiscPath", path},
-                                            {"playedDiscPath", ready_ ? disc_.played : std::string()},
-                                            {"busy", disc_.busy},
-                                            {"failed", disc_.failed}});
+    JsonObject discs;
+    discs.emplace_back("labels", JsonArray(disc_.labels.begin(), disc_.labels.end()));
+    if (disc_.inserted) {
+      discs.emplace_back("inserted", static_cast<uint64_t>(*disc_.inserted));
+    } else {
+      discs.emplace_back("inserted", nullptr);
+    }
+    if (disc_.inserted && *disc_.inserted < disc_.paths.size()) {
+      discs.emplace_back("insertedDiscPath", disc_.paths[*disc_.inserted]);
+    } else {
+      discs.emplace_back("insertedDiscPath", nullptr);
+    }
+    discs.emplace_back("playedDiscPath", ready_ ? disc_.played : std::string());
+    discs.emplace_back("busy", disc_.busy);
+    discs.emplace_back("failed", disc_.failed);
+    status.emplace_back("discs", std::move(discs));
   }
   return Json(std::move(status));
 }

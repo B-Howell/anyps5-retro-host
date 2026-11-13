@@ -76,7 +76,7 @@ class Library {
 bool CanRead(const std::string& path);
 bool IsDirectory(const std::string& path);
 bool CreateDirectories(const std::string& path);
-std::optional<std::string> ReadFile(const std::string& path);
+std::optional<std::string> ReadWholeFile(const std::string& path);
 // Replaces the file at path with data: written beside it, then renamed over it.
 bool WriteFileAtomically(const std::string& path, const std::string& data);
 
