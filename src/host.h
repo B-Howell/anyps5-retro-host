@@ -5,6 +5,7 @@
 #define ANYPS5_RETRO_HOST_HOST_H_
 
 #include <atomic>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -43,6 +44,8 @@ class Host final : public GameEvents {
   struct Reply {
     Json result;
     std::optional<Json> error;
+    // Runs once the reply is sent.
+    std::function<void()> after;
     bool exit_after = false;
   };
 

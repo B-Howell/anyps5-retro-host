@@ -100,9 +100,12 @@ bool Game::Start(std::string& error) {
     library_.Close();
     return false;
   }
+  return true;
+}
+
+void Game::Begin() {
   quiet_since_ = NowMs();
   thread_ = std::thread([this] { Run(); });
-  return true;
 }
 
 void Game::Run() {
@@ -165,9 +168,10 @@ void Game::RunGame() {
     else if (info.geometry.base_height) aspect_ = static_cast<double>(info.geometry.base_width) / info.geometry.base_height;
   }
   RefreshDiscs();
-  audio_.Open(info.timing.sample_rate);
-  const double fps = info.timing.fps > 1 && info.timing.fps < 1000 ? info.timing.fps : 60.0;
-  const auto frame_time = std::chrono::duration<double>(1.0 / fps);
+  fps_ = info.timing.fps;
+  sample_rate_ = info.timing.sample_rate;
+  timing_changed_ = true;
+  auto frame_time = std::chrono::duration<double>(1.0 / 60.0);
 
   const auto run = Get<void (*)()>("retro_run");
   auto next = std::chrono::steady_clock::now();
@@ -180,6 +184,12 @@ void Game::RunGame() {
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
       next = std::chrono::steady_clock::now();
       continue;
+    }
+    if (timing_changed_) {
+      timing_changed_ = false;
+      audio_.Open(sample_rate_);
+      const double fps = fps_ > 1 && fps_ < 1000 ? fps_ : 60.0;
+      frame_time = std::chrono::duration<double>(1.0 / fps);
     }
     ApplyPendingWork();
     run();
@@ -438,6 +448,9 @@ bool Game::Environment(unsigned command, void* data) {
     }
     case RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO: {
       const auto* info = static_cast<const retro_system_av_info*>(data);
+      fps_ = info->timing.fps;
+      sample_rate_ = info->timing.sample_rate;
+      timing_changed_ = true;
       std::lock_guard<std::mutex> lock(mutex_);
       if (info->geometry.aspect_ratio > 0) aspect_ = info->geometry.aspect_ratio;
       return true;

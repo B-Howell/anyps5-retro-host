@@ -146,6 +146,7 @@ Host::Outcome Host::Call(const Json& message) {
   } else {
     Send(Json(JsonObject{{"type", "reply"}, {"id", *id}, {"result", reply.result}}));
   }
+  if (reply.after) reply.after();
   if (reply.exit_after) ExitNow(kExitMissedLimit);
   return Outcome::kContinue;
 }
@@ -275,7 +276,9 @@ Host::Reply Host::Start(const Json& args) {
     std::lock_guard<std::mutex> lock(game_mutex_);
     game_ = std::move(game);
   }
-  return Result(Json(JsonObject{{"epoch", config.epoch}}));
+  Reply reply = Result(Json(JsonObject{{"epoch", config.epoch}}));
+  reply.after = [started = CurrentGame()] { started->Begin(); };
+  return reply;
 }
 
 bool Host::OnFrame(const uint8_t* pixels, uint32_t width, uint32_t height, uint32_t epoch) {

@@ -54,9 +54,12 @@ class Game {
   Game(GameConfig config, PixelFormat format, GameEvents& events, AudioOutput& audio);
   ~Game();
 
-  // Opens the core library and starts the game's thread. Returns false, with error set, when the
-  // core cannot be loaded or is not a libretro core.
+  // Opens the core library. Returns false, with error set, when the core cannot be loaded or is
+  // not a libretro core.
   bool Start(std::string& error);
+  // Starts the game's thread, once the reply to start has been sent, so no frame of this game
+  // reaches the launcher before its epoch does.
+  void Begin();
 
   Json Status() const;
   void Pause(bool paused);
@@ -156,6 +159,9 @@ class Game {
   std::atomic<int64_t> paused_at_{-1};
 
   int core_pixel_format_ = 0;
+  double fps_ = 60.0;
+  double sample_rate_ = 0.0;
+  bool timing_changed_ = false;
   std::vector<uint8_t> converted_;
   bool frame_too_large_ = false;
   bool bios_missing_ = false;
