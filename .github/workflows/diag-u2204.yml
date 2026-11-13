@@ -55,21 +55,22 @@ jobs:
           sudo mkdir -p /tmp/cores && sudo chmod 777 /tmp/cores
           sudo sysctl -w kernel.core_pattern=/tmp/cores/core.%e.%p
           ulimit -c unlimited
-          EGL_LOG_LEVEL=debug python3 tests/real_core.py --host build/anyps5-retro-host --core swanstation/build/swanstation_libretro.so --bios ps1-files/openbios.bin --program ps1-files/hello.exe --log build/real-core.log
+          LD_DEBUG=files LD_DEBUG_OUTPUT=/tmp/cores/ld python3 tests/real_core.py --host build/anyps5-retro-host --core swanstation/build/swanstation_libretro.so --bios ps1-files/openbios.bin --program ps1-files/hello.exe --log build/real-core.log
+      - name: Debug symbols for Mesa and libglvnd
+        continue-on-error: true
+        run: |
+          echo "deb http://ddebs.ubuntu.com jammy main restricted universe multiverse" | sudo tee /etc/apt/sources.list.d/ddebs.list
+          echo "deb http://ddebs.ubuntu.com jammy-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/ddebs.list
+          sudo apt-get install -y ubuntu-dbgsym-keyring
+          sudo apt-get update
+          sudo apt-get install -y libegl-mesa0-dbgsym libegl1-dbgsym libglvnd0-dbgsym libgl1-mesa-dri-dbgsym libglapi-mesa-dbgsym libc6-dbg || true
       - if: always()
         run: |
+          grep -h -E 'generating link map|calling fini|file=.*(EGL|GL|gallium|swrast|dri)' /tmp/cores/ld.* | grep -v 'needed by' | head -80 || true
+          grep -h -A2 -E 'file=.*(libEGL|libGLdispatch|libOpenGL|libGL\.|swrast|gallium|libglapi).*generating link map' /tmp/cores/ld.* | head -80 || true
           tail -60 build/real-core.log || true
           ls -l /tmp/cores || true
           for c in /tmp/cores/core.*; do
             [ -f "$c" ] || continue
-            gdb -batch -ex 'info sharedlibrary' -ex 'thread apply all bt full' build/anyps5-retro-host "$c" 2>&1 | head -600
+            gdb -batch -ex 'info sharedlibrary' -ex 'thread apply all bt' -ex 'thread 1' -ex 'frame 1' -ex 'x/6i $pc-20' -ex 'info registers' build/anyps5-retro-host "$c" 2>&1 | head -600
           done
-      - name: Run with ASan host
-        if: always()
-        continue-on-error: true
-        run: |
-          cmake -S . -B asan -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_FLAGS="-fsanitize=address -fno-omit-frame-pointer" -DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address
-          cmake --build asan
-          ASAN_OPTIONS=detect_leaks=0:abort_on_error=0 python3 tests/real_core.py --host asan/anyps5-retro-host --core swanstation/build/swanstation_libretro.so --bios ps1-files/openbios.bin --program ps1-files/hello.exe --log asan/real-core.log || true
-          grep -n -E 'AddressSanitizer|ERROR|SUMMARY' -A60 asan/real-core.log | head -300 || true
-          tail -30 asan/real-core.log
