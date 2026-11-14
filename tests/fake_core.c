@@ -21,7 +21,10 @@
  * holds fake-hold-load, retro_load_game waits after reading the scale, and while it holds
  * fake-hold-reset, context_reset waits, each writing fake-held-load or fake-held-reset there
  * first, so a test can act, and look at the host, between those steps. fake-hold-run does the same
- * inside retro_run, so a test can act while a frame is being run. */
+ * inside retro_run, so a test can act while a frame is being run. While it holds fake-port2-picture,
+ * a software frame's colour comes from port 2's buttons, and a frame with Select held on port 2
+ * repeats the last picture (the video callback without pixels), as a core does for a frame that
+ * drew nothing new. */
 
 #include <libretro.h>
 
@@ -360,6 +363,7 @@ RETRO_API void retro_run(void) {
   uint32_t fill;
   unsigned i;
   bool cross;
+  uint16_t second;
   input_poll();
   hold_while_asked("run");
   if (environment(RETRO_ENVIRONMENT_GET_VARIABLE, &hang) && hang.value && strcmp(hang.value, "yes") == 0) {
@@ -387,6 +391,11 @@ RETRO_API void retro_run(void) {
                    (float)(fill & 0xFF) / 255.0f, 1.0f);
     gl_clear(GL_COLOR_BUFFER_BIT);
     video(RETRO_HW_FRAME_BUFFER_VALID, WIDTH * scale, HEIGHT * scale, 0);
+  } else if (in_system_directory("fake-port2-picture")) {
+    second = (uint16_t)input_state(1, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_MASK);
+    for (i = 0; i < WIDTH * HEIGHT; ++i) pixels[i] = fill + (second & 0xFFu) * 0x10000u;
+    if (second & (1u << RETRO_DEVICE_ID_JOYPAD_SELECT)) video(NULL, WIDTH, HEIGHT, 0);
+    else video(pixels, WIDTH, HEIGHT, WIDTH * sizeof(uint32_t));
   } else {
     for (i = 0; i < WIDTH * HEIGHT; ++i) pixels[i] = fill + (frame_count & 0xFF) * 0x10000u;
     video(pixels, WIDTH, HEIGHT, WIDTH * sizeof(uint32_t));

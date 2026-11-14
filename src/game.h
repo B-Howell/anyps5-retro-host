@@ -347,13 +347,15 @@ class Game {
   std::optional<StateResult> WriteState(const std::string& path);
   std::optional<StateResult> ReadState(const std::string& path);
   // In-memory states, used only on the game's thread. A slot keeps the core's data in a buffer it
-  // reuses, the lockstep frame and picture hash it continues with, and the lockstep count it was
-  // saved in: entering lockstep anew starts frames at 0 again, so older slots no longer load.
+  // reuses, the lockstep frame and picture hash it continues with, the motors as the core had set
+  // them, and the lockstep count it was saved in: entering lockstep anew starts frames at 0 again,
+  // so older slots no longer load.
   // The core is told the state stays in this process (RETRO_SAVESTATE_CONTEXT_RUNAHEAD_SAME_INSTANCE).
   struct MemoryState {
     std::string data;
     uint64_t frame = 0;
     std::optional<uint64_t> video;
+    std::array<std::array<uint16_t, 2>, 2> rumble{};
     unsigned ports = 1;
     uint64_t entry = 0;
     bool used = false;
@@ -434,10 +436,10 @@ class Game {
   // The states before frames whose input was partly predicted, at frame modulo rollback frames;
   // used only on the game's thread.
   std::vector<MemoryState> rollback_states_;
-  // While the game's thread runs frames again, it passes on only the picture of the last one, no
-  // sound, and the rumble only once it is done.
+  // While the game's thread runs frames again, it passes on only the newest picture, once it is
+  // done (held_picture_ is its size while it waits), no sound, and the rumble once it is done.
   bool resimulating_ = false;
-  bool publish_resimulated_ = false;
+  std::optional<std::pair<uint32_t, uint32_t>> held_picture_;
   // Runs the core for one frame: with a lockstep frame's input and port count, or with the input
   // of the last input messages.
   void RunFrame(const std::optional<StepInput>& input);

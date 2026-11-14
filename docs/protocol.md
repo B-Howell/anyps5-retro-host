@@ -948,11 +948,14 @@ it is known.
   have come. When the input a frame last ran with differs from what is now
   known, the host loads the state from before the first such frame and runs
   it and every later frame it has run again, as fast as it can, with the
-  input known now and new predictions for the rest. It shows only the picture
-  of the last of them (one `frame` message), gives the core and the player no
-  sound for them (the frames' sound already played once), and sends `rumble`
-  only for a port whose motors end differently than the player was last
-  told. Then it sends a [`rollback`](#rollback-message) message.
+  input known now and new predictions for the rest. When it is done it shows
+  the newest picture those frames made (one `frame` message), even when the
+  last of them made none of its own; it gives the core and the player no
+  sound for them (the frames' sound already played once); and it sends
+  `rumble` only for a port whose motors end differently than the player was
+  last told, the motors being restored with the state. Then it sends a
+  [`rollback`](#rollback-message) message. If none of the frames made a
+  picture, the picture shown stays the one the predicted frames left.
 - **Syncs.** A frame's `sync` comes once the frame is confirmed, with what the
   frame left behind the last time it was run, so two players' hosts compare
   the same thing however often each ran it.

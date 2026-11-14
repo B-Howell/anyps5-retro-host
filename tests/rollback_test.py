@@ -8,7 +8,7 @@ Each player steps every frame as soon as the rollback window lets it, leaving th
 host predicts it), and sends each late input as a correction. Wrong predictions make the host load the
 state from before the frame and run the frames again. Every frame's sync, sent once the frame is confirmed,
 must match the reference's: main RAM, picture and state. The players also unplug and plug in port 2 on the
-way. The test counts the rollbacks, checks that the frames run again showed only their last picture, and
+way. The test counts the rollbacks, checks that the frames run again showed only their newest picture, and
 prints what a rollback cost per frame run again.
 
 With the test core it also checks the protocol errors and refusals of rollback. With --bios it runs the
@@ -121,13 +121,19 @@ def play_phase(options, players, first, count):
 
 
 def wait_for_sync(peers, frame, seconds=120):
+    """Waits until every peer has sent the sync of frame, reading each in turn: a host left unread blocks
+    on a full socket and, after protocol.md's 5-second write limit, exits."""
     deadline = time.monotonic() + seconds
-    for peer in peers:
-        while frame not in peer.syncs:
+    waiting = list(peers)
+    while waiting:
+        for peer in list(waiting):
+            if frame in peer.syncs:
+                waiting.remove(peer)
+                continue
             if time.monotonic() > deadline:
                 raise c.Failed(f'{peer.name}: no sync for frame {frame}')
             try:
-                peer.pump(lambda m: m.get('type') == 'sync', 0.5)
+                peer.pump(lambda m: m.get('type') == 'sync', 0.05)
             except c.Idle:
                 pass
 
@@ -230,6 +236,50 @@ def right_guesses(match):
     print('predictions that come true cause no rollback and match lockstep')
 
 
+def resimulated_picture(match):
+    """After a rollback whose last frame repeats an earlier picture, the newest picture the frames made
+    again is shown, not the predicted one, and only once; and nothing is shown for frames run again
+    before it."""
+    system = Path(match.paths['system'])
+    marker = system / 'fake-port2-picture'
+    marker.write_bytes(b'')
+    try:
+        peer = match.peer('picture')
+        peer.call('start', match.start_args(peer.name, lockstep=rollback_args()))
+        ls.advance([peer], 0, 5, lambda p, f: [ls.port(0), ls.port(16)])
+        time.sleep(0.3)
+        peer.drain()
+        shown = peer.pictures
+        for frame in range(5, 8):
+            peer.step(frame, [ls.port(0), None])
+        deadline = time.monotonic() + 10
+        while peer.pictures < shown + 3:
+            if time.monotonic() > deadline:
+                raise c.Failed('the predicted frames showed no pictures')
+            try:
+                peer.pump(timeout=0.1)
+            except c.Idle:
+                pass
+        select = 1 << 2
+        peer.correct(5, 1, ls.port(32))
+        peer.correct(6, 1, ls.port(select))
+        peer.correct(7, 1, ls.port(select))
+        wait_for_sync([peer], 7, 10)
+        time.sleep(0.3)
+        peer.drain()
+        if len(peer.rollbacks) != 1 or peer.rollbacks[0]['frame'] != 5 or peer.rollbacks[0]['frames'] != 3:
+            raise c.Failed(f'picture: expected one rollback of frames 5 to 7, got {peer.rollbacks}')
+        if peer.pictures != shown + 4:
+            raise c.Failed(f'picture: {peer.pictures - shown} pictures for 3 predicted frames and a rollback ending '
+                           'on a repeated picture, not 4')
+        peer.host.send_message({'type': 'shutdown'})
+        if peer.host.exits(15) != 0:
+            raise c.Failed('picture: the host did not exit cleanly')
+    finally:
+        marker.unlink(missing_ok=True)
+    print('a rollback ending on a repeated picture shows the newest picture made again, once')
+
+
 def refusals(match):
     """What rollback refuses while frames are not confirmed, and what it forgets on a load."""
     peer = match.peer('refusals')
@@ -321,6 +371,7 @@ def play(options):
         players = network(options, match)
         if not match.real:
             right_guesses(match)
+            resimulated_picture(match)
             refusals(match)
             protocol_errors(match)
         for player in players:

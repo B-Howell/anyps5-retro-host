@@ -180,10 +180,11 @@ the launcher ([protocol.md](protocol.md) "Rollback" is the contract, host.md
   corrections that came; if a frame ran with input other than the real one,
   it loads the state from before the first such frame and runs it and every
   later frame again, as fast as it can, with the real input and new
-  predictions for what is still missing. Only the last of those frames shows
-  its picture; none plays sound again (the core is told audio is off for
-  them, as RetroArch tells it for its replays); rumble is sent once, for
-  motors that ended differently. A `rollback` message reports the frames and
+  predictions for what is still missing. Only the newest picture they made
+  is shown, once they are done; none plays sound again (the core is told
+  audio is off for them, as RetroArch tells it for its replays); the motors
+  come back with the state, and rumble is sent once, for motors that ended
+  differently. A `rollback` message reports the frames and
   the time.
 - A frame is confirmed once every port's input in it and every earlier frame
   is known. The host decides that itself from the steps and corrections, so

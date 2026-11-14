@@ -70,9 +70,14 @@ network left to the launcher.
   `RETRO_ENVIRONMENT_GET_AUDIO_VIDEO_ENABLE` that audio is off (as RetroArch
   tells it for runahead and netplay replays) and the host drops any samples;
   video stays on, since a later frame's `sync.video` can be the hash of such a
-  frame's picture, and each picture is hashed but only the last frame's is
-  published. Rumble is held and sent once, for motors that changed. Then the
-  host sends a `rollback` message with the time the load and the frames took.
+  frame's picture, and each picture is hashed but held (`held_picture_`); the
+  newest one is published once the frames are done, also when the last frame
+  repeated an earlier picture. Each in-memory state also keeps the motors the
+  core had set, since a core may set them only when they change; a load
+  restores them, and the host tells the launcher of the motors that ended
+  differently once the frames are done (and at once for a slot `loadState`).
+  Then the host sends a `rollback` message with the time the load and the
+  frames took.
 
 ## Choices made for version 1
 
@@ -229,7 +234,9 @@ network left to the launcher.
   and `fake-hold-reset` files make it wait after reading the scale in
   `retro_load_game` and in `context_reset`, so a test can act between them;
   `fake-hold-run` makes it wait inside `retro_run`, so a test can act while a
-  frame is being run.
+  frame is being run. With `fake-port2-picture` a frame's colour comes
+  from port 2's buttons, and Select held on port 2 makes it repeat the last
+  picture (the video callback without pixels).
 - [`tests/host_test.py`](../tests/host_test.py) covers what the fixtures do
   not: a stuck core (the stall limit, then `release` replying and the host
   exiting), a core that is not a library and a missing disc (each ending the
@@ -277,9 +284,11 @@ network left to the launcher.
   frames. Every frame's `sync` must match the reference's (RAM, picture and
   state), each must come once and in order, a rollback must have happened,
   and the players may show at most one picture more than the reference for
-  each rollback (frames run again show only their last picture). A second
+  each rollback (frames run again show only their newest picture). A second
   phase checks every 60th frame, as a match would, and prints what a rollback
   cost: the load, and each frame run again. With the test core it also checks
+  that a rollback whose last frame repeats an earlier picture still shows the
+  newest picture made again, once (the core's `fake-port2-picture` mode), and
   that right predictions cost no rollback, that `saveState` and turning
   rollback off are refused while frames are not confirmed and that a load
   forgets them, and the protocol errors of `step` and `correct`. With

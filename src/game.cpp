@@ -823,7 +823,10 @@ void Game::Publish(uint32_t width, uint32_t height) {
     }
     video_hash_ = hash;
   }
-  if (resimulating_ && !publish_resimulated_) return;
+  if (resimulating_) {
+    held_picture_ = std::make_pair(width, height);
+    return;
+  }
   const FrameResult shown = events_.OnFrame(converted_.data(), width, height, config_.epoch);
   if (shown != FrameResult::kShown) {
     frame_failure_ = shown;
@@ -1303,6 +1306,7 @@ bool Game::Resimulate(uint64_t first, std::string& end_error, std::string& end_c
   }
   const uint64_t load_micros = MicrosSince(began);
   resimulating_ = true;
+  held_picture_.reset();
   for (uint64_t frame = first; frame < last; ++frame) {
     StepInput input;
     bool save = false;
@@ -1319,7 +1323,6 @@ bool Game::Resimulate(uint64_t first, std::string& end_error, std::string& end_c
       end_code = "other";
       return false;
     }
-    publish_resimulated_ = frame + 1 == last;
     RunFrame(input);
     auto sync = Measure(frame);
     {
@@ -1332,7 +1335,13 @@ bool Game::Resimulate(uint64_t first, std::string& end_error, std::string& end_c
     }
   }
   resimulating_ = false;
-  publish_resimulated_ = false;
+  // The newest picture the frames made, even when the last one repeated an earlier one (a frame
+  // with no new picture), so the player no longer sees the predicted frames' picture.
+  if (held_picture_) {
+    Publish(held_picture_->first, held_picture_->second);
+    held_picture_.reset();
+    if (FrameFailed(end_error, end_code)) return false;
+  }
   SendRumble();
   events_.OnRollback(RollbackReport{first, last - first, MicrosSince(began), load_micros});
   return true;
@@ -1542,6 +1551,7 @@ std::optional<StateResult> Game::ReadSlot(unsigned slot) {
     if (!lockstep_ || !memory.used || memory.entry != lockstep_entry_) return std::nullopt;
   }
   if (!LoadMemory(memory)) return std::nullopt;
+  SendRumble();
   {
     std::lock_guard<std::mutex> lock(mutex_);
     next_frame_ = memory.frame;
@@ -1571,6 +1581,7 @@ bool Game::SaveMemory(MemoryState& memory, uint64_t frame) {
   memory.ports = core_ports_;
   memory.frame = frame;
   memory.video = video_hash_;
+  memory.rumble = rumble_;
   memory.used = true;
   return true;
 }
@@ -1584,6 +1595,7 @@ bool Game::LoadMemory(const MemoryState& memory) {
   savestate_context_ = RETRO_SAVESTATE_CONTEXT_NORMAL;
   if (!loaded) return false;
   video_hash_ = memory.video;
+  rumble_ = memory.rumble;
   return true;
 }
 
