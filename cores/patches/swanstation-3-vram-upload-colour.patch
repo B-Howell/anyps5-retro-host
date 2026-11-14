@@ -1,5 +1,5 @@
 diff --git a/src/core/gpu_hw_shadergen.cpp b/src/core/gpu_hw_shadergen.cpp
-index 1e1bf31b..92305f2e 100644
+index 1e1bf31b..78de762e 100644
 --- a/src/core/gpu_hw_shadergen.cpp
 +++ b/src/core/gpu_hw_shadergen.cpp
 @@ -66,14 +66,17 @@ uint RGBA8ToRGBA5551(float4 v)
@@ -7,8 +7,8 @@ index 1e1bf31b..92305f2e 100644
  }
  
 +// As VRAMRGBA5551ToRGBA8888 on the CPU: each 5-bit channel to the nearest 8-bit value, given as an exact multiple
-+// of 1/255 so every GPU stores the same byte. x / 31 lies halfway between two bytes for some x, and GPUs round it
-+// either way, so VRAM uploaded from a state would differ from VRAM the game filled.
++// of 1/255 so every GPU stores the same byte. x / 31 is not one, and a GPU may store it as the byte below or above
++// (OpenGL and Vulkan allow either), so VRAM uploaded from a state could differ from VRAM the game filled.
  float4 RGBA5551ToRGBA8(uint v)
  {
 -  uint r = (v & 31u);

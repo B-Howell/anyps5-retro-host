@@ -300,6 +300,7 @@ def play(options):
         if not match.real:
             refusals(first, match)
             reentry(first, match)
+            pending_ports(match)
             protocol_errors(match)
 
         for peer in (first, second):
@@ -427,6 +428,30 @@ def reentry(peer, match):
     if peer.log != list(range(10)):
         raise c.Failed(f'the new count sent syncs {peer.log}')
     print('leaving lockstep waits for the frame being run; nothing of the old count follows')
+
+
+def pending_ports(match):
+    """A state holds the ports the core has, not a count asked for and not yet given to it: a paused
+    game told to connect port 2, then put in lockstep, still has one port when it is saved."""
+    peer = match.peer('pending')
+    peer.call('start', match.start_args('pending', lockstep=False))
+    peer.status(lambda s: s['ready'], 30, 'the game was not ready')
+    peer.call('pause', True)
+    peer.drain()
+    if peer.call('connectedPorts', 2) is not True:
+        raise c.Failed('connectedPorts was refused in a paused game')
+    if peer.call('lockstep', {'check': 1, 'paced': False}) != {'frame': 0}:
+        raise c.Failed('a paused game did not enter lockstep at frame 0')
+    saved = match.work / 'pending.state'
+    if not peer.call('saveState', {'path': str(saved)}):
+        raise c.Failed('a paused game in lockstep did not save its state')
+    ports = int.from_bytes(saved.read_bytes()[40:44], 'little')
+    if ports != 1:
+        raise c.Failed(f'the state names {ports} ports, though the core was never given the second')
+    peer.host.send_message({'type': 'shutdown'})
+    if peer.host.exits(15) != 0:
+        raise c.Failed('pending: the host did not exit cleanly')
+    print('a state holds the ports the core has, not a count still waiting for the next frame')
 
 
 def protocol_errors(match):

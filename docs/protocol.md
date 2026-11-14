@@ -833,16 +833,21 @@ While the host saves or loads a file, or hashes the state for a
 `RETRO_SAVESTATE_CONTEXT_ROLLBACK_NETPLAY`); for a slot it answers
 `RETRO_SAVESTATE_CONTEXT_RUNAHEAD_SAME_INSTANCE`, the state never leaving
 the process; at any other time `RETRO_SAVESTATE_CONTEXT_NORMAL`. With the
-host's SwanStation patches, a state of either context:
+host's SwanStation patches:
 
-- names no file or folder: the disc is named by its place in the game's disc
-  list, so a state from another machine loads whatever the disc's file is
-  called there, and tells that machine nothing of where the first one keeps
-  its files;
-- brings back each controller's buttons, analog mode, whether the game
-  locked that mode, and whether the analog-mode button combination is still
-  held, so a loaded game toggles analog mode at the same frames as the game
-  it was saved from.
+- a file, and the state a `sync` hashes, name no file or folder: the disc is
+  named by its place in the game's disc list, so a state from another machine
+  loads whatever the disc's file is called there, and tells that machine
+  nothing of where the first one keeps its files. A slot keeps SwanStation's
+  usual state, which names the disc's path, since it never leaves the host;
+- loading a file or a slot brings back each controller's buttons, analog
+  mode, whether the game locked that mode, and whether the analog-mode button
+  combination is still held, so a loaded game toggles analog mode at the same
+  frames as the game it was saved from.
+
+The port count saved with a state is the one the core has: a `connectedPorts`
+count the core has not yet been given (it is given between frames, so not
+while the game is paused) is not saved.
 
 A state holds the console's memory cards. A launcher that loads a state from
 another player starts that game with a `saves` directory of its own for the

@@ -140,8 +140,14 @@ Lockstep comes first because:
   below saves before every frame, runs it, loads and runs it again: on a
   desktop PC drawing with OpenGL on an NVIDIA GPU (Windows, 1x) a save took 2.4 ms
   on average (5.8 ms at most) and a load 3.2 ms (4.6 ms at most), so one of
-  each fits a frame. Replaying several frames after a wrong guess costs
-  their emulation on top;
+  each fits a frame. CI's runners took 1.4 to 3.5 ms to save and 2.4 to
+  4.4 ms to load on average (Windows in software, Linux with Mesa), but the
+  hosted macOS runner, whose GPU is a virtual one, took 73 ms to save: a
+  save under a GPU reads the console's video memory back from it, which is
+  slow there. Whether a real Mac does better is not measured yet; if it does
+  not, SwanStation would have to keep a same-instance state's video memory
+  on the GPU, as DuckStation's own memory states do. Replaying several frames
+  after a wrong guess costs their emulation on top;
 - the launcher's own harness found that rollback with the stock core is not
   exact (the sound unit restore below), so rollback also depends on that
   patch, which the host does not carry yet.
@@ -283,8 +289,10 @@ What keeps two hosts alike, and what is known to break it:
   loads one.
 - **Video memory from a state.** With a GPU, SwanStation turned 5-bit colour
   channels into 8-bit ones in two ways: on the CPU, exactly (as when the game
-  fills a rectangle), and in a shader as *x* / 31, which lies halfway between
-  two bytes for some *x* and which GPUs round either way. Video memory loaded
+  fills a rectangle, giving the nearest byte), and in a shader as *x* / 31,
+  which is no exact byte and which a GPU may store as the byte below or above
+  (OpenGL and Vulkan allow either; an NVIDIA GPU stored 164 where the CPU
+  gives 165). Video memory loaded
   from a state therefore showed some colours one step off what the game had
   drawn, until it drew them again. RAM and state still matched, but the
   memory-state test below saw the picture differ after every load. The patch
@@ -332,7 +340,8 @@ Built now:
     state file must not hold the disc's folder or name. The `real-core`
     workflow runs it on Linux, macOS and Windows for 600 frames, with the
     host's SwanStation patches applied, and requires a save and a load in
-    memory to take under 16 ms together on average. Stock SwanStation fails
+    memory to take under 16 ms together on average, except on macOS (see
+    "Lockstep first, rollback after"). Stock SwanStation fails
     it at the first frame (the state names the disc's path); without the
     first patch it fails at the frame the state was saved at (the
     combination); without the third the memory-state run fails on the

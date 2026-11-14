@@ -246,6 +246,9 @@ class Game {
   Disc disc_;
   unsigned connected_ports_ = 1;
   bool ports_changed_ = false;
+  // The port count the core was last given, which its controllers have from the next frame on; a
+  // state saved between frames holds those controllers. Used only on the game's thread.
+  unsigned core_ports_ = 1;
   std::optional<unsigned> disc_request_;
   std::array<PortInput, 2> input_{};
   std::array<std::array<uint16_t, 2>, 2> rumble_{};

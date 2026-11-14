@@ -215,7 +215,8 @@ through kqueue. On Windows a thread waits on the launcher's process handle.
   the fake core it also checks that input reaches the console, the refusals
   of lockstep and its protocol errors, and, holding the fake core inside a
   frame, that leaving lockstep is answered only once that frame has ended and
-  that nothing of the old frame count follows. It reads every host in turn
+  that nothing of the old frame count follows, and that a paused game told to
+  connect port 2 saves the one port its core still has. It reads every host in turn
   while it waits, since an unread host exits at the 5-second write limit.
   With `--bios` and `--program` it runs
   the real SwanStation on the `make_test_disc.py` disc, which the

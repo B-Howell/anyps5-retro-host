@@ -421,6 +421,7 @@ void Game::ApplyPendingWork() {
   }
   if (ports) {
     Get<void (*)(unsigned, unsigned)>("retro_set_controller_port_device")(1, count == 2 ? kDualShock : RETRO_DEVICE_NONE);
+    core_ports_ = count;
   }
   if (refresh && update_display_) update_display_();
   if (disc) {
@@ -1244,8 +1245,8 @@ std::optional<StateResult> Game::WriteState(const std::string& path) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!lockstep_) return std::nullopt;
     frame = next_frame_;
-    ports = connected_ports_;
   }
+  ports = core_ports_;
   savestate_context_ = RETRO_SAVESTATE_CONTEXT_ROLLBACK_NETPLAY;
   const std::string* state = Serialize();
   savestate_context_ = RETRO_SAVESTATE_CONTEXT_NORMAL;
@@ -1297,6 +1298,7 @@ void Game::UsePorts(unsigned count) {
     ports_changed_ = false;
   }
   Get<void (*)(unsigned, unsigned)>("retro_set_controller_port_device")(1, count == 2 ? kDualShock : RETRO_DEVICE_NONE);
+  core_ports_ = count;
 }
 
 std::optional<StateResult> Game::WriteSlot(unsigned slot) {
@@ -1308,8 +1310,8 @@ std::optional<StateResult> Game::WriteSlot(unsigned slot) {
     if (!lockstep_) return std::nullopt;
     frame = next_frame_;
     entry = lockstep_entry_;
-    memory.ports = connected_ports_;
   }
+  memory.ports = core_ports_;
   const auto size_of = Get<size_t (*)()>("retro_serialize_size");
   const auto serialize = Get<bool (*)(void*, size_t)>("retro_serialize");
   if (!size_of || !serialize) return std::nullopt;
