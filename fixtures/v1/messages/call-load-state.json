@@ -14,10 +14,12 @@
     "id": 15,
     "result": {
       "frame": 600,
-      "bytes": 11534384
+      "bytes": 11534384,
+      "micros": 58000
     }
   },
   "anyValueFor": [
-    "result.bytes"
+    "result.bytes",
+    "result.micros"
   ]
 }

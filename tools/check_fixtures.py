@@ -13,6 +13,7 @@ FIXTURES = ROOT / 'fixtures' / 'v1'
 MAX_MESSAGE = 1 << 20
 ID = (1, 2**31 - 1)
 U32 = (1, 2**32 - 1)
+STATE_SLOTS = 8
 AXIS = (-32768, 32767)
 NONE = 0xFFFFFFFF
 MAX_SLOT = 268435456
@@ -224,7 +225,11 @@ def lockstep_result(value, name=None):
 
 def state_args(args, name=None):
     obj(args, name)
-    path(args.get('path'), f'{name}.path')
+    need(('path' in args) != ('slot' in args), f'{name} has a path or a slot, not both')
+    if 'slot' in args:
+        integer(args['slot'], 0, STATE_SLOTS - 1, f'{name}.slot')
+    else:
+        path(args.get('path'), f'{name}.path')
 
 
 def state_result(value, name=None):
@@ -233,6 +238,7 @@ def state_result(value, name=None):
     obj(value, name)
     integer(value.get('frame'), 0, U32[1], f'{name}.frame')
     integer(value.get('bytes'), 1, 2**53, f'{name}.bytes')
+    integer(value.get('micros'), 0, 2**53, f'{name}.micros')
 
 
 def port_state(value, name):

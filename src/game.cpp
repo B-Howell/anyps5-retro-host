@@ -76,7 +76,7 @@ constexpr int64_t kStepWaitMs = 10;
 // How long entering or leaving lockstep waits for the frame being run to end.
 constexpr int64_t kFrameFenceMs = 4000;
 constexpr char kStateMagic[8] = {'A', 'P', '5', 'S', 'T', 'A', 'T', 'E'};
-constexpr uint32_t kStateVersion = 1;
+constexpr uint32_t kStateVersion = 2;
 constexpr size_t kStateHeaderBytes = 48;
 constexpr uint64_t kMaxLockstepFrame = 4294967295ULL;
 constexpr uint64_t kFnvOffset = 14695981039346656037ULL;
@@ -1106,6 +1106,7 @@ std::optional<uint64_t> Game::Lockstep(const LockstepConfig& config) {
   if (!lockstep_) {
     next_frame_ = 0;
     steps_.clear();
+    ++lockstep_entry_;
   }
   lockstep_ = config;
   return next_frame_ + steps_.size();
@@ -1184,18 +1185,18 @@ const std::string* Game::Serialize() {
   return serialize(serialized_.data(), size) ? &serialized_ : nullptr;
 }
 
-std::optional<StateResult> Game::SaveState(const std::string& path, int64_t timeout_ms) {
-  return RequestState(StateWork::kSave, path, timeout_ms);
+std::optional<StateResult> Game::SaveState(const StateTarget& target, int64_t timeout_ms) {
+  return RequestState(StateWork::kSave, target, timeout_ms);
 }
 
-std::optional<StateResult> Game::LoadState(const std::string& path, int64_t timeout_ms) {
-  return RequestState(StateWork::kLoad, path, timeout_ms);
+std::optional<StateResult> Game::LoadState(const StateTarget& target, int64_t timeout_ms) {
+  return RequestState(StateWork::kLoad, target, timeout_ms);
 }
 
-std::optional<StateResult> Game::RequestState(StateWork work, const std::string& path, int64_t timeout_ms) {
+std::optional<StateResult> Game::RequestState(StateWork work, const StateTarget& target, int64_t timeout_ms) {
   auto request = std::make_shared<StateRequest>();
   request->work = work;
-  request->path = path;
+  request->target = target;
   std::unique_lock<std::mutex> lock(mutex_);
   if (ended_ || !lockstep_ || state_request_) return std::nullopt;
   state_request_ = request;
@@ -1219,7 +1220,15 @@ void Game::ServeStateRequest() {
     std::swap(request, state_request_);
   }
   if (!request) return;
-  auto result = request->work == StateWork::kSave ? WriteState(request->path) : ReadState(request->path);
+  const auto began = std::chrono::steady_clock::now();
+  const StateTarget& target = request->target;
+  const bool save = request->work == StateWork::kSave;
+  auto result = target.slot ? (save ? WriteSlot(*target.slot) : ReadSlot(*target.slot))
+                            : (save ? WriteState(target.path) : ReadState(target.path));
+  if (result) {
+    result->micros = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - began).count());
+  }
   {
     std::lock_guard<std::mutex> lock(mutex_);
     request->result = result;
@@ -1230,10 +1239,12 @@ void Game::ServeStateRequest() {
 
 std::optional<StateResult> Game::WriteState(const std::string& path) {
   uint64_t frame = 0;
+  unsigned ports = 1;
   {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!lockstep_) return std::nullopt;
     frame = next_frame_;
+    ports = connected_ports_;
   }
   savestate_context_ = RETRO_SAVESTATE_CONTEXT_ROLLBACK_NETPLAY;
   const std::string* state = Serialize();
@@ -1245,7 +1256,8 @@ std::optional<StateResult> Game::WriteState(const std::string& path) {
   PutLe(file, frame, 8);
   PutLe(file, video_hash_.value_or(0), 8);
   PutLe(file, state->size(), 8);
-  PutLe(file, 0, 8);
+  PutLe(file, ports, 4);
+  PutLe(file, 0, 4);
   file += *state;
   if (!WriteFileAtomically(path, file)) return std::nullopt;
   return StateResult{frame, file.size()};
@@ -1255,7 +1267,8 @@ std::optional<StateResult> Game::ReadState(const std::string& path) {
   const auto file = ReadWholeFile(path);
   if (!file || file->size() < kStateHeaderBytes ||
       file->compare(0, sizeof kStateMagic, kStateMagic, sizeof kStateMagic) != 0 ||
-      GetLe(*file, 8, 4) != kStateVersion || GetLe(*file, 12, 4) > 1 || GetLe(*file, 40, 8) != 0 ||
+      GetLe(*file, 8, 4) != kStateVersion || GetLe(*file, 12, 4) > 1 || GetLe(*file, 40, 4) < 1 ||
+      GetLe(*file, 40, 4) > 2 || GetLe(*file, 44, 4) != 0 ||
       GetLe(*file, 32, 8) != file->size() - kStateHeaderBytes) {
     return std::nullopt;
   }
@@ -1263,6 +1276,7 @@ std::optional<StateResult> Game::ReadState(const std::string& path) {
   if (!unserialize) return std::nullopt;
   const uint64_t frame = GetLe(*file, 16, 8);
   if (frame > kMaxLockstepFrame) return std::nullopt;
+  UsePorts(static_cast<unsigned>(GetLe(*file, 40, 4)));
   savestate_context_ = RETRO_SAVESTATE_CONTEXT_ROLLBACK_NETPLAY;
   const bool loaded = unserialize(file->data() + kStateHeaderBytes, file->size() - kStateHeaderBytes);
   savestate_context_ = RETRO_SAVESTATE_CONTEXT_NORMAL;
@@ -1274,6 +1288,71 @@ std::optional<StateResult> Game::ReadState(const std::string& path) {
     steps_.clear();
   }
   return StateResult{frame, file->size()};
+}
+
+void Game::UsePorts(unsigned count) {
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    connected_ports_ = count;
+    ports_changed_ = false;
+  }
+  Get<void (*)(unsigned, unsigned)>("retro_set_controller_port_device")(1, count == 2 ? kDualShock : RETRO_DEVICE_NONE);
+}
+
+std::optional<StateResult> Game::WriteSlot(unsigned slot) {
+  MemoryState& memory = slots_.at(slot);
+  uint64_t frame = 0;
+  uint64_t entry = 0;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!lockstep_) return std::nullopt;
+    frame = next_frame_;
+    entry = lockstep_entry_;
+    memory.ports = connected_ports_;
+  }
+  const auto size_of = Get<size_t (*)()>("retro_serialize_size");
+  const auto serialize = Get<bool (*)(void*, size_t)>("retro_serialize");
+  if (!size_of || !serialize) return std::nullopt;
+  const size_t size = size_of();
+  if (size == 0) return std::nullopt;
+  memory.used = false;
+  try {
+    if (memory.data.size() != size) memory.data.assign(size, '\0');
+  } catch (const std::bad_alloc&) {
+    memory.data.clear();
+    return std::nullopt;
+  }
+  savestate_context_ = RETRO_SAVESTATE_CONTEXT_RUNAHEAD_SAME_INSTANCE;
+  const bool saved = serialize(memory.data.data(), size);
+  savestate_context_ = RETRO_SAVESTATE_CONTEXT_NORMAL;
+  if (!saved) return std::nullopt;
+  memory.frame = frame;
+  memory.video = video_hash_;
+  memory.entry = entry;
+  memory.used = true;
+  return StateResult{frame, size};
+}
+
+std::optional<StateResult> Game::ReadSlot(unsigned slot) {
+  const MemoryState& memory = slots_.at(slot);
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!lockstep_ || !memory.used || memory.entry != lockstep_entry_) return std::nullopt;
+  }
+  const auto unserialize = Get<bool (*)(const void*, size_t)>("retro_unserialize");
+  if (!unserialize) return std::nullopt;
+  UsePorts(memory.ports);
+  savestate_context_ = RETRO_SAVESTATE_CONTEXT_RUNAHEAD_SAME_INSTANCE;
+  const bool loaded = unserialize(memory.data.data(), memory.data.size());
+  savestate_context_ = RETRO_SAVESTATE_CONTEXT_NORMAL;
+  if (!loaded) return std::nullopt;
+  video_hash_ = memory.video;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    next_frame_ = memory.frame;
+    steps_.clear();
+  }
+  return StateResult{memory.frame, memory.data.size()};
 }
 
 }  // namespace retro_host

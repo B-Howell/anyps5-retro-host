@@ -63,7 +63,9 @@ it is saving (`RETRO_ENVIRONMENT_GET_SAVESTATE_CONTEXT`, whose
 `ROLLBACK_NETPLAY` value means the state may go to another machine).
 
 **SwanStation and DuckStation.** SwanStation, the libretro core version 1
-loads, has no netplay of its own and leaves it to the frontend. Its parent,
+loads, has no netplay of its own and leaves it to the frontend. The host
+builds it with three patches of its own (host.md "SwanStation patches") that
+make its states fit for netplay; "Determinism" below says why. Its parent,
 DuckStation, carried a GGPO-based rollback netplay for a time and later
 removed it. GGPO is the same model as RetroArch's: input delay plus rollback
 on saved states, with a sync test that saves, loads and replays every frame
@@ -128,15 +130,21 @@ Lockstep comes first because:
   stays as it is, and nothing is undone;
 - it is the control rollback is checked against: a rollback run must reach
   the same hashes as a lockstep run of the same input;
-- on the same machine, the host loads a file-based state in about 60 ms and
-  saves one in about 9 ms (SwanStation at 631f0fb, 11 MiB of state, Windows,
-  measured through the protocol). Rollback must stay within a 16.7 ms frame,
-  so it needs states kept in memory and saved in the core's cheaper
-  same-instance form (`RETRO_SAVESTATE_CONTEXT_RUNAHEAD_SAME_INSTANCE`), and
-  measured, before it is offered;
+- a file-based state took about 60 ms to load and 9 ms to save through the
+  protocol (SwanStation at 631f0fb, 11 MiB of state, Windows), far over a
+  16.7 ms frame. So `saveState` and `loadState` also keep up to 8 states in
+  memory (protocol.md "saveState and loadState"), saved and loaded in the
+  core's same-instance form
+  (`RETRO_SAVESTATE_CONTEXT_RUNAHEAD_SAME_INSTANCE`, which keeps the
+  recompiled code and needs no file), and report what each took. The test
+  below saves before every frame, runs it, loads and runs it again: on a
+  desktop PC drawing with OpenGL on an NVIDIA GPU (Windows, 1x) a save took 2.4 ms
+  on average (5.8 ms at most) and a load 3.2 ms (4.6 ms at most), so one of
+  each fits a frame. Replaying several frames after a wrong guess costs
+  their emulation on top;
 - the launcher's own harness found that rollback with the stock core is not
-  exact (the sound unit restore above), so rollback also depends on a patched
-  core build, while lockstep runs on the stock one.
+  exact (the sound unit restore below), so rollback also depends on that
+  patch, which the host does not carry yet.
 
 A match picks *d* from the round trip it measures while the lobby is open:
 *d* = ⌈(round trip ÷ 2) ÷ 16.7 ms⌉ + 1, at most 8. Above 8 frames (about a
@@ -233,33 +241,60 @@ What keeps two hosts alike, and what is known to break it:
   `input` messages wait until lockstep ends. Options and discs cannot change.
 - **Same start.** Both games use the same core build, BIOS and options. The
   match passes the options at `start`, so every player boots with the same.
-- **Main RAM is the cross-machine check.** `sync.ram` must match on every
-  machine. `sync.video` matches only when both draw in software, since GPUs
-  may round differently. `sync.state` matches only when both machines have
-  the disc at the same path, because SwanStation's state names the disc's
-  path. That also means a state sent to a friend tells them where the game
-  is on the host player's disk, which can include their user name; the
-  launcher's portable-checkpoint core patch, which names the disc by hash,
-  fixes both, and should go to SwanStation before states cross machines.
-- **SwanStation finds the disc of a loaded state** by its path, or else by
-  its file name. A friend's copy must therefore have the same file name as
-  the host player's, unless the core has the portable-checkpoint patch. The
-  launcher can give it one by starting the match game from a copy or link
-  named after the disc's hash.
-- **The analog-mode button combination.** SwanStation toggles a DualShock's
-  analog mode when the player holds a button combination (L1 + R1 + Select
-  by default). Whether the combination is still held lives in a variable of
-  the core's libretro layer, not in its saved state. After a state is
-  loaded, that variable is left over from before, so the two players' games
-  can switch analog mode at different frames. The lockstep test hit this:
-  after a load, the saved states differed in that one byte for 22 frames.
-  The test avoids the combination; a real match needs the variable saved
-  with the state (a small SwanStation patch) before holding those buttons is
-  safe.
+- **RAM and state are the cross-machine checks.** `sync.ram` and
+  `sync.state` must match on every machine. `sync.video` matches only when
+  both draw in software, since GPUs may round differently; for the same
+  reason `sync.state` may differ between two GPUs at a resolution scale above
+  1x, since it holds video memory read back from the GPU.
+- **A state names no path.** Stock SwanStation's state names the disc's full
+  path, and its title, on the machine that saved it. A state sent to a friend
+  would tell them where the host player keeps the game, which can include
+  their user name; the friend's copy would have to have the same file name
+  (SwanStation found a loaded state's disc by its path, or else by its file
+  name); and `sync.state` would differ between two machines whose discs are
+  in different places. libretro lets a frontend say a state is for netplay
+  (`RETRO_SAVESTATE_CONTEXT_ROLLBACK_NETPLAY`: it "will be sent over the
+  network"), and the host says so for every file and every `sync`. The
+  host's SwanStation patch `swanstation-2-pathless-netplay-state` then leaves
+  out the title and the path and marks the state pathless; a pathless state
+  names its disc by its place in the frontend's disc list (0 for a one-disc
+  game, the playlist order otherwise), which is the same on every machine
+  that starts the same game. Only that core reads such a state.
+- **The analog-mode button combination and the controllers.** SwanStation
+  toggles a DualShock's analog mode when the player holds a button
+  combination (L1 + R1 + Select by default). Stock SwanStation kept whether
+  the combination was still held in one variable of its libretro layer, for
+  all ports, outside the saved state, and its state load kept each
+  controller's current buttons and analog mode instead of the saved ones (a
+  player loading a state keeps their own pad as it is). It did not save
+  whether the game had locked the analog mode either. So a loaded game could
+  toggle analog mode at another frame, or be in another mode, than the game
+  it was saved from: the lockstep test hit this, and avoided Select until the
+  fix. The patch `swanstation-1-netplay-input-state` keeps the held
+  combination per controller and saves it, with the lock, in the
+  controller's state (SwanStation's state version 58; upstream DuckStation
+  saves the lock too since its version 76), and loads every controller's
+  input state when the frontend says the load is for netplay, rollback or
+  runahead. It also puts a port device the frontend sets just before a load
+  in place before the state is read: SwanStation applied it at the next
+  frame, after the load, so a friend's port 2, connected only by the next
+  step, began as a new controller rather than the host player's. The host
+  saves the port count with each state and connects those ports before it
+  loads one.
+- **Video memory from a state.** With a GPU, SwanStation turned 5-bit colour
+  channels into 8-bit ones in two ways: on the CPU, exactly (as when the game
+  fills a rectangle), and in a shader as *x* / 31, which lies halfway between
+  two bytes for some *x* and which GPUs round either way. Video memory loaded
+  from a state therefore showed some colours one step off what the game had
+  drawn, until it drew them again. RAM and state still matched, but the
+  memory-state test below saw the picture differ after every load. The patch
+  `swanstation-3-vram-upload-colour` makes the shader give the CPU's bytes,
+  as exact multiples of 1/255.
 - **Restoring a state from another timeline.** The launcher's harness found
   that stock SwanStation, on loading a state, reschedules its sound unit's
   sample event with timing from the discarded timeline. It has a patch for
-  this, needed before rollback.
+  this, needed before rollback and not yet carried by the host. The `hello`
+  program plays no sound, so the memory-state test cannot show it.
 - **Memory cards.** A state carries both memory cards. The friend's game
   uses a `saves` directory made for the match, so the host never writes the
   host player's card over the friend's own (protocol.md "saveState and
@@ -276,7 +311,14 @@ Built now:
   them; the replay must match the first run, state hashes included. The other
   host leaves its game, starts a new one that runs on its own for a second,
   enters lockstep, loads the first host's state and runs the same 300 frames;
-  it must match too.
+  it must match too, state hashes included. Both ports hold the analog-mode
+  combination across the saved frame and let go of every button before the
+  load, so a core that keeps the combination, or the controllers' analog
+  mode, outside its state fails the replay and the join. Last, before each of
+  120 frames one host saves its state in a memory slot, runs the frame, loads
+  the slot and runs the frame again; both runs must leave the same hashes,
+  and the average save and load are printed, and checked against
+  `--budget-ms` when given.
   - With the test core (`tests/fake_core.c`, whose "RAM" mixes every input
     it reads) it also checks that a different input on port 2 changes the
     next `sync.ram`, that lockstep refuses option and port changes and bad
@@ -285,15 +327,19 @@ Built now:
     ThreadSanitizer.
   - With `--bios` and `--program`, it runs real SwanStation on the OpenBIOS
     and psyqo `hello` disc that `tests/make_test_disc.py` makes, each player
-    with their own copy of the disc in a different folder. Every frame's main
-    RAM and picture must match. The `real-core` workflow runs it on Linux,
-    macOS and Windows for 600 frames.
+    with their own copy of the disc in a different folder under a different
+    name. Every frame's main RAM, picture and state must match, and the saved
+    state file must not hold the disc's folder or name. The `real-core`
+    workflow runs it on Linux, macOS and Windows for 600 frames, with the
+    host's SwanStation patches applied, and requires a save and a load in
+    memory to take under 16 ms together on average. Stock SwanStation fails
+    it at the first frame (the state names the disc's path); without the
+    first patch it fails at the frame the state was saved at (the
+    combination); without the third the memory-state run fails on the
+    picture of a frame whose video memory came from the state.
 
 Next, for rollback and the launcher:
 
-- A sync test like GGPO's: save, load and replay every frame of the
-  real-core run, and fail on any frame whose hashes differ. It would have
-  found the analog-combo variable at once.
 - A `ps1Rollback` test that runs the same input through a lockstep host and a
   rollback host fed late, guessed and corrected input, and requires the same
   confirmed `sync` hashes.

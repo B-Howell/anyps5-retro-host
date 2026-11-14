@@ -5,7 +5,10 @@
 online match: both boot the same game, are fed the same input frame by frame, and must report the
 same RAM, picture and state hashes after every frame. Then one host saves its state, runs on,
 loads it back and replays (a rollback), and the other host leaves a freely running game, loads
-that state and catches up (a player joining a running game); both must again match frame for frame.
+that state and catches up (a player joining a running game); both must again match frame for frame,
+state hashes included, though each player's disc is in another folder under another name. Last, one
+host saves its state in memory before each frame, runs it, loads the state and runs it again, and
+both runs must match: what rollback does on every wrong guess, timed.
 
 With the test core the inputs reach its RAM, so the test also checks that a different input shows
 up as a different hash, and the protocol errors and refusals of lockstep. With --bios and
@@ -23,10 +26,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import conformance as c  # noqa: E402
 import make_test_disc  # noqa: E402
 
-# Every button but Select (bit 2): SwanStation's default analog-mode combo is L1 + R1 + Select, and
-# whether that combo is still held lives outside its saved state (netplay.md "Determinism"), so a
-# loaded state would toggle analog mode at a different frame than the run it was saved from.
-BUTTONS = 0xFFFF & ~(1 << 2)
+# SwanStation's analog-mode combo as the test sets it (swanstation_Controller_AnalogCombo 3): L1 + R1 +
+# Select.
+COMBO = (1 << 10) | (1 << 11) | (1 << 2)
 
 
 class Peer:
@@ -67,14 +69,17 @@ class Peer:
         except c.Idle:
             pass
 
-    def call(self, method, args=None, timeout=6.0):
+    def call_raw(self, method, args=None, timeout=6.0):
         self.next_id += 1
         ident = self.next_id
         message = {'type': 'call', 'id': ident, 'method': method}
         if args is not None:
             message['args'] = args
         self.host.send_message(message)
-        reply = self.pump(lambda m: m.get('type') == 'reply' and m.get('id') == ident, timeout)
+        return self.pump(lambda m: m.get('type') == 'reply' and m.get('id') == ident, timeout)
+
+    def call(self, method, args=None, timeout=6.0):
+        reply = self.call_raw(method, args, timeout)
         if 'error' in reply:
             raise c.Failed(f'{self.name}: {method} failed: {reply["error"]}')
         return reply['result']
@@ -104,10 +109,25 @@ def port(buttons, left_x=0):
 
 
 def script(frame):
-    """The input both players' launchers agree on for a frame: two ports, changing every frame."""
+    """The input both players' launchers agree on for a frame: two ports, every button, changing every
+    frame."""
     chance = random.Random(frame)
-    return [port(chance.randrange(BUTTONS + 1) & BUTTONS, chance.randrange(-32768, 32768)),
-            port(chance.randrange(BUTTONS + 1) & BUTTONS)]
+    return [port(chance.randrange(65536), chance.randrange(-32768, 32768)), port(chance.randrange(65536))]
+
+
+def scripted_around(save, end):
+    """The script, except that both ports hold the analog-mode combo from three frames before save to two
+    after it, and let go of every button for the three frames before end. A host that runs to end, then
+    loads the state saved at save, starts its replay with the combo held since before the state, as the
+    run it was saved from did, and with the analog mode of that run. A core that keeps either outside its
+    state toggles analog mode at another frame (netplay.md "Determinism")."""
+    def inputs(peer, frame):
+        if save - 3 <= frame < save + 3:
+            return [port(COMBO), port(COMBO)]
+        if end - 3 <= frame < end:
+            return [port(0), port(0)]
+        return script(frame)
+    return inputs
 
 
 def scripted(peer, frame):
@@ -139,18 +159,18 @@ def advance(peers, first, count, inputs=scripted, batch=120, timeout=120):
     return {peer.name: [peer.syncs[f] for f in range(first, first + count)] for peer in peers}
 
 
-def hashes(sync, state=True):
-    return sync['ram'], sync['video'], sync['state'] if state else None
+def hashes(sync):
+    return sync['ram'], sync['video'], sync['state']
 
 
-def same(name, ours, theirs, state=True):
-    """Fails at the first frame whose hashes differ; returns how many frames were compared. A state
-    hash is compared only between games of the same disc path: SwanStation's state names the
-    disc's path (netplay.md "Determinism")."""
+def same(name, ours, theirs):
+    """Fails at the first frame whose hashes differ; returns how many frames were compared. The state
+    hashes match too, though each player's disc is in another folder under another name: a state for
+    netplay names no path (netplay.md "Determinism")."""
     if len(ours) != len(theirs):
         raise c.Failed(f'{name}: {len(ours)} frames against {len(theirs)}')
     for mine, other in zip(ours, theirs):
-        if mine['frame'] != other['frame'] or hashes(mine, state) != hashes(other, state):
+        if mine['frame'] != other['frame'] or hashes(mine) != hashes(other):
             raise c.Failed(f'{name}: frame {mine["frame"]} differs: {mine} against {other}')
         if mine['ram'] is None or mine['state'] is None:
             raise c.Failed(f'{name}: frame {mine["frame"]} has no RAM or state hash: {mine}')
@@ -168,19 +188,20 @@ class Match:
             self.system = self.work / 'system'
             self.system.mkdir()
             shutil.copy(options.bios, self.system / 'openbios.bin')
-            # Each player has their own copy of the disc, in a folder of its own, as on two machines.
-            # SwanStation finds the disc a loaded state names by its path, or else by its file name.
-            host_disc = self.work / 'host-disc'
-            host_disc.mkdir()
-            make_test_disc.build(options.program, host_disc / 'program.bin', host_disc / 'program.cue')
-            shutil.copytree(host_disc, self.work / 'guest-disc')
+            # Each player has their own copy of the disc, in a folder of its own and under a name of
+            # its own, as on two machines. A state for netplay must name neither.
+            self.discs = {'host': self.work / 'host-disc' / 'program.cue',
+                          'guest': self.work / 'guest-disc' / 'my copy.cue'}
+            for disc in self.discs.values():
+                disc.parent.mkdir()
+                make_test_disc.build(options.program, disc.with_suffix('.bin'), disc)
             self.core = Path(options.core).resolve()
         else:
             self.paths = c.place(self.work, Path(options.core).resolve())
 
     def start_args(self, name, lockstep):
         if self.real:
-            disc = self.work / ('host-disc' if name == 'host' else 'guest-disc') / 'program.cue'
+            disc = self.discs['host' if name == 'host' else 'guest']
             args = {'core': str(self.core), 'disc': str(disc), 'system': str(self.system),
                     'saves': str(self.work / f'saves-{name}'),
                     'options': {'swanstation_BIOS_PathNTSCU': 'openbios.bin',
@@ -211,15 +232,15 @@ class Match:
 def play(options):
     match = Match(options)
     frames, later = options.frames, options.frames // 2
+    inputs = scripted_around(frames, frames + later)
     try:
         first, second = match.peer('host'), match.peer('guest')
         for peer in (first, second):
             peer.epoch = peer.call('start', match.start_args(peer.name, lockstep=True))['epoch']
         began = time.monotonic()
-        boot = advance([first, second], 0, frames)
-        compared = same('cold boot', boot['host'], boot['guest'], not match.real)
-        print(f'cold boot: {compared} frames in lockstep match in RAM and picture'
-              f'{"" if match.real else " and state"} '
+        boot = advance([first, second], 0, frames, inputs)
+        compared = same('cold boot', boot['host'], boot['guest'])
+        print(f'cold boot: {compared} frames in lockstep match in RAM, picture and state '
               f'({time.monotonic() - began:.1f} s); last {boot["host"][-1]}')
         pictures = len({s['video'] for s in boot['host'] if s['video']})
         print(f'cold boot: {pictures} different pictures among them')
@@ -230,14 +251,16 @@ def play(options):
         saved = first.call('saveState', {'path': str(checkpoint)})
         if not saved or saved['frame'] != frames or saved['bytes'] != checkpoint.stat().st_size:
             raise c.Failed(f'saveState gave {saved}, file {checkpoint.stat().st_size} bytes')
-        ahead = advance([first], frames, later)['host']
+        if match.real:
+            no_paths(checkpoint, match)
+        ahead = advance([first], frames, later, inputs)['host']
         loaded = first.call('loadState', {'path': str(checkpoint)})
-        if loaded != saved:
+        if (loaded['frame'], loaded['bytes']) != (saved['frame'], saved['bytes']):
             raise c.Failed(f'loadState gave {loaded}, not {saved}')
         first.syncs.clear()
-        replay = advance([first], frames, later)['host']
+        replay = advance([first], frames, later, inputs)['host']
         print(f'rollback: the host replayed {same("rollback", replay, ahead)} frames from its saved state '
-              f'({saved["bytes"]} bytes) and they match')
+              f'({saved["bytes"]} bytes), the analog-mode combo held across it, and they match')
 
         second.call('stop')
         second.status(lambda s: s['ended'], 10, 'the game did not stop')
@@ -249,14 +272,14 @@ def play(options):
         time.sleep(1)
         if second.call('lockstep', {'check': 1, 'paced': False}) != {'frame': 0}:
             raise c.Failed('a running game did not enter lockstep at frame 0')
-        if second.call('loadState', {'path': str(checkpoint)}) != saved:
-            raise c.Failed('the guest could not load the host\'s state')
-        joined = advance([second], frames, later)['guest']
-        print(f'join: a running game loaded the host\'s state and matched it for {same("join", joined, ahead, not match.real)} frames')
+        joined_at = second.call('loadState', {'path': str(checkpoint)})
+        if not joined_at or joined_at['frame'] != saved['frame']:
+            raise c.Failed(f'the guest could not load the host\'s state from a disc of another name: {joined_at}')
+        joined = advance([second], frames, later, inputs)['guest']
+        print(f'join: a running game loaded the host\'s state and matched it for {same("join", joined, ahead)} '
+              'frames, state hashes included')
 
         if not match.real:
-            refusals(first, match)
-
             def different(peer, frame):
                 ports = script(frame)
                 if peer is second and frame == frames + later:
@@ -267,6 +290,15 @@ def play(options):
             if split['host'][0]['ram'] == split['guest'][0]['ram']:
                 raise c.Failed('a different input on port 2 left the same RAM hash')
             print('a different input on port 2 shows up in the next sync')
+
+        after = frames + later + (0 if match.real else 1)
+        cost = memory_states(first, after, options.memory_frames)
+        if match.real and options.budget_ms is not None and cost > options.budget_ms * 1000:
+            raise c.Failed(f'saving and loading a state in memory took {cost / 1000:.2f} ms on average, '
+                           f'over the {options.budget_ms} ms budget')
+
+        if not match.real:
+            refusals(first, match)
             reentry(first, match)
             protocol_errors(match)
 
@@ -283,6 +315,44 @@ def play(options):
         match.close()
 
 
+def no_paths(checkpoint, match):
+    """A state sent to a friend names no folder or file of the player who saved it."""
+    data = checkpoint.read_bytes()
+    disc = match.discs['host']
+    for secret in (str(match.work), str(disc), disc.name, disc.stem, disc.parent.name):
+        for encoding in ('utf-8', 'utf-16-le'):
+            if secret.encode(encoding) in data:
+                raise c.Failed(f'the saved state holds {secret!r} ({encoding})')
+    print('the saved state names no folder or file of the player who saved it')
+
+
+def memory_states(peer, first, count):
+    """A sync test, as GGPO's: before each of count frames the host saves its state in memory, runs the
+    frame, loads the state back and runs the frame again, and both runs must leave the same hashes. It
+    measures what a rollback costs each frame: one save, and on a wrong guess one load (protocol.md
+    "saveState and loadState"). Returns the average microseconds of a save and a load together."""
+    saves, loads = [], []
+    for frame in range(first, first + count):
+        saved = peer.call('saveState', {'slot': frame % 8})
+        if not saved or saved['frame'] != frame:
+            raise c.Failed(f'saveState in slot {frame % 8} gave {saved} before frame {frame}')
+        peer.syncs.clear()
+        once = advance([peer], frame, 1)[peer.name]
+        loaded = peer.call('loadState', {'slot': frame % 8})
+        if not loaded or loaded['frame'] != frame or loaded['bytes'] != saved['bytes']:
+            raise c.Failed(f'loadState from slot {frame % 8} gave {loaded}, not {saved}')
+        peer.syncs.clear()
+        again = advance([peer], frame, 1)[peer.name]
+        same(f'memory state before frame {frame}', again, once)
+        saves.append(saved['micros'])
+        loads.append(loaded['micros'])
+    average = (sum(saves) + sum(loads)) / count
+    print(f'memory states: {count} frames each saved, run, loaded and run again match; '
+          f'save {sum(saves) / count / 1000:.2f} ms on average (most {max(saves) / 1000:.2f}), '
+          f'load {sum(loads) / count / 1000:.2f} ms (most {max(loads) / 1000:.2f})')
+    return average
+
+
 def refusals(peer, match):
     """What a game in lockstep refuses, since it would change the console between agreed frames."""
     if peer.call('option', {'key': 'fake_color', 'value': 'green'}) is not False:
@@ -297,7 +367,11 @@ def refusals(peer, match):
     bad.write_bytes(b'AP5STATE' + bytes(40))
     if peer.call('loadState', {'path': str(bad)}) is not False:
         raise c.Failed('a state file with the wrong size was loaded')
-    print('lockstep refuses option, connectedPorts and states it cannot write or read')
+    for args in ({'slot': 8}, {'slot': -1}, {'slot': 0, 'path': str(bad)}, {}):
+        reply = peer.call_raw('saveState', args)
+        if 'error' not in reply:
+            raise c.Failed(f'saveState {args} was not an argument error: {reply}')
+    print('lockstep refuses option, connectedPorts, states it cannot write or read, and slots out of range')
 
 
 def reentry(peer, match):
@@ -336,6 +410,8 @@ def reentry(peer, match):
     peer.log.clear()
     if peer.call('lockstep', {'check': 1, 'paced': False}) != {'frame': 0}:
         raise c.Failed('entering lockstep again did not start at frame 0')
+    if peer.call('loadState', {'slot': 0}) is not False:
+        raise c.Failed('a state saved in memory before lockstep was entered again was loaded')
     before = match.work / 'reentry-1.state'
     after = match.work / 'reentry-2.state'
     peer.call('saveState', {'path': str(before)})
@@ -379,6 +455,11 @@ def main():
     parser.add_argument('--bios', help='OpenBIOS, 512 KiB: run the real SwanStation core')
     parser.add_argument('--program', help='The PS-EXE to put on the disc, with --bios')
     parser.add_argument('--frames', type=int, default=600, help='Frames to compare from a cold boot')
+    parser.add_argument('--memory-frames', type=int, default=120,
+                        help='Frames each saved in memory, run, loaded and run again')
+    parser.add_argument('--budget-ms', type=float,
+                        help='With the real core, the most a save and a load in memory may take together, '
+                             'on average')
     options = parser.parse_args()
     if (options.bios is None) != (options.program is None):
         parser.error('--bios and --program go together')

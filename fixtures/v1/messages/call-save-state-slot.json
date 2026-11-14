@@ -1,0 +1,25 @@
+{
+  "description": "Before running a frame on a guessed input, the host keeps the state in memory, in slot 3 of 8.",
+  "from": "launcher",
+  "message": {
+    "type": "call",
+    "id": 17,
+    "method": "saveState",
+    "args": {
+      "slot": 3
+    }
+  },
+  "reply": {
+    "type": "reply",
+    "id": 17,
+    "result": {
+      "frame": 611,
+      "bytes": 11534336,
+      "micros": 2400
+    }
+  },
+  "anyValueFor": [
+    "result.bytes",
+    "result.micros"
+  ]
+}

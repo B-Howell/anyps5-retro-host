@@ -12,3 +12,8 @@ SPDX-FileCopyrightText = "2026 AnyPS5 Desktop contributors"
 path = ".gitmodules"
 SPDX-License-Identifier = "MIT"
 SPDX-FileCopyrightText = "2026 AnyPS5 Desktop contributors"
+
+[[annotations]]
+path = "cores/patches/swanstation-*.patch"
+SPDX-License-Identifier = "GPL-3.0-only"
+SPDX-FileCopyrightText = "2026 AnyPS5 Desktop contributors; SwanStation and DuckStation contributors"

@@ -22,7 +22,8 @@ through kqueue. On Windows a thread waits on the launcher's process handle.
 | --- | --- |
 | [`src/main.cpp`](../src/main.cpp) | The command line, the process setup, then the host |
 | [`src/host.cpp`](../src/host.cpp) | The protocol: `hello`, the order rules, every method's argument checks and replies, and the limits |
-| [`src/game.cpp`](../src/game.cpp) | One loaded game: the libretro callbacks, core options, disc control, the memory card, input, rumble, pixel conversion, and lockstep: the queue of steps, the `sync` hashes, and the state files of `saveState` and `loadState` |
+| [`src/game.cpp`](../src/game.cpp) | One loaded game: the libretro callbacks, core options, disc control, the memory card, input, rumble, pixel conversion, and lockstep: the queue of steps, the `sync` hashes, the state files of `saveState` and `loadState`, and the 8 in-memory states, each a buffer kept for the game and reused, so a save allocates nothing after the first |
+| [`cores/patches`](../cores/patches), [`cores/apply-swanstation-patches.sh`](../cores/apply-swanstation-patches.sh) | The host's SwanStation patches and the script the workflows apply them with (see "SwanStation patches" below) |
 | [`src/resolution.cpp`](../src/resolution.cpp) | Which internal resolutions a GPU game is offered (see "Resolution limits" below) |
 | [`src/ring.cpp`](../src/ring.cpp) | The frame ring writer: the header from protocol.md's byte table, slot choice, and capped doubling when a frame needs more room |
 | [`src/json.cpp`](../src/json.cpp) | A strict JSON reader (duplicate keys, lone surrogates, invalid UTF-8 and non-finite numbers are errors) and writer |
@@ -204,8 +205,13 @@ through kqueue. On Windows a thread waits on the launcher's process handle.
 - [`tests/lockstep_test.py`](../tests/lockstep_test.py) runs two hosts in
   [lockstep](protocol.md#lockstep), as two online players' hosts
   ([netplay.md](netplay.md) "Tests"): both fed the same input for every
-  frame, then a saved state loaded back and replayed on one, and loaded into
-  a newly started game on the other; every frame's `sync` must match. With
+  frame, with the analog-mode combination held across the frame a state is
+  saved at, then that state loaded back and replayed on one, and loaded into
+  a newly started game, whose disc has another folder and name, on the
+  other; every frame's `sync` must match, state hashes included. Then, before
+  each of `--memory-frames` frames, one host saves a state in memory, runs
+  the frame, loads it and runs the frame again, and both runs must match; the
+  average save and load time is printed and, with `--budget-ms`, checked. With
   the fake core it also checks that input reaches the console, the refusals
   of lockstep and its protocol errors, and, holding the fake core inside a
   frame, that leaving lockstep is answered only once that frame has ended and
@@ -253,6 +259,29 @@ through kqueue. On Windows a thread waits on the launcher's process handle.
   `pthread_cond_clockwait`, which that version does not intercept. Use GCC 12
   or later, or clang 14 or later.
 
+## SwanStation patches
+
+The host's SwanStation is upstream SwanStation at `SWANSTATION_COMMIT` with
+the patches in [`cores/patches`](../cores/patches), applied in the order of
+their names by
+[`cores/apply-swanstation-patches.sh`](../cores/apply-swanstation-patches.sh).
+The `real-core` and `release` workflows apply them after fetching SwanStation
+and before building it, and the release's source archive holds the patched
+source. The script applies them to git's index and checks the files out
+again, so they apply where git writes CRLF line endings too. A patch that no
+longer applies stops the build; one moved to a new `SWANSTATION_COMMIT` is
+made again with `git diff` against that commit. Each fixes something online
+play needs from a state ([netplay.md](netplay.md) "Determinism"):
+
+| Patch | What it changes |
+| --- | --- |
+| [`swanstation-1-netplay-input-state`](../cores/patches/swanstation-1-netplay-input-state.patch) | Whether the analog-mode button combination is still held moves from one variable of the libretro layer, shared by all ports, into each controller, and is saved with it, as is whether the game locked the analog mode (state version 58). A load whose savestate context is not `NORMAL` (netplay, rollback, runahead) also restores each controller's buttons, analog mode and held combination, which a normal load leaves as the player has them. Port devices the frontend set just before a load take effect before the state is read |
+| [`swanstation-2-pathless-netplay-state`](../cores/patches/swanstation-2-pathless-netplay-state.patch) | A state saved with `RETRO_SAVESTATE_CONTEXT_ROLLBACK_NETPLAY` leaves out the game's title and the disc's path, in the state's header and in the disc trailer of the libretro layer, and sets a pathless flag; a pathless state finds its disc by its index in the frontend's disc list |
+| [`swanstation-3-vram-upload-colour`](../cores/patches/swanstation-3-vram-upload-colour.patch) | The shader that writes 16-bit video memory into the GPU's texture turns each 5-bit channel into the same byte the CPU does, as an exact multiple of 1/255, so video memory loaded from a state shows what the game drew |
+
+States of the patched core are version 58, which stock SwanStation does not
+load; the host only ever runs the core of its own release.
+
 ## Releases
 
 [`.github/workflows/release.yml`](../.github/workflows/release.yml) builds the
@@ -269,7 +298,7 @@ release can be packed and checked by hand the same way.
 - **What a zip holds.** The host (`anyps5-retro-host.exe` on Windows,
   `anyps5-retro-host` elsewhere), SwanStation
   (`swanstation_libretro.dll`, `.so` or `.dylib`) built from
-  `SWANSTATION_COMMIT`, `licenses/` with the host's and SwanStation's licences
+  `SWANSTATION_COMMIT` with the host's patches (see "SwanStation patches"), `licenses/` with the host's and SwanStation's licences
   and every licence, copying, copyright or notice file under SwanStation's
   `dep/` (the libraries it builds in, such as libchdr, xxHash and VIXL, as
   `licenses/swanstation-dep/<path>`), the Apache-2.0 text for SwanStation's
@@ -291,7 +320,8 @@ release can be packed and checked by hand the same way.
   change the workflow or the packer run it too, and `workflow_dispatch` runs it
   by hand.
 - **Source.** The `source` job packs the host and SwanStation at the released
-  commits, with all their submodules and without `.git`, into
+  commits, with all their submodules, the host's SwanStation patches applied,
+  and without `.git`, into
   `anyps5-retro-host-<version>-source.tar.gz` (sorted, with fixed times and
   owners). It is the complete corresponding source the GPL asks for, and is
   published with the binaries, and carries the same Apache-2.0 text at its

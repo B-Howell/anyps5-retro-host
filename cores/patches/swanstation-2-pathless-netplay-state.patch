@@ -1,0 +1,126 @@
+diff --git a/src/core/system.cpp b/src/core/system.cpp
+index 951c5714..c23546a9 100644
+--- a/src/core/system.cpp
++++ b/src/core/system.cpp
+@@ -1129,7 +1129,7 @@ bool DoLoadState(ByteStream* state, bool force_software_renderer, bool update_di
+   return true;
+ }
+ 
+-bool SaveState(ByteStream* state)
++bool SaveState(ByteStream* state, bool include_media_path)
+ {
+   if (IsShutdown())
+     return false;
+@@ -1143,17 +1143,21 @@ bool SaveState(ByteStream* state)
+   // fill in header
+   header.magic = SAVE_STATE_MAGIC;
+   header.version = SAVE_STATE_VERSION;
+-  strlcpy(header.title, s_running_game_title.c_str(), sizeof(header.title));
++  if (include_media_path)
++    strlcpy(header.title, s_running_game_title.c_str(), sizeof(header.title));
+   strlcpy(header.game_code, s_running_game_code.c_str(), sizeof(header.game_code));
+ 
+   if (g_cdrom.HasMedia())
+   {
+-    const std::string& media_filename = g_cdrom.GetMediaFileName();
+-    header.offset_to_media_filename = static_cast<uint32_t>(state->GetPosition());
+-    header.media_filename_length = static_cast<uint32_t>(media_filename.length());
+     header.media_subimage_index = g_cdrom.GetMedia()->HasSubImages() ? g_cdrom.GetMedia()->GetCurrentSubImage() : 0;
+-    if (!media_filename.empty() && !state->Write2(media_filename.data(), header.media_filename_length))
+-      return false;
++    if (include_media_path)
++    {
++      const std::string& media_filename = g_cdrom.GetMediaFileName();
++      header.offset_to_media_filename = static_cast<uint32_t>(state->GetPosition());
++      header.media_filename_length = static_cast<uint32_t>(media_filename.length());
++      if (!media_filename.empty() && !state->Write2(media_filename.data(), header.media_filename_length))
++        return false;
++    }
+   }
+ 
+   // write data
+diff --git a/src/core/system.h b/src/core/system.h
+index bfadd56b..eb4ee5ea 100644
+--- a/src/core/system.h
++++ b/src/core/system.h
+@@ -98,7 +98,9 @@ void Shutdown();
+ bool LoadState(ByteStream* state, bool is_memory_state = false, bool restore_on_failure = false,
+                const char* media_path = nullptr, uint32_t media_subimage_index = 0,
+                bool apply_input_state = false);
+-bool SaveState(ByteStream* state);
++/// Without include_media_path the state names neither the game title nor the media file, so it holds nothing of
++/// this machine's files; whoever loads it names the media (LoadState's media_path).
++bool SaveState(ByteStream* state, bool include_media_path = true);
+ 
+ /// Recreates the GPU component, saving/loading the state so it is preserved. Call when the GPU renderer changes.
+ bool RecreateGPU(GPURenderer renderer, bool update_display = true);
+diff --git a/src/libretro/libretro_host_interface.cpp b/src/libretro/libretro_host_interface.cpp
+index 278e1de5..fc7a9a1b 100644
+--- a/src/libretro/libretro_host_interface.cpp
++++ b/src/libretro/libretro_host_interface.cpp
+@@ -44,6 +44,9 @@ constexpr uint32_t DISK_STATE_VERSION = 1;
+ constexpr uint32_t DISK_STATE_EJECTED = 1;
+ constexpr uint32_t DISK_STATE_NO_DISC = 2;
+ constexpr uint32_t DISK_STATE_CONTAINER = 4;
++/* The state names no path: index alone picks the disc in the frontend's list. A netplay state is loaded on another
++ * machine, where the same disc is elsewhere, and must not tell that machine where this one keeps its files. */
++constexpr uint32_t DISK_STATE_PATHLESS = 8;
+ 
+ struct DiskStateHeader
+ {
+@@ -995,16 +998,20 @@ bool HostInterface::retro_serialize(void* data, size_t size)
+ {
+   if (!data || size > UINT32_MAX)
+     return false;
++  retro_savestate_context ctx = RETRO_SAVESTATE_CONTEXT_NORMAL;
++  if (!g_retro_environment_callback(RETRO_ENVIRONMENT_GET_SAVESTATE_CONTEXT, &ctx))
++    ctx = RETRO_SAVESTATE_CONTEXT_NORMAL;
++  const bool pathless = ctx == RETRO_SAVESTATE_CONTEXT_ROLLBACK_NETPLAY;
+   std::unique_ptr<ByteStream> stream = ByteStream_CreateMemoryStream(data, static_cast<uint32_t>(size));
+-  if (!System::SaveState(stream.get()))
++  if (!System::SaveState(stream.get(), !pathless))
+     return false;
+ 
+   const DiskControlInfo& info = m_disk_control_info;
+   const bool no_disc = info.image_index >= info.image_count;
+-  const std::string path = no_disc ? std::string() : info.image_paths[info.image_index];
++  const std::string path = (no_disc || pathless) ? std::string() : info.image_paths[info.image_index];
+   const DiskStateHeader header{DISK_STATE_MAGIC, DISK_STATE_VERSION,
+                                (System::IsMediaTrayOpen() ? DISK_STATE_EJECTED : 0u) | (no_disc ? DISK_STATE_NO_DISC : 0u) |
+-                                 (info.has_sub_images ? DISK_STATE_CONTAINER : 0u),
++                                 (info.has_sub_images ? DISK_STATE_CONTAINER : 0u) | (pathless ? DISK_STATE_PATHLESS : 0u),
+                                info.image_index, static_cast<uint32_t>(path.size())};
+   return stream->Write2(&header, sizeof(header)) && stream->Write2(path.data(), header.path_length);
+ }
+@@ -1039,15 +1046,17 @@ bool HostInterface::retro_unserialize(const void* data, size_t size)
+       return false;
+     DiskStateHeader header;
+     std::memcpy(&header, static_cast<const uint8_t*>(data) + data_end, sizeof(header));
+-    if (header.version != DISK_STATE_VERSION || (header.flags & ~7u) != 0 ||
++    if (header.version != DISK_STATE_VERSION || (header.flags & ~15u) != 0 ||
+         header.path_length > size - data_end - sizeof(header))
+       return false;
+ 
+     std::string path(reinterpret_cast<const char*>(data) + data_end + sizeof(header), header.path_length);
+     const bool no_disc = (header.flags & DISK_STATE_NO_DISC) != 0;
+     const bool ejected = (header.flags & DISK_STATE_EJECTED) != 0;
+-    if (path.find('\0') != std::string::npos || no_disc != path.empty() ||
+-        (state_header.media_filename_length != 0) != (!no_disc && !ejected))
++    const bool pathless = (header.flags & DISK_STATE_PATHLESS) != 0;
++    if (pathless ? (!path.empty() || state_header.media_filename_length != 0) :
++                   (path.find('\0') != std::string::npos || no_disc != path.empty() ||
++                    (state_header.media_filename_length != 0) != (!no_disc && !ejected)))
+       return false;
+ 
+     if (no_disc)
+@@ -1056,7 +1065,9 @@ bool HostInterface::retro_unserialize(const void* data, size_t size)
+     {
+       if (((header.flags & DISK_STATE_CONTAINER) != 0) != info.has_sub_images)
+         return false;
+-      const std::optional<uint32_t> index = FindDiskImage(info, path, header.index);
++      const std::optional<uint32_t> index =
++        pathless ? (header.index < info.image_count ? std::optional<uint32_t>(header.index) : std::nullopt) :
++                   FindDiskImage(info, path, header.index);
+       if (!index.has_value())
+         return false;
+       selected_index = index.value();

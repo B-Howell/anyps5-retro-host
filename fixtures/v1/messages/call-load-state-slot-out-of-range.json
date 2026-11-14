@@ -1,0 +1,21 @@
+{
+  "description": "There are 8 slots, 0 to 7.",
+  "from": "launcher",
+  "message": {
+    "type": "call",
+    "id": 19,
+    "method": "loadState",
+    "args": {
+      "slot": 8
+    }
+  },
+  "reply": {
+    "type": "reply",
+    "id": 19,
+    "error": {
+      "code": "argument",
+      "message": "loadState.slot must be an integer from 0 to 7."
+    }
+  },
+  "invalid": "loadState args.slot must be an integer from 0 to 7"
+}

@@ -1,0 +1,25 @@
+{
+  "description": "The guess was wrong: the host goes back to the state in slot 3, and its next step is for frame 611 again.",
+  "from": "launcher",
+  "message": {
+    "type": "call",
+    "id": 18,
+    "method": "loadState",
+    "args": {
+      "slot": 3
+    }
+  },
+  "reply": {
+    "type": "reply",
+    "id": 18,
+    "result": {
+      "frame": 611,
+      "bytes": 11534336,
+      "micros": 3200
+    }
+  },
+  "anyValueFor": [
+    "result.bytes",
+    "result.micros"
+  ]
+}

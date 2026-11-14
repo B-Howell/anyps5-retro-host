@@ -1,0 +1,356 @@
+diff --git a/src/core/analog_controller.cpp b/src/core/analog_controller.cpp
+index 456983e6..e16642eb 100644
+--- a/src/core/analog_controller.cpp
++++ b/src/core/analog_controller.cpp
+@@ -66,6 +66,11 @@ bool AnalogController::DoState(StateWrapper& sw, bool apply_input_state)
+   sw.DoEx(&m_rumble_config_large_motor_index, 45, -1);
+   sw.DoEx(&m_rumble_config_small_motor_index, 45, -1);
+   sw.DoEx(&m_analog_toggle_queued, 45, false);
++  sw.DoEx(&m_analog_locked, 58, m_analog_locked);
++  bool analog_combo_held = m_analog_combo_held;
++  sw.DoEx(&analog_combo_held, 58, m_analog_combo_held);
++  if (apply_input_state)
++    m_analog_combo_held = analog_combo_held;
+ 
+   MotorState motor_state = m_motor_state;
+   sw.Do(&motor_state);
+diff --git a/src/core/analog_controller.h b/src/core/analog_controller.h
+index c9566f88..5e4031a1 100644
+--- a/src/core/analog_controller.h
++++ b/src/core/analog_controller.h
+@@ -54,6 +54,11 @@ public:
+   void SetAxisState(int32_t axis_code, float value) override;
+   void SetButtonState(int32_t button_code, bool pressed) override;
+   uint32_t GetButtonStateBits() const override;
++  // Whether the analog-mode button combination is still held since it last toggled analog mode. It is
++  // input state, saved with the controller, so a loaded state toggles at the same frame as the run it
++  // was saved from.
++  bool IsAnalogComboHeld() const { return m_analog_combo_held; }
++  void SetAnalogComboHeld(bool held) { m_analog_combo_held = held; }
+   std::optional<uint32_t> GetAnalogInputBytes() const override;
+ 
+   void ResetTransferState() override;
+@@ -127,6 +132,7 @@ private:
+   int m_rumble_config_small_motor_index = -1;
+ 
+   bool m_analog_toggle_queued = false;
++  bool m_analog_combo_held = false;
+   uint8_t m_status_byte = 0x5A;
+ 
+   // TODO: Set this with command 0x4D and increase response length in digital mode accordingly
+diff --git a/src/core/negcon_rumble.cpp b/src/core/negcon_rumble.cpp
+index b213aa29..f22a6e60 100644
+--- a/src/core/negcon_rumble.cpp
++++ b/src/core/negcon_rumble.cpp
+@@ -65,6 +65,11 @@ bool NeGconRumble::DoState(StateWrapper& sw, bool apply_input_state)
+   sw.DoEx(&m_rumble_config_large_motor_index, 45, -1);
+   sw.DoEx(&m_rumble_config_small_motor_index, 45, -1);
+   sw.DoEx(&m_analog_toggle_queued, 45, false);
++  sw.DoEx(&m_analog_locked, 58, m_analog_locked);
++  bool analog_combo_held = m_analog_combo_held;
++  sw.DoEx(&analog_combo_held, 58, m_analog_combo_held);
++  if (apply_input_state)
++    m_analog_combo_held = analog_combo_held;
+ 
+   MotorState motor_state = m_motor_state;
+   sw.Do(&motor_state);
+diff --git a/src/core/negcon_rumble.h b/src/core/negcon_rumble.h
+index 27fd9d80..f310f071 100644
+--- a/src/core/negcon_rumble.h
++++ b/src/core/negcon_rumble.h
+@@ -46,6 +46,11 @@ public:
+   void SetAxisState(int32_t axis_code, float value) override;
+   void SetButtonState(int32_t button_code, bool pressed) override;
+   uint32_t GetButtonStateBits() const override;
++  // Whether the analog-mode button combination is still held since it last toggled analog mode. It is
++  // input state, saved with the controller, so a loaded state toggles at the same frame as the run it
++  // was saved from.
++  bool IsAnalogComboHeld() const { return m_analog_combo_held; }
++  void SetAnalogComboHeld(bool held) { m_analog_combo_held = held; }
+   std::optional<uint32_t> GetAnalogInputBytes() const override;
+ 
+   void ResetTransferState() override;
+@@ -115,6 +120,7 @@ private:
+   int m_rumble_config_small_motor_index = -1;
+ 
+   bool m_analog_toggle_queued = false;
++  bool m_analog_combo_held = false;
+   uint8_t m_status_byte = 0x5A;
+ 
+   // buttons are active low
+diff --git a/src/core/pad.cpp b/src/core/pad.cpp
+index 6cc12853..417bee34 100644
+--- a/src/core/pad.cpp
++++ b/src/core/pad.cpp
+@@ -50,7 +50,7 @@ void Pad::Reset()
+     m_multitaps[i].Reset();
+ }
+ 
+-bool Pad::DoStateController(StateWrapper& sw, uint32_t i)
++bool Pad::DoStateController(StateWrapper& sw, uint32_t i, bool apply_input_state)
+ {
+   ControllerType controller_type = m_controllers[i] ? m_controllers[i]->GetType() : ControllerType::None;
+   ControllerType state_controller_type = controller_type;
+@@ -78,7 +78,7 @@ bool Pad::DoStateController(StateWrapper& sw, uint32_t i)
+     return false;
+ 
+   if (auto& controller = m_controllers[i]; controller && controller->GetType() == state_controller_type)
+-    return controller->DoState(sw, false);
++    return controller->DoState(sw, apply_input_state);
+   else if (auto dummy = Controller::Create(state_controller_type, i); dummy)
+     return dummy->DoState(sw, false);
+ 
+@@ -139,7 +139,7 @@ bool Pad::DoStateMemcard(StateWrapper& sw, uint32_t i)
+   return true;
+ }
+ 
+-bool Pad::DoState(StateWrapper& sw)
++bool Pad::DoState(StateWrapper& sw, bool apply_input_state)
+ {
+   for (uint32_t i = 0; i < NUM_CONTROLLER_AND_CARD_PORTS; i++)
+   {
+@@ -159,7 +159,7 @@ bool Pad::DoState(StateWrapper& sw)
+       continue;
+     }
+ 
+-    if (!DoStateController(sw, i))
++    if (!DoStateController(sw, i, apply_input_state))
+       return false;
+ 
+     if (!DoStateMemcard(sw, i))
+diff --git a/src/core/pad.h b/src/core/pad.h
+index 82418940..2feb6dcb 100644
+--- a/src/core/pad.h
++++ b/src/core/pad.h
+@@ -21,7 +21,9 @@ public:
+   void Initialize();
+   void Shutdown();
+   void Reset();
+-  bool DoState(StateWrapper& sw);
++  /// apply_input_state also loads each controller's buttons and analog mode, as a state made for the same
++  /// session (runahead, rollback, netplay) needs; a normal load keeps the player's current ones.
++  bool DoState(StateWrapper& sw, bool apply_input_state = false);
+ 
+   Controller* GetController(uint32_t slot) const { return m_controllers[slot].get(); }
+   void SetController(uint32_t slot, std::unique_ptr<Controller> dev);
+@@ -110,7 +112,7 @@ private:
+   void EndTransfer();
+   void ResetDeviceTransferState();
+ 
+-  bool DoStateController(StateWrapper& sw, uint32_t i);
++  bool DoStateController(StateWrapper& sw, uint32_t i, bool apply_input_state);
+   bool DoStateMemcard(StateWrapper& sw, uint32_t i);
+ 
+   std::array<std::unique_ptr<Controller>, NUM_CONTROLLER_AND_CARD_PORTS> m_controllers;
+diff --git a/src/core/save_state_version.h b/src/core/save_state_version.h
+index 027db06a..bc579707 100644
+--- a/src/core/save_state_version.h
++++ b/src/core/save_state_version.h
+@@ -2,7 +2,7 @@
+ #include "types.h"
+ 
+ static constexpr uint32_t SAVE_STATE_MAGIC = 0x43435544;
+-static constexpr uint32_t SAVE_STATE_VERSION = 57;
++static constexpr uint32_t SAVE_STATE_VERSION = 58;
+ static constexpr uint32_t SAVE_STATE_MINIMUM_VERSION = 42;
+ 
+ #pragma pack(push, 4)
+diff --git a/src/core/system.cpp b/src/core/system.cpp
+index 5adc67fe..951c5714 100644
+--- a/src/core/system.cpp
++++ b/src/core/system.cpp
+@@ -79,8 +79,10 @@ static std::string GetExecutableNameForImage(CDImage* cdi);
+ static void UpdatePerGameMemoryCards();
+ 
+ static bool DoLoadState(ByteStream* stream, bool force_software_renderer, bool update_display, bool is_memory_state,
+-                        const char* media_path = nullptr, uint32_t media_subimage_index = 0);
+-static bool DoState(StateWrapper& sw, HostDisplayTexture** host_texture, bool update_display, bool is_memory_state);
++                        const char* media_path = nullptr, uint32_t media_subimage_index = 0,
++                        bool apply_input_state = false);
++static bool DoState(StateWrapper& sw, HostDisplayTexture** host_texture, bool update_display, bool is_memory_state,
++                    bool apply_input_state = false);
+ static void DoRunFrame();
+ static bool CreateGPU(GPURenderer renderer);
+ 
+@@ -845,7 +847,8 @@ bool CreateGPU(GPURenderer renderer)
+   return true;
+ }
+ 
+-bool DoState(StateWrapper& sw, HostDisplayTexture** host_texture, bool update_display, bool is_memory_state)
++bool DoState(StateWrapper& sw, HostDisplayTexture** host_texture, bool update_display, bool is_memory_state,
++             bool apply_input_state)
+ {
+   if (!sw.DoMarker("System"))
+     return false;
+@@ -888,7 +891,7 @@ bool DoState(StateWrapper& sw, HostDisplayTexture** host_texture, bool update_di
+   if (!sw.DoMarker("CDROM") || !g_cdrom.DoState(sw))
+     return false;
+ 
+-  if (!sw.DoMarker("Pad") || !g_pad.DoState(sw))
++  if (!sw.DoMarker("Pad") || !g_pad.DoState(sw, apply_input_state))
+     return false;
+ 
+   if (!sw.DoMarker("Timers") || !g_timers.DoState(sw))
+@@ -955,14 +958,14 @@ void Reset()
+ }
+ 
+ bool LoadState(ByteStream* state, bool is_memory_state, bool restore_on_failure, const char* media_path,
+-               uint32_t media_subimage_index)
++               uint32_t media_subimage_index, bool apply_input_state)
+ {
+   if (IsShutdown())
+     return false;
+ 
+   if (!restore_on_failure)
+   {
+-    if (DoLoadState(state, false, false, is_memory_state, media_path, media_subimage_index))
++    if (DoLoadState(state, false, false, is_memory_state, media_path, media_subimage_index, apply_input_state))
+       return true;
+ 
+     Reset();
+@@ -977,7 +980,7 @@ bool LoadState(ByteStream* state, bool is_memory_state, bool restore_on_failure,
+   s_backup->SeekAbsolute(0);
+   const bool have_backup = SaveState(s_backup.get());
+ 
+-  if (DoLoadState(state, false, false, is_memory_state, media_path, media_subimage_index))
++  if (DoLoadState(state, false, false, is_memory_state, media_path, media_subimage_index, apply_input_state))
+     return true;
+ 
+   if (!have_backup || !s_backup->SeekAbsolute(0) || !DoLoadState(s_backup.get(), false, false, false))
+@@ -986,7 +989,7 @@ bool LoadState(ByteStream* state, bool is_memory_state, bool restore_on_failure,
+ }
+ 
+ bool DoLoadState(ByteStream* state, bool force_software_renderer, bool update_display, bool is_memory_state,
+-                 const char* media_path, uint32_t media_subimage_index)
++                 const char* media_path, uint32_t media_subimage_index, bool apply_input_state)
+ {
+   SAVE_STATE_HEADER header;
+   if (!state->Read2(&header, sizeof(header)))
+@@ -1117,7 +1120,7 @@ bool DoLoadState(ByteStream* state, bool force_software_renderer, bool update_di
+     return false;
+ 
+   StateWrapper sw(state, StateWrapper::Mode::Read, header.version);
+-  if (!DoState(sw, nullptr, update_display, is_memory_state))
++  if (!DoState(sw, nullptr, update_display, is_memory_state, apply_input_state))
+     return false;
+ 
+   if (s_state == State::Starting)
+diff --git a/src/core/system.h b/src/core/system.h
+index dca5e575..bfadd56b 100644
+--- a/src/core/system.h
++++ b/src/core/system.h
+@@ -94,8 +94,10 @@ void Shutdown();
+ /// With restore_on_failure, a state that fails to load leaves the running state as it was.
+ /// Otherwise, a failed load resets the system so partially loaded state cannot run.
+ /// media_path, when set, replaces the media named in the state.
++/// apply_input_state also restores the controllers' buttons and analog mode (Pad::DoState).
+ bool LoadState(ByteStream* state, bool is_memory_state = false, bool restore_on_failure = false,
+-               const char* media_path = nullptr, uint32_t media_subimage_index = 0);
++               const char* media_path = nullptr, uint32_t media_subimage_index = 0,
++               bool apply_input_state = false);
+ bool SaveState(ByteStream* state);
+ 
+ /// Recreates the GPU component, saving/loading the state so it is preserved. Call when the GPU renderer changes.
+diff --git a/src/libretro/libretro_host_interface.cpp b/src/libretro/libretro_host_interface.cpp
+index 6f97a844..278e1de5 100644
+--- a/src/libretro/libretro_host_interface.cpp
++++ b/src/libretro/libretro_host_interface.cpp
+@@ -269,10 +269,8 @@ bool g_retro_skip_audio_this_frame = false;
+ static retro_log_callback s_libretro_log_callback = {};
+ static bool s_libretro_log_callback_registered = false;
+ static bool libretro_supports_option_categories = false;
+-static bool analog_pressed = false;
+ static bool port_allowed = false;
+ static unsigned libretro_msg_interface_version = 0;
+-static int analog_index = -1;
+ 
+ static void LibretroLogCallback(void* pUserParam, const char* channelName, const char* functionName, LogLevel level,
+                                 const char* message)
+@@ -1127,9 +1125,21 @@ bool HostInterface::retro_unserialize(const void* data, size_t size)
+   /* Normal state loads preserve the running state on failure. Runahead and netplay skip the per-load backup
+    * because they can happen every frame; LoadState resets the system if one of those states is rejected. */
+   const bool restore_on_failure = !is_memory_state && ctx != RETRO_SAVESTATE_CONTEXT_ROLLBACK_NETPLAY;
++  /* A state for runahead, rollback or netplay must continue exactly as it was saved, so it also brings back
++   * the controllers' buttons and analog mode; a normal load keeps the player's current ones. */
++  const bool apply_input_state = ctx != RETRO_SAVESTATE_CONTEXT_NORMAL;
++
++  /* Port devices the frontend set just before the load take effect first, so each controller in the state is read
++   * into a controller of its type rather than into none, or into one made afresh at the next frame. */
++  if (HasCoreVariablesChanged() || controller_dirty)
++  {
++    controller_dirty = false;
++    UpdateSettings();
++  }
+ 
+   std::unique_ptr<ByteStream> stream = ByteStream_CreateReadOnlyMemoryStream(data, static_cast<uint32_t>(size));
+-  if (!System::LoadState(stream.get(), is_memory_state, restore_on_failure, media_override, media_subimage_index))
++  if (!System::LoadState(stream.get(), is_memory_state, restore_on_failure, media_override, media_subimage_index,
++                         apply_input_state))
+     return false;
+ 
+   info.image_index = selected_index;
+@@ -1788,7 +1798,7 @@ void HostInterface::UpdateControllersAnalogController(uint32_t index)
+   int analog_press_status = 0;
+ 
+   // Check if we're allowed to press the analog button, and then set the selected combo.
+-  if (!analog_pressed)
++  if (!controller->IsAnalogComboHeld())
+   {
+     switch (g_settings.controller_analog_combo)
+     {
+@@ -1841,20 +1851,15 @@ void HostInterface::UpdateControllersAnalogController(uint32_t index)
+   // Workaround for the fact it will otherwise spam the analog button.
+   if (analog_press_status)
+   {
+-    analog_index = index;
+-    analog_pressed = true;
++    controller->SetAnalogComboHeld(true);
+     controller->SetButtonState(AnalogController::Button::Analog, (analog_press_status));
+     analog_press_status = 0;
+   }
+ 
+-  // Check if all possible combo buttons are released and the index matches the player slot.
+-  // Also make sure having another DualShock plugged in doesn't prematurely clear the button block.
+-  if (((uint32_t)analog_index == index) && analog_pressed &&
++  // The combo can toggle again once every button it may use is released on this controller.
++  if (controller->IsAnalogComboHeld() &&
+        !PadCombo_L1 && !PadCombo_R1 && !PadCombo_L2 && !PadCombo_R2 && !PadCombo_L3 && !PadCombo_R3 && !PadCombo_Start && !PadCombo_Select)
+-  {
+-    analog_pressed = false;
+-    analog_index = -1;
+-  }
++    controller->SetAnalogComboHeld(false);
+ }
+ 
+ void HostInterface::UpdateControllersAnalogJoystick(uint32_t index)
+@@ -2030,25 +2035,20 @@ void HostInterface::UpdateControllersNeGconRumble(uint32_t index)
+   int analog_press_status = 0;
+ 
+   // Check if we're allowed to press the analog button, and then set the selected combo.
+-  if (!analog_pressed)
++  if (!controller->IsAnalogComboHeld())
+     analog_press_status = Analog_Select;
+ 
+   // Workaround for the fact it will otherwise spam the analog button.
+   if (analog_press_status)
+   {
+-    analog_index = index;
+-    analog_pressed = true;
++    controller->SetAnalogComboHeld(true);
+     controller->SetButtonState(NeGconRumble::Button::Analog, (analog_press_status));
+     analog_press_status = 0;
+   }
+ 
+-  // Check if all possible combo buttons are released and the index matches the player slot.
+-  // Also make sure having another DualShock plugged in doesn't prematurely clear the button block.
+-  if (((uint32_t)analog_index == index) && analog_pressed && !Analog_Select)
+-  {
+-    analog_pressed = false;
+-    analog_index = -1;
+-  }
++  // The combo can toggle again once Select is released on this controller.
++  if (controller->IsAnalogComboHeld() && !Analog_Select)
++    controller->SetAnalogComboHeld(false);
+ 
+ }
+ 

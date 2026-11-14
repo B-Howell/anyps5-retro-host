@@ -88,6 +88,8 @@ jobs:
           git -C swanstation fetch -q --depth 1 https://github.com/libretro/swanstation.git "$SWANSTATION_COMMIT"
           git -C swanstation checkout -q FETCH_HEAD
           git -C swanstation submodule update -q --init --depth 1 --recursive
+      - name: Apply the host's SwanStation patches
+        run: bash cores/apply-swanstation-patches.sh swanstation
       - name: Build SwanStation
         run: |
           cmake -S swanstation -B swanstation/build -DCMAKE_BUILD_TYPE=Release
@@ -98,8 +100,8 @@ jobs:
           cmake --build build --config Release
       - name: Run the real core
         run: ${{ matrix.python }} tests/real_core.py --host ${{ matrix.host }} --core ${{ matrix.core }} --bios ps1-files/openbios.bin --program ps1-files/hello.exe --log build/real-core.log --picture build/real-core.png ${{ matrix.opengl }}
-      - name: Two real cores in lockstep, fed the same input, frame for frame
-        run: ${{ matrix.python }} tests/lockstep_test.py --host ${{ matrix.host }} --core ${{ matrix.core }} --bios ps1-files/openbios.bin --program ps1-files/hello.exe --log build/lockstep.log --frames 600
+      - name: Two real cores in lockstep, fed the same input, frame for frame, and states saved and loaded in memory
+        run: ${{ matrix.python }} tests/lockstep_test.py --host ${{ matrix.host }} --core ${{ matrix.core }} --bios ps1-files/openbios.bin --program ps1-files/hello.exe --log build/lockstep.log --frames 600 --budget-ms 16
       - if: failure()
         run: tail -200 build/real-core.log build/lockstep.log || true
       - if: always()

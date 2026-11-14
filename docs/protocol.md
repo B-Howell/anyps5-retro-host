@@ -24,17 +24,20 @@ The words MUST, MUST NOT and SHOULD are used as in RFC 2119.
 | --- | --- |
 | This document, the fixtures and the fixture checker | MIT |
 | `anyps5-retro-host` | GPL-2.0-or-later |
-| SwanStation (the only core version 1 loads) | GPL-3.0, [libretro/swanstation](https://github.com/libretro/swanstation), unmodified |
+| SwanStation (the only core version 1 loads) | GPL-3.0, [libretro/swanstation](https://github.com/libretro/swanstation), with the host's patches in [`cores/patches`](../cores/patches) |
 
 The launcher never links the host or a core, and shares no code with the
 host. A launcher MAY copy code from this document or the fixtures. Each host
 release names the SwanStation commit it was tested with, and the distributed
-SwanStation build is made from that commit's source.
+SwanStation build is made from that commit's source with the host's
+SwanStation patches applied ([host.md](host.md) "SwanStation patches"). A
+launcher runs only the SwanStation a host release ships: the patched core's
+states are not stock SwanStation's.
 
 The host is GPL-2.0-or-later so that one host can later run GPL-3.0 cores
 (SwanStation, LRPS2) and GPL-2.0-only cores (RPCS3). It only ever loads one
-core at a time. Before a modified core is added, its patches and the
-repository and commit they apply to are published with the host.
+core at a time. A core's patches, and the repository and commit they apply
+to, are published with the host.
 
 ## Processes
 
@@ -774,20 +777,33 @@ Argument: `{"check":<integer 1 to 3600>,"paced":<boolean, optional>}`, or
 
 ### saveState and loadState
 
-Argument: `{"path":<path>}`. The file a game's state is written to or read
-from, which the launcher chooses and later deletes. Both are carried out
-between two frames, before any step still queued.
+Argument: `{"path":<path>}` or `{"slot":<integer 0 to 7>}`, not both. Both
+are carried out between two frames, before any step still queued.
 
-- `saveState` writes the core's state with the next lockstep frame's number:
-  the frame the state will continue with. Returns
-  `{"frame":<integer>,"bytes":<integer>}`, with the file's size.
-- `loadState` reads such a file into the game, drops the steps not yet run,
-  and sets the lockstep frame count to the frame in the file, so the next
-  `step` is for that frame. A file whose frame is above 4294967295 is not
-  loaded. Returns the same object.
+- **A file**, `path`, is for a state that leaves the host: the one a friend
+  joins from. The launcher chooses the file and later deletes it.
+- **A slot** is one of 8 states the game keeps in memory, for rollback: the
+  launcher saves one before each frame it runs on a guessed input and loads
+  it back when the guess was wrong ([netplay.md](netplay.md) "Lockstep first,
+  rollback after"). A slot belongs to the game and to its lockstep count: it
+  is lost when the game ends, and a slot saved before the game last entered
+  lockstep does not load. A new save in a slot replaces what it held.
+
+- `saveState` saves the core's state with the next lockstep frame's number:
+  the frame the state will continue with, and the number of connected ports.
+  Returns `{"frame":<integer>,"bytes":<integer>,"micros":<integer>}`: `bytes`
+  is the file's size, or the size of the core's data in a slot, and `micros`
+  how long the host spent saving it, in microseconds.
+- `loadState` connects the ports the state was saved with (a port count
+  `connectedPorts` would set), loads the state into the game, drops the steps
+  not yet run, and sets the lockstep frame count to the frame in the state,
+  so the next `step` is for that frame. A file whose frame is above
+  4294967295 is not loaded. Returns the same object, with how long the load
+  took.
 
 Both return `false` when the game is not in lockstep or has ended, when the
-file cannot be written or read, or when the core refuses the state. They also
+file cannot be written or read, when the slot holds no state of this lockstep
+count, or when the core refuses the state. They also
 return `false` when the game's thread does not get to them within 4 seconds,
 which can happen to a game started with `start.lockstep` that is still
 loading: such a game shows no `ready` before its first step, so a launcher
@@ -803,24 +819,35 @@ The file is the 48-byte header below, then the core's
 | Offset | Size | Value |
 | --- | --- | --- |
 | 0 | 8 | The bytes `AP5STATE` |
-| 8 | 4 | 1, the file's version |
+| 8 | 4 | 2, the file's version |
 | 12 | 4 | 1 when offset 24 holds the last picture's hash, else 0 |
 | 16 | 8 | The lockstep frame the state continues with |
 | 24 | 8 | The `video` hash of the last picture before the state was saved |
 | 32 | 8 | The size of the core's data that follows |
-| 40 | 8 | 0 |
+| 40 | 4 | The number of connected ports, 1 or 2 |
+| 44 | 4 | 0 |
 
-The host tells the core the state is for netplay
+While the host saves or loads a file, or hashes the state for a
+[`sync`](#sync), it tells the core the state is for netplay
 (`RETRO_ENVIRONMENT_GET_SAVESTATE_CONTEXT` answers
-`RETRO_SAVESTATE_CONTEXT_ROLLBACK_NETPLAY`) while it saves or loads one, and
-`RETRO_SAVESTATE_CONTEXT_NORMAL` at any other time.
+`RETRO_SAVESTATE_CONTEXT_ROLLBACK_NETPLAY`); for a slot it answers
+`RETRO_SAVESTATE_CONTEXT_RUNAHEAD_SAME_INSTANCE`, the state never leaving
+the process; at any other time `RETRO_SAVESTATE_CONTEXT_NORMAL`. With the
+host's SwanStation patches, a state of either context:
+
+- names no file or folder: the disc is named by its place in the game's disc
+  list, so a state from another machine loads whatever the disc's file is
+  called there, and tells that machine nothing of where the first one keeps
+  its files;
+- brings back each controller's buttons, analog mode, whether the game
+  locked that mode, and whether the analog-mode button combination is still
+  held, so a loaded game toggles analog mode at the same frames as the game
+  it was saved from.
 
 A state holds the console's memory cards. A launcher that loads a state from
 another player starts that game with a `saves` directory of its own for the
 match, so the host never writes that player's memory card over the
-player's own. SwanStation's state also names the disc's path on the machine
-that saved it, and finds the disc by that path or, failing that, by its file
-name ([netplay.md](netplay.md), "Determinism").
+player's own.
 
 ### step
 
@@ -859,10 +886,13 @@ lowercase hexadecimal digits, or `null` when the core cannot give them:
 | `video` | The last picture published by this frame or an earlier one: its width and height as two 32-bit little-endian integers, then the red, green and blue bytes of each pixel, top row first, whichever pixel format the ring has. `null` before the first picture |
 | `state` | The core's `retro_serialize` data after the frame, in a buffer of `retro_serialize_size` bytes that starts zeroed |
 
-Two hosts that ran the same steps from the same start have the same `ram`.
+Two hosts that ran the same steps from the same start have the same `ram`
+and `state`, wherever each keeps the disc: the state is saved for netplay, so
+it names no path ([saveState and loadState](#savestate-and-loadstate)).
 `video` is the same on two machines only when both draw in software; GPUs may
-round differently. `state` also differs when the core keeps something of the
-machine in it, such as SwanStation's disc path.
+round differently. For the same reason `state`, which holds the console's
+video memory read back from the GPU, may differ between two GPUs drawing at a
+resolution scale above 1x.
 
 ## Frame ring
 

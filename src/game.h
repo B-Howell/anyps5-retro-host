@@ -71,10 +71,21 @@ struct SyncPoint {
 // refused because the game is not in lockstep, the frame is not the next one, or too many wait.
 enum class StepResult { kTaken, kIgnored, kRefused };
 
-// The lockstep frame a saved or loaded state belongs to, or nothing when it could not be done.
+// The lockstep frame a saved or loaded state belongs to, its size, and how long the host spent on
+// it, or nothing when it could not be done.
 struct StateResult {
   uint64_t frame = 0;
   uint64_t bytes = 0;
+  uint64_t micros = 0;
+};
+
+// The in-memory states a game in lockstep keeps (protocol.md "saveState and loadState").
+constexpr unsigned kStateSlots = 8;
+
+// Where a state goes: a file the launcher names, or one of the game's in-memory slots.
+struct StateTarget {
+  std::string path;
+  std::optional<unsigned> slot;
 };
 
 // What a running game hands back to the host: frames to publish and rumble to forward. Called
@@ -120,10 +131,11 @@ class Game {
   // Queues the input for one lockstep frame.
   StepResult Step(uint64_t frame, const StepInput& input);
   // Writes or reads the core's state, with its lockstep frame, between frames (protocol.md
-  // "saveState" and "loadState"). Nothing when the game is not in lockstep, has ended, the core
-  // refused, or the game's thread did not get to it within timeout_ms.
-  std::optional<StateResult> SaveState(const std::string& path, int64_t timeout_ms);
-  std::optional<StateResult> LoadState(const std::string& path, int64_t timeout_ms);
+  // "saveState" and "loadState"). Nothing when the game is not in lockstep, has ended, the slot
+  // holds no state of this lockstep count, the core refused, or the game's thread did not get to
+  // it within timeout_ms.
+  std::optional<StateResult> SaveState(const StateTarget& target, int64_t timeout_ms);
+  std::optional<StateResult> LoadState(const StateTarget& target, int64_t timeout_ms);
 
   // Asks the game to end. Ended() turns true once the core is unloaded.
   void Stop();
@@ -278,7 +290,7 @@ class Game {
   enum class StateWork { kSave, kLoad };
   struct StateRequest {
     StateWork work = StateWork::kSave;
-    std::string path;
+    StateTarget target;
     bool done = false;
     std::optional<StateResult> result;
   };
@@ -296,11 +308,30 @@ class Game {
   // nothing when the core cannot serialize now.
   const std::string* Serialize();
   std::string serialized_;
-  std::optional<StateResult> RequestState(StateWork work, const std::string& path, int64_t timeout_ms);
+  std::optional<StateResult> RequestState(StateWork work, const StateTarget& target, int64_t timeout_ms);
   // Serves a save or load the launcher asked for; runs on the game's thread between frames.
   void ServeStateRequest();
   std::optional<StateResult> WriteState(const std::string& path);
   std::optional<StateResult> ReadState(const std::string& path);
+  // In-memory states, used only on the game's thread. A slot keeps the core's data in a buffer it
+  // reuses, the lockstep frame and picture hash it continues with, and the lockstep count it was
+  // saved in: entering lockstep anew starts frames at 0 again, so older slots no longer load.
+  // The core is told the state stays in this process (RETRO_SAVESTATE_CONTEXT_RUNAHEAD_SAME_INSTANCE).
+  struct MemoryState {
+    std::string data;
+    uint64_t frame = 0;
+    std::optional<uint64_t> video;
+    unsigned ports = 1;
+    uint64_t entry = 0;
+    bool used = false;
+  };
+  std::array<MemoryState, kStateSlots> slots_;
+  std::optional<StateResult> WriteSlot(unsigned slot);
+  std::optional<StateResult> ReadSlot(unsigned slot);
+  // Connects the ports a state was saved with, at once, so the core loads each controller's
+  // state into a controller of its own rather than into none, or into one made afresh at the
+  // next frame. Runs on the game's thread, before the core reads the state.
+  void UsePorts(unsigned count);
   // True while the game's thread runs a frame (see Lockstep and LeaveLockstep). Calls waiting for
   // the frame to end count themselves in fence_waiters_, and no frame starts while one waits.
   // Both are guarded by mutex_; fence_signal_ is notified when a frame ends.
@@ -316,6 +347,8 @@ class Game {
   std::optional<LockstepConfig> lockstep_;
   std::deque<StepInput> steps_;
   uint64_t next_frame_ = 0;
+  // Counts the times the game entered lockstep; guarded by mutex_.
+  uint64_t lockstep_entry_ = 0;
   std::shared_ptr<StateRequest> state_request_;
   // The step being run, read by InputState on the game's thread.
   std::optional<StepInput> step_input_;

@@ -96,7 +96,7 @@ LockstepConfig NeedLockstep(const Json& args, const std::string& where) {
 
 Json StateJson(const std::optional<StateResult>& result) {
   if (!result) return Json(false);
-  return Json(JsonObject{{"frame", result->frame}, {"bytes", result->bytes}});
+  return Json(JsonObject{{"frame", result->frame}, {"bytes", result->bytes}, {"micros", result->micros}});
 }
 
 std::string Hex(const std::optional<uint64_t>& value) {
@@ -353,10 +353,20 @@ Host::Reply Host::Start(const Json& args) {
 Host::Reply Host::State(bool save, const Json& args) {
   const char* method = save ? "saveState" : "loadState";
   Need(args.IsObject(), std::string(method) + " takes an object.");
-  const std::string path = NeedPath(args, "path", method);
+  const Json* slot = args.Find("slot");
+  Need((slot == nullptr) != (args.Find("path") == nullptr), std::string(method) + " takes a path or a slot.");
+  StateTarget target;
+  if (slot) {
+    const auto index = slot->Integer(0, kStateSlots - 1);
+    Need(index.has_value(), std::string(method) + ".slot must be an integer from 0 to " +
+                                std::to_string(kStateSlots - 1) + ".");
+    target.slot = static_cast<unsigned>(*index);
+  } else {
+    target.path = NeedPath(args, "path", method);
+  }
   const auto game = CurrentGame();
   if (!game) return Result(Json(false));
-  return Result(StateJson(save ? game->SaveState(path, kStateLimitMs) : game->LoadState(path, kStateLimitMs)));
+  return Result(StateJson(save ? game->SaveState(target, kStateLimitMs) : game->LoadState(target, kStateLimitMs)));
 }
 
 FrameResult Host::OnFrame(const uint8_t* pixels, uint32_t width, uint32_t height, uint32_t epoch) {

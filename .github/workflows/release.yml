@@ -14,10 +14,12 @@ on:
     paths:
       - .github/workflows/release.yml
       - tools/package_release.py
+      - cores/**
   pull_request:
     paths:
       - .github/workflows/release.yml
       - tools/package_release.py
+      - cores/**
   workflow_dispatch:
 permissions:
   contents: read
@@ -135,6 +137,8 @@ jobs:
           git -C swanstation fetch -q --depth 1 https://github.com/libretro/swanstation.git "$SWANSTATION_COMMIT"
           git -C swanstation checkout -q FETCH_HEAD
           git -C swanstation submodule update -q --init --depth 1 --recursive
+      - name: Apply the host's SwanStation patches
+        run: bash cores/apply-swanstation-patches.sh swanstation
       - name: Build SwanStation
         run: |
           cmake -S swanstation -B swanstation/build $CONFIGURE
@@ -189,7 +193,8 @@ jobs:
           if-no-files-found: error
 
   # The complete corresponding source of what the zips hold (GPL-2.0 and GPL-3.0): the host and
-  # SwanStation at the released commits, with their submodules, published beside the zips.
+  # SwanStation at the released commits, with their submodules and the host's SwanStation patches
+  # applied, published beside the zips.
   source:
     needs: version
     runs-on: ubuntu-24.04
@@ -205,6 +210,8 @@ jobs:
           git -C swanstation fetch -q --depth 1 https://github.com/libretro/swanstation.git "$SWANSTATION_COMMIT"
           git -C swanstation checkout -q FETCH_HEAD
           git -C swanstation submodule update -q --init --depth 1 --recursive
+      - name: Apply the host's SwanStation patches, so the archive holds the source that was built
+        run: bash host/cores/apply-swanstation-patches.sh swanstation
       - name: Pack the source
         run: |
           stem="anyps5-retro-host-${{ needs.version.outputs.version }}-source"
