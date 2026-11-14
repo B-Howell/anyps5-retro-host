@@ -1,0 +1,23 @@
+{
+  "description": "The running game enters rollback: a sync every 60 frames, at the core's frame rate, with at most 8 frames stepped beyond the last confirmed one.",
+  "from": "launcher",
+  "message": {
+    "type": "call",
+    "id": 11,
+    "method": "lockstep",
+    "args": {
+      "check": 60,
+      "paced": true,
+      "rollback": {
+        "frames": 8
+      }
+    }
+  },
+  "reply": {
+    "type": "reply",
+    "id": 11,
+    "result": {
+      "frame": 0
+    }
+  }
+}

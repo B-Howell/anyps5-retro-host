@@ -14,6 +14,7 @@ MAX_MESSAGE = 1 << 20
 ID = (1, 2**31 - 1)
 U32 = (1, 2**32 - 1)
 STATE_SLOTS = 8
+ROLLBACK_FRAMES = 8
 AXIS = (-32768, 32767)
 NONE = 0xFFFFFFFF
 MAX_SLOT = 268435456
@@ -21,7 +22,8 @@ STEPS = {'hostExits', 'pollWithin', 'silence', 'wait', 'launcherKillsHost', 'lau
 OUTCOMES = {'clean', 'protocolError', 'unsupported', 'hostFailure'}
 SENDERS = {'hello': 'launcher', 'call': 'launcher', 'input': 'launcher', 'ping': 'launcher', 'shutdown': 'launcher',
            'step': 'launcher', 'welcome': 'host', 'unsupported': 'host', 'reply': 'host', 'pong': 'host',
-           'ring': 'host', 'frame': 'host', 'rumble': 'host', 'sync': 'host'}
+           'ring': 'host', 'frame': 'host', 'rumble': 'host', 'sync': 'host', 'correct': 'launcher',
+           'rollback': 'host'}
 HASH = re.compile(r'[0-9a-f]{16}')
 
 
@@ -215,6 +217,9 @@ def lockstep_args(args, name='lockstep args'):
     integer(args.get('check'), 1, 3600, f'{name}.check')
     if 'paced' in args:
         boolean(args['paced'], f'{name}.paced')
+    if 'rollback' in args:
+        rollback = obj(args['rollback'], f'{name}.rollback')
+        integer(rollback.get('frames'), 1, ROLLBACK_FRAMES, f'{name}.rollback.frames')
 
 
 def lockstep_result(value, name=None):
@@ -331,7 +336,17 @@ def check_message(message, calls, check_args=True):
         ports = message.get('ports')
         need(isinstance(ports, list) and 1 <= len(ports) <= 2, 'ports has one or two entries')
         for at, state in enumerate(ports):
-            port_state(state, f'ports[{at}]')
+            if state is not None:
+                port_state(state, f'ports[{at}]')
+    elif kind == 'correct':
+        integer(message.get('frame'), 0, U32[1], 'frame')
+        integer(message.get('port'), 0, 1, 'port')
+        port_state(message, 'correct')
+    elif kind == 'rollback':
+        integer(message.get('frame'), 0, U32[1], 'frame')
+        integer(message.get('frames'), 1, ROLLBACK_FRAMES, 'frames')
+        integer(message.get('micros'), 0, 2**53, 'micros')
+        integer(message.get('loadMicros'), 0, message['micros'], 'loadMicros')
     elif kind == 'sync':
         integer(message.get('frame'), 0, U32[1], 'frame')
         for field in ('ram', 'video', 'state'):

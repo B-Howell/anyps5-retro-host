@@ -1,0 +1,15 @@
+{
+  "description": "A wrong prediction made the host run frames 118 to 121 again; the load took 2.4 ms and all of it 9.1 ms.",
+  "from": "host",
+  "message": {
+    "type": "rollback",
+    "frame": 118,
+    "frames": 4,
+    "micros": 9120,
+    "loadMicros": 2410
+  },
+  "anyValueFor": [
+    "micros",
+    "loadMicros"
+  ]
+}

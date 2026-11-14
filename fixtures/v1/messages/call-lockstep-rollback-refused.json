@@ -1,0 +1,17 @@
+{
+  "description": "Turning rollback off while a frame is not confirmed is refused.",
+  "from": "launcher",
+  "message": {
+    "type": "call",
+    "id": 14,
+    "method": "lockstep",
+    "args": {
+      "check": 60
+    }
+  },
+  "reply": {
+    "type": "reply",
+    "id": 14,
+    "result": false
+  }
+}

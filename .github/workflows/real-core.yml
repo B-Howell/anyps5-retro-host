@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: MIT
 # SPDX-FileCopyrightText: 2026 AnyPS5 Desktop contributors
 
-# Boots the real SwanStation core through the host on each system, and runs two of them in
-# lockstep. The BIOS and the program are built here from pcsx-redux's nugget (MIT): OpenBIOS and
-# the psyqo "hello" example. No Sony BIOS or game is used.
+# Boots the real SwanStation core through the host on each system, runs two of them in lockstep,
+# and two players' hosts in rollback against one in lockstep. The BIOS and one program are built
+# here from pcsx-redux's nugget (MIT): OpenBIOS and the psyqo "hello" example; the pad program comes
+# from tests/make_test_disc.py. No Sony BIOS or game is used.
 name: real-core
 on: [push, pull_request]
 permissions:
@@ -109,8 +110,16 @@ jobs:
         run: ${{ matrix.python }} tests/real_core.py --host ${{ matrix.host }} --core ${{ matrix.core }} --bios ps1-files/openbios.bin --program ps1-files/hello.exe --log build/real-core.log --picture build/real-core.png ${{ matrix.opengl }}
       - name: Two real cores in lockstep, fed the same input, frame for frame, and states saved and loaded in memory
         run: ${{ matrix.python }} tests/lockstep_test.py --host ${{ matrix.host }} --core ${{ matrix.core }} --bios ps1-files/openbios.bin --program ps1-files/hello.exe --log build/lockstep.log --frames 600 ${{ matrix.budget }}
+      - name: The same on the pad program, whose input changes the console's controllers and sound unit
+        run: |
+          ${{ matrix.python }} tests/make_test_disc.py --pad-program build/pad.exe
+          ${{ matrix.python }} tests/lockstep_test.py --host ${{ matrix.host }} --core ${{ matrix.core }} --bios ps1-files/openbios.bin --program build/pad.exe --log build/lockstep-pad.log --frames 600 ${{ matrix.budget }}
+      - name: Input, analog mode and the game's analog lock read alike by two real cores (tests/pad_test.py)
+        run: ${{ matrix.python }} tests/pad_test.py --host ${{ matrix.host }} --core ${{ matrix.core }} --bios ps1-files/openbios.bin --log build/pad.log
+      - name: Two real cores in rollback, with late input and wrong predictions, against one in lockstep; rollback cost
+        run: ${{ matrix.python }} tests/rollback_test.py --host ${{ matrix.host }} --core ${{ matrix.core }} --bios ps1-files/openbios.bin --log build/rollback.log --tick 0.03
       - if: failure()
-        run: tail -200 build/real-core.log build/lockstep.log || true
+        run: tail -200 build/real-core.log build/lockstep.log build/lockstep-pad.log build/pad.log build/rollback.log || true
       - if: always()
         uses: actions/upload-artifact@v4
         with:

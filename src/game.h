@@ -29,11 +29,17 @@ struct retro_game_geometry;
 namespace retro_host {
 
 // How a game in lockstep runs (protocol.md "lockstep"): one frame per step the launcher sends, a
-// sync message every check frames, and, when paced, no faster than the core's frame rate.
+// sync message every check frames, and, when paced, no faster than the core's frame rate. With
+// rollback (capability ps1Rollback) a step may leave ports unknown, and at most that many frames
+// are stepped beyond the last confirmed one.
 struct LockstepConfig {
   uint32_t check = 1;
   bool paced = true;
+  std::optional<unsigned> rollback;
 };
+
+// The most frames lockstep.rollback.frames allows (protocol.md "lockstep").
+constexpr unsigned kMaxRollbackFrames = 8;
 
 struct GameConfig {
   std::string core;
@@ -52,10 +58,22 @@ struct PortInput {
 };
 
 // One lockstep frame's input: how many controller ports have a controller in, counting from port
-// 1, and their state. A port without a controller reads as none.
+// 1, and their state. A port without a controller reads as none. In rollback a connected port's
+// input may not be known yet (protocol.md "step"); the game then runs the frame on a prediction.
 struct StepInput {
   unsigned connected = 1;
   std::array<PortInput, 2> ports{};
+  std::array<bool, 2> known{true, true};
+  bool AllKnown() const { return known[0] && (connected < 2 || known[1]); }
+};
+
+// A re-simulation after a wrong prediction (protocol.md "rollback"): the first frame run again, how
+// many were, and the time it took in all and to load the state.
+struct RollbackReport {
+  uint64_t frame = 0;
+  uint64_t frames = 0;
+  uint64_t micros = 0;
+  uint64_t load_micros = 0;
 };
 
 // What a lockstep frame left behind, as 64-bit FNV-1a hashes: the console's main RAM, the last
@@ -100,6 +118,7 @@ class GameEvents {
   virtual FrameResult OnFrame(const uint8_t* pixels, uint32_t width, uint32_t height, uint32_t epoch) = 0;
   virtual void OnRumble(unsigned port, uint16_t strong, uint16_t weak) = 0;
   virtual void OnSync(const SyncPoint& point) = 0;
+  virtual void OnRollback(const RollbackReport& report) = 0;
 };
 
 // One loaded game: a libretro core running on its own thread (protocol.md "Methods").
@@ -130,6 +149,8 @@ class Game {
   bool LeaveLockstep();
   // Queues the input for one lockstep frame.
   StepResult Step(uint64_t frame, const StepInput& input);
+  // Gives the input a step left unknown, for one port of one frame (protocol.md "correct").
+  StepResult Correct(uint64_t frame, unsigned port, const PortInput& input);
   // Writes or reads the core's state, with its lockstep frame, between frames (protocol.md
   // "saveState" and "loadState"). Nothing when the game is not in lockstep, has ended, the slot
   // holds no state of this lockstep count, the core refused, or the game's thread did not get to
@@ -251,7 +272,9 @@ class Game {
   unsigned core_ports_ = 1;
   std::optional<unsigned> disc_request_;
   std::array<PortInput, 2> input_{};
+  // Each port's motors as the core last set them, and as the launcher was last told.
   std::array<std::array<uint16_t, 2>, 2> rumble_{};
+  std::array<std::array<uint16_t, 2>, 2> rumble_sent_{};
 
   std::atomic<bool> stop_{false};
   std::atomic<bool> paused_{false};
@@ -302,11 +325,18 @@ class Game {
     bool paced = true;
     uint64_t frame = 0;
     std::optional<StepInput> input;
+    // In rollback: the frame is kept until it is confirmed, and its state is saved before it runs
+    // when its input is partly predicted.
+    bool kept = false;
+    bool save = false;
+    unsigned rollback = 0;
   };
   // In lockstep, takes the next step when one is queued, waiting at most wait_ms for it.
   NextStep TakeStep(int64_t wait_ms);
   // Hashes what lockstep frame frame left behind and hands it to the host when a check is due.
   void FinishStep(uint64_t frame);
+  // What lockstep frame frame left behind, when a check is due after it.
+  std::optional<SyncPoint> Measure(uint64_t frame);
   // The core's serialized state, in a buffer of retro_serialize_size bytes that starts zeroed, or
   // nothing when the core cannot serialize now.
   const std::string* Serialize();
@@ -331,6 +361,12 @@ class Game {
   std::array<MemoryState, kStateSlots> slots_;
   std::optional<StateResult> WriteSlot(unsigned slot);
   std::optional<StateResult> ReadSlot(unsigned slot);
+  // Saves the core's state in memory, in the same-instance form, as the state lockstep frame frame
+  // continues from, or loads it back.
+  bool SaveMemory(MemoryState& memory, uint64_t frame);
+  bool LoadMemory(const MemoryState& memory);
+  // Forgets the rollback input, corrections and kept frames; with mutex_ held.
+  void ClearRollback();
   // Connects the ports a state was saved with, at once, so the core loads each controller's
   // state into a controller of its own rather than into none, or into one made afresh at the
   // next frame. Runs on the game's thread, before the core reads the state.
@@ -358,6 +394,58 @@ class Game {
   // The savestate context the core is told about while the host serializes it.
   int savestate_context_ = 0;
   std::optional<uint64_t> video_hash_;
+
+  // Rollback (protocol.md "Rollback"). A frame is confirmed once it and every frame before it have
+  // every port's input known. Guarded by mutex_:
+  // - known_ holds, from the first frame not confirmed to the last frame stepped, which ports of each
+  //   frame have known input (a port a step does not connect is known), as steps and corrections
+  //   came; the launcher's messages are checked against it.
+  // - corrections_ holds the corrections the game's thread has not taken yet.
+  // - kept_ holds the frames the game has run that it has not confirmed yet, from kept_from_: the
+  //   input known for each, the input it last ran with, whether its state was saved before it, and
+  //   what it left behind when a check is due after it.
+  // - predicted_ is each port's latest known input, which a frame runs with while that port's input
+  //   for it is not known.
+  struct Correction {
+    uint64_t frame = 0;
+    unsigned port = 0;
+    PortInput input;
+  };
+  struct KeptFrame {
+    StepInput known;
+    StepInput ran;
+    bool saved = false;
+    std::optional<SyncPoint> sync;
+  };
+  std::deque<std::array<bool, 2>> known_;
+  std::deque<Correction> corrections_;
+  std::deque<KeptFrame> kept_;
+  uint64_t kept_from_ = 0;
+  std::array<PortInput, 2> predicted_{};
+  // The input a frame runs with: the known input, and the prediction for a port not known; with
+  // mutex_ held.
+  StepInput Predict(const StepInput& known) const;
+  // Takes the corrections the launcher sent, runs the game again from the first frame that ran
+  // with a wrong prediction, and sends the sync messages of the frames now confirmed. Runs on the
+  // game's thread between frames; false when the game must end, with the reason in end_error and
+  // end_code.
+  bool Settle(std::string& end_error, std::string& end_code);
+  bool Resimulate(uint64_t first, std::string& end_error, std::string& end_code);
+  // The states before frames whose input was partly predicted, at frame modulo rollback frames;
+  // used only on the game's thread.
+  std::vector<MemoryState> rollback_states_;
+  // While the game's thread runs frames again, it passes on only the picture of the last one, no
+  // sound, and the rumble only once it is done.
+  bool resimulating_ = false;
+  bool publish_resimulated_ = false;
+  // Runs the core for one frame: with a lockstep frame's input and port count, or with the input
+  // of the last input messages.
+  void RunFrame(const std::optional<StepInput>& input);
+  void (*run_)() = nullptr;
+  // Tells the launcher each port's motors that differ from what it was last told.
+  void SendRumble();
+  // Whether the last frame could not be shown, which ends the game; the reason goes into end.
+  bool FrameFailed(std::string& end_error, std::string& end_code);
 };
 
 }  // namespace retro_host

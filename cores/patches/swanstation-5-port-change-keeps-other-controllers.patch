@@ -1,0 +1,90 @@
+diff --git a/src/core/host_interface.cpp b/src/core/host_interface.cpp
+index 1d6f503..f403c5f 100644
+--- a/src/core/host_interface.cpp
++++ b/src/core/host_interface.cpp
+@@ -351,27 +351,23 @@ void HostInterface::CheckForSettingsChanges(const Settings& old_settings)
+     g_dma.SetHaltTicks(g_settings.dma_halt_ticks);
+   }
+ 
+-  bool controllers_updated = false;
++  // Only a port whose controller type changed gets a new controller, as plugging one controller in or out
++  // leaves the others as they are on a console: another port's analog mode and the game's lock on it stay.
+   for (uint32_t i = 0; i < NUM_CONTROLLER_AND_CARD_PORTS; i++)
+   {
+     if (g_settings.controller_types[i] != old_settings.controller_types[i])
+     {
+-      if (!System::IsShutdown() && !controllers_updated)
+-      {
+-        System::UpdateControllers();
+-        System::ResetControllers();
+-        UpdateSoftwareCursor();
+-        controllers_updated = true;
+-      }
++      if (!System::IsShutdown())
++        System::UpdateController(i);
+ 
+       OnControllerTypeChanged(i);
+     }
++  }
+ 
+-    if (!System::IsShutdown() && !controllers_updated)
+-    {
+-      System::UpdateControllerSettings();
+-      UpdateSoftwareCursor();
+-    }
++  if (!System::IsShutdown())
++  {
++    System::UpdateControllerSettings();
++    UpdateSoftwareCursor();
+   }
+ 
+   if (g_settings.multitap_mode != old_settings.multitap_mode)
+diff --git a/src/core/system.cpp b/src/core/system.cpp
+index c23546a..75854db 100644
+--- a/src/core/system.cpp
++++ b/src/core/system.cpp
+@@ -1414,18 +1414,22 @@ Controller* GetController(uint32_t slot)
+ void UpdateControllers(void)
+ {
+   for (uint32_t i = 0; i < NUM_CONTROLLER_AND_CARD_PORTS; i++)
+-  {
+-    g_pad.SetController(i, nullptr);
++    UpdateController(i);
++}
+ 
+-    const ControllerType type = g_settings.controller_types[i];
+-    if (type != ControllerType::None)
++void UpdateController(uint32_t port)
++{
++  g_pad.SetController(port, nullptr);
++
++  const ControllerType type = g_settings.controller_types[port];
++  if (type != ControllerType::None)
++  {
++    std::unique_ptr<Controller> controller = Controller::Create(type, port);
++    if (controller)
+     {
+-      std::unique_ptr<Controller> controller = Controller::Create(type, i);
+-      if (controller)
+-      {
+-        controller->LoadSettings(TinyString::FromFormat("Controller%u", i + 1u));
+-        g_pad.SetController(i, std::move(controller));
+-      }
++      controller->LoadSettings(TinyString::FromFormat("Controller%u", port + 1u));
++      controller->Reset();
++      g_pad.SetController(port, std::move(controller));
+     }
+   }
+ }
+diff --git a/src/core/system.h b/src/core/system.h
+index eb4ee5e..61c8845 100644
+--- a/src/core/system.h
++++ b/src/core/system.h
+@@ -116,6 +116,7 @@ void SetVerticalFrequency(float frequency);
+ // Access controllers for simulating input.
+ Controller* GetController(uint32_t slot);
+ void UpdateControllers();
++void UpdateController(uint32_t port);
+ void UpdateControllerSettings();
+ void ResetControllers();
+ void UpdateMemoryCardTypes();

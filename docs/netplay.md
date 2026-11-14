@@ -6,9 +6,12 @@
 This is the design for playing a PS1 game online with a friend when the
 game runs in `anyps5-retro-host`. It says which program owns what, the
 protocol it needs, how a match starts from the launcher's lobby, and how it is
-tested. The first step, lockstep, is built: [protocol.md](protocol.md)
-"Lockstep" is its contract, and [`tests/lockstep_test.py`](../tests/lockstep_test.py)
-runs two real SwanStation hosts frame for frame alike.
+tested. Lockstep and rollback are built: [protocol.md](protocol.md)
+"Lockstep" and "Rollback" are their contract,
+[`tests/lockstep_test.py`](../tests/lockstep_test.py) runs two real SwanStation
+hosts frame for frame alike, and [`tests/rollback_test.py`](../tests/rollback_test.py)
+runs two players' hosts in rollback, with delayed input and wrong predictions,
+to the same frames as a host in lockstep.
 
 ## What already exists
 
@@ -64,8 +67,9 @@ it is saving (`RETRO_ENVIRONMENT_GET_SAVESTATE_CONTEXT`, whose
 
 **SwanStation and DuckStation.** SwanStation, the libretro core version 1
 loads, has no netplay of its own and leaves it to the frontend. The host
-builds it with three patches of its own (host.md "SwanStation patches") that
-make its states fit for netplay; "Determinism" below says why. Its parent,
+builds it with five patches of its own (host.md "SwanStation patches") that
+make its states and controllers fit for netplay; "Determinism" below says
+why. Its parent,
 DuckStation, carried a GGPO-based rollback netplay for a time and later
 removed it. GGPO is the same model as RetroArch's: input delay plus rollback
 on saved states, with a sync test that saves, loads and replays every frame
@@ -118,11 +122,11 @@ host the step for frame *n* once the friend's input for *n* has arrived. With
 never waits. A late packet makes both players wait; it never makes them
 differ.
 
-**Rollback** (capability `ps1Rollback`, proposed). The host runs ahead on
+**Rollback** (capability `ps1Rollback`, built). The host runs ahead on
 predicted input and, when the real input differs, loads the state from before
 that frame and replays. It hides more of the round trip than delay alone, and
-costs a state save every frame and a burst of replayed frames on each wrong
-guess.
+costs a state save before every frame run on a prediction and a burst of
+replayed frames on each wrong guess.
 
 Lockstep comes first because:
 
@@ -149,8 +153,8 @@ Lockstep comes first because:
   on the GPU, as DuckStation's own memory states do. Replaying several frames
   after a wrong guess costs their emulation on top;
 - the launcher's own harness found that rollback with the stock core is not
-  exact (the sound unit restore below), so rollback also depends on that
-  patch, which the host does not carry yet.
+  exact (the sound unit restore below), so rollback also depended on that
+  patch, which the host now carries.
 
 A match picks *d* from the round trip it measures while the lobby is open:
 *d* = ⌈(round trip ÷ 2) ÷ 16.7 ms⌉ + 1, at most 8. Above 8 frames (about a
@@ -158,19 +162,42 @@ A match picks *d* from the round trip it measures while the lobby is open:
 rather than offering a match that feels broken. Rollback later lowers the
 delay players feel to a fixed 1 or 2 frames, with the rest predicted.
 
-**Proposed `ps1Rollback`.** On top of `ps1Lockstep`:
+### Rollback
 
-- `lockstep` takes `"rollback":{"frames":<1 to 8>}`. The host then keeps
-  that many states in memory, one before each frame not yet confirmed.
-- `step` may carry `"guessed":[<port>,…]`, the ports whose input is a
-  prediction. The host runs the frame at once.
-- A new message, `correct`, gives the real input for a guessed frame. If it
-  differs from the guess, the host loads the state from before that frame and
-  replays to the newest frame, publishing only the last picture, and plays
-  the replayed frames' sound once, not twice.
-- A new message, `confirm`, says every input up to a frame is final. The host
-  drops older states and sends `sync` only for confirmed frames, so the two
-  players compare the same thing.
+`ps1Rollback`, on top of `ps1Lockstep`, is GGPO's model, as RetroArch's
+netplay and DuckStation's former netplay use it, with the network left to
+the launcher ([protocol.md](protocol.md) "Rollback" is the contract, host.md
+"Rollback" the code):
+
+- `lockstep` takes `"rollback":{"frames":<1 to 8>}`: at most that many frames
+  are stepped beyond the last confirmed one (GGPO's prediction window, 8 by
+  default there too).
+- A `step` may leave a port `null` when the friend's input for that frame has
+  not arrived. The host runs the frame at once with that port's latest known
+  input, as GGPO predicts, and saves its state in memory before it.
+- `correct` gives one port's real input for such a frame, in frame order per
+  port, as the friend's packets arrive. Between two frames the host takes the
+  corrections that came; if a frame ran with input other than the real one,
+  it loads the state from before the first such frame and runs it and every
+  later frame again, as fast as it can, with the real input and new
+  predictions for what is still missing. Only the last of those frames shows
+  its picture; none plays sound again (the core is told audio is off for
+  them, as RetroArch tells it for its replays); rumble is sent once, for
+  motors that ended differently. A `rollback` message reports the frames and
+  the time.
+- A frame is confirmed once every port's input in it and every earlier frame
+  is known. The host decides that itself from the steps and corrections, so
+  no `confirm` message is needed, and sends a frame's `sync` only then, with
+  what the frame left behind the last time it ran: two players compare the
+  same thing however often each of them ran the frame.
+- `saveState` is refused while a frame is not confirmed (the state would hold
+  a prediction), so the state a friend joins from is always a confirmed one.
+
+The launcher's side is small: its input wire already sends each frame's input
+ahead and acknowledges it, so it steps every frame on time with the friend's
+port `null` when that input is late, sends `correct` when it arrives, and
+lowers its input delay to 1 or 2 frames, leaving the rest of the round trip to
+prediction.
 
 ## Joining a running game
 
@@ -300,9 +327,24 @@ What keeps two hosts alike, and what is known to break it:
   as exact multiples of 1/255.
 - **Restoring a state from another timeline.** The launcher's harness found
   that stock SwanStation, on loading a state, reschedules its sound unit's
-  sample event with timing from the discarded timeline. It has a patch for
-  this, needed before rollback and not yet carried by the host. The `hello`
-  program plays no sound, so the memory-state test cannot show it.
+  sample event with timing from the discarded timeline: when the frame after
+  the state changed how often the sound unit runs (it runs every sample while
+  the SPU's interrupt is on, in larger slices otherwise), the load ran the
+  newer timeline's pending sample ticks against the loaded sound unit and its
+  tick carry, so its timing, came out different. The patch
+  `swanstation-4-spu-sample-event-restore`, the launcher's
+  `swanstation-spu-checkpoint.patch`, leaves the event to be restored with the
+  other timing events. The pad program below turns the SPU's interrupt on and
+  off with the input, so the memory-state test fails at its first frame
+  without the patch (the state hash differs; RAM does not yet).
+- **Plugging a controller in.** Stock SwanStation made every port's
+  controller anew when any port's controller type changed, so a friend's
+  controller joining in port 2 put the host player's controller back in
+  digital mode and dropped the game's lock on its mode. Both players' hosts do
+  that alike, so it does not break a match, but a game that locked the
+  controller in analog mode would find it in digital mode. The patch
+  `swanstation-5-port-change-keeps-other-controllers` gives a new controller
+  only to the port whose type changed, as a console does.
 - **Memory cards.** A state carries both memory cards. The friend's game
   uses a `saves` directory made for the match, so the host never writes the
   host player's card over the friend's own (protocol.md "saveState and
@@ -333,31 +375,53 @@ Built now:
     state files, and that a step out of order or outside lockstep is a
     protocol error. CI runs it on Linux, macOS, Windows and under
     ThreadSanitizer.
-  - With `--bios` and `--program`, it runs real SwanStation on the OpenBIOS
-    and psyqo `hello` disc that `tests/make_test_disc.py` makes, each player
-    with their own copy of the disc in a different folder under a different
-    name. Every frame's main RAM, picture and state must match, and the saved
-    state file must not hold the disc's folder or name. The `real-core`
-    workflow runs it on Linux, macOS and Windows for 600 frames, with the
-    host's SwanStation patches applied, and requires a save and a load in
+  - With `--bios` and `--program`, it runs real SwanStation on a disc that
+    `tests/make_test_disc.py` makes, each player with their own copy of the
+    disc in a different folder under a different name. Every frame's main
+    RAM, picture and state must match, and the saved state file must not hold
+    the disc's folder or name. The `real-core` workflow runs it on Linux,
+    macOS and Windows for 600 frames, with the host's SwanStation patches
+    applied, on two programs: the psyqo `hello` example, and the pad program
+    below, whose input changes the console. It requires a save and a load in
     memory to take under 16 ms together on average, except on macOS (see
-    "Lockstep first, rollback after"). Stock SwanStation fails
-    it at the first frame (the state names the disc's path); without the
-    first patch it fails at the frame the state was saved at (the
-    combination); without the third the memory-state run fails on the
-    picture of a frame whose video memory came from the state.
+    "Lockstep first, rollback after"). Stock SwanStation fails it at the
+    first frame (the state names the disc's path); without the first patch it
+    fails at the frame the state was saved at (the combination); without the
+    third the memory-state run fails on the picture of a frame whose video
+    memory came from the state; without the fourth the pad program's
+    memory-state run fails at its first frame (the sound unit's timing).
+- The pad program (`make_test_disc.pad_program`, MIPS written out in Python
+  as the corner program is, so CI needs no PS1 compiler for it) reads both
+  controller ports every frame through the controller port's registers, keeps
+  the replies in main RAM and draws them; Triangle on port 1 makes it lock
+  that controller in digital mode with the DualShock's configuration
+  commands, Square unlocks it in analog mode, and Circle turns the SPU's
+  interrupt on. [`tests/pad_test.py`](../tests/pad_test.py) runs it on two
+  hosts in lockstep and reads the replies back from each host's state after
+  each frame of a script: both consoles must read exactly the buttons,
+  sticks and mode given, the combination must switch analog mode and do
+  nothing while the game holds the lock, and port 1's mode and lock must
+  survive port 2 being unplugged and plugged in (the fifth patch).
+- [`tests/rollback_test.py`](../tests/rollback_test.py) runs a host in plain
+  lockstep with every frame's input as the reference, and two players' hosts
+  in rollback (window 8). Each player knows its own port at once and gets the
+  other's 1 to 6 frames late with jitter, steps every frame as soon as the
+  window allows with the late port `null`, and corrects it when it arrives.
+  The input is held for 1 to 12 frames at a time, so some predictions are
+  wrong, and port 2 is unplugged for 20 frames. Every frame's `sync` from both
+  players must match the reference's, RAM, picture and state, after dozens of
+  rollbacks each; the frames run again may add at most one picture per
+  rollback; and a second phase with a check every 60 frames prints the cost
+  of a rollback: loading the state, and each frame run again. With the test
+  core it also checks predictions that come true (no rollback), the
+  refusals, and the protocol errors. CI runs it with the test core on every
+  system and under ThreadSanitizer, and with the real core on the pad program
+  on Linux, macOS and Windows.
 
-Next, for rollback and the launcher:
+Next, for the launcher:
 
-- A `ps1Rollback` test that runs the same input through a lockstep host and a
-  rollback host fed late, guessed and corrected input, and requires the same
-  confirmed `sync` hashes.
 - In the launcher, the existing input-wire, checkpoint-transfer and
   network-simulation tests, pointed at two hosts instead of the in-process
-  runner, under delay, jitter, loss and reordering.
-- A test program on the disc that reads the controller, so RAM depends on
-  input in a real game too. The psyqo `hello` program does not read it, so
-  the real-core test shows that the two consoles stay alike, and the test
-  core shows that input reaches the console.
+  runner, under delay, jitter, loss and reordering, with rollback.
 - Two PCs, Windows and Linux, through the AnyTogether service, first direct
   and then forced through the relay, playing a real game to the end.

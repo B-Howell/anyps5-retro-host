@@ -40,6 +40,8 @@ class Peer:
         self.next_id = 0
         self.syncs = {}
         self.log = []
+        self.pictures = 0
+        self.rollbacks = []
         self.epoch = None
         self.host.send_message({'type': 'hello', 'minVersion': 1, 'maxVersion': 1, 'pixelFormats': ['rgba8']})
         welcome = self.pump(lambda m: m.get('type') in ('welcome', 'unsupported'))
@@ -58,6 +60,10 @@ class Peer:
             if message.get('type') == 'sync':
                 self.syncs[message['frame']] = message
                 self.log.append(message['frame'])
+            elif message.get('type') == 'frame':
+                self.pictures += 1
+            elif message.get('type') == 'rollback':
+                self.rollbacks.append(message)
             if wanted is None or wanted(message):
                 return message
 
@@ -86,6 +92,9 @@ class Peer:
 
     def step(self, frame, ports):
         self.host.send_message({'type': 'step', 'frame': frame, 'ports': ports})
+
+    def correct(self, frame, port_index, state):
+        self.host.send_message({'type': 'correct', 'frame': frame, 'port': port_index, **state})
 
     def status(self, test, seconds, what):
         deadline = time.monotonic() + seconds
@@ -213,7 +222,7 @@ class Match:
             args = {'core': self.paths['core'], 'disc': self.paths['disc'], 'system': self.paths['system'],
                     'saves': str(self.work / f'saves-{name}')}
         if lockstep:
-            args['lockstep'] = {'check': 1, 'paced': False}
+            args['lockstep'] = lockstep if isinstance(lockstep, dict) else {'check': 1, 'paced': False}
         return args
 
     def peer(self, name):

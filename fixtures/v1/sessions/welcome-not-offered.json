@@ -30,7 +30,8 @@
         "hostVersion": "1.0.0",
         "capabilities": [
           "ps1",
-          "ps1Lockstep"
+          "ps1Lockstep",
+          "ps1Rollback"
         ],
         "pixelFormat": "rgba8"
       },

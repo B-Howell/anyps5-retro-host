@@ -148,6 +148,13 @@ std::string Directory(const std::string& path) {
   return slash == std::string::npos ? std::string() : path.substr(0, slash + 1);
 }
 
+bool SameInput(const PortInput& a, const PortInput& b) { return a.buttons == b.buttons && a.sticks == b.sticks; }
+
+uint64_t MicrosSince(std::chrono::steady_clock::time_point began) {
+  return static_cast<uint64_t>(
+      std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - began).count());
+}
+
 bool IsAbsolute(const std::string& path) {
   if (!path.empty() && IsSeparator(path[0])) return true;
 #ifdef _WIN32
@@ -303,7 +310,7 @@ void Game::RunGame() {
   timing_changed_ = true;
   auto frame_time = std::chrono::duration<double>(1.0 / 60.0);
 
-  const auto run = Get<void (*)()>("retro_run");
+  run_ = Get<void (*)()>("retro_run");
   auto next = std::chrono::steady_clock::now();
   int64_t last_card_check = NowMs();
   while (end_code.empty() && !stop_) {
@@ -312,8 +319,25 @@ void Game::RunGame() {
       SaveCard();
       last_card_check = NowMs();
     }
+    // in_frame_ marks the work between two frames' edges (corrections, states and the frame), so
+    // entering or leaving lockstep happens between two frames. While a call waits for that, none of
+    // it starts.
+    {
+      std::unique_lock<std::mutex> lock(mutex_);
+      if (fence_waiters_ > 0) {
+        lock.unlock();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        continue;
+      }
+      in_frame_ = true;
+    }
+    if (!Settle(end_error, end_code)) {
+      EndFrame();
+      break;
+    }
     ServeStateRequest();
     if (paused_) {
+      EndFrame();
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
       next = std::chrono::steady_clock::now();
       continue;
@@ -324,17 +348,6 @@ void Game::RunGame() {
       const double fps = fps_ > 1 && fps_ < 1000 ? fps_ : 60.0;
       frame_time = std::chrono::duration<double>(1.0 / fps);
     }
-    // in_frame_ marks the frame, so entering or leaving lockstep happens between two frames. While
-    // a call waits for that, no frame starts.
-    {
-      std::unique_lock<std::mutex> lock(mutex_);
-      if (fence_waiters_ > 0) {
-        lock.unlock();
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        continue;
-      }
-      in_frame_ = true;
-    }
     const NextStep step = TakeStep(kStepWaitMs);
     if (step.lockstep && !step.input) {
       EndFrame();
@@ -342,38 +355,31 @@ void Game::RunGame() {
       next = std::chrono::steady_clock::now();
       continue;
     }
-    step_input_ = step.input;
-    if (step.input) {
-      std::lock_guard<std::mutex> lock(mutex_);
-      if (connected_ports_ != step.input->connected) {
-        connected_ports_ = step.input->connected;
-        ports_changed_ = true;
+    if (step.save) {
+      if (rollback_states_.size() != step.rollback) rollback_states_.resize(step.rollback);
+      if (!SaveMemory(rollback_states_[step.frame % step.rollback], step.frame)) {
+        EndFrame();
+        end_error = "The game's state could not be kept for a rollback.";
+        end_code = "other";
+        break;
       }
     }
-    ApplyPendingWork();
-    run();
-    step_input_.reset();
-    if (step.input) FinishStep(step.frame);
+    RunFrame(step.input);
+    if (step.kept) {
+      auto sync = Measure(step.frame);
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (!kept_.empty() && step.frame >= kept_from_ && step.frame - kept_from_ < kept_.size()) {
+        kept_[step.frame - kept_from_].sync = std::move(sync);
+      }
+    } else if (step.input) {
+      FinishStep(step.frame);
+    }
     EndFrame();
     {
       std::lock_guard<std::mutex> lock(mutex_);
       if (disc_.inserted && *disc_.inserted < disc_.paths.size()) disc_.played = disc_.paths[*disc_.inserted];
     }
-    if (frame_failure_ == FrameResult::kTooLarge) {
-      end_error = "The game's frame is larger than 8192 x 8192.";
-      end_code = "frameTooLarge";
-      break;
-    }
-    if (frame_failure_ == FrameResult::kNoMemory) {
-      end_error = "The host could not make memory for the game's frames.";
-      end_code = "other";
-      break;
-    }
-    if (frame_failure_ == FrameResult::kGpuFailed) {
-      end_error = "The GPU stopped handing over the game's picture.";
-      end_code = "other";
-      break;
-    }
+    if (FrameFailed(end_error, end_code)) break;
     if (step.input && !step.paced) {
       next = std::chrono::steady_clock::now();
       continue;
@@ -392,6 +398,40 @@ void Game::RunGame() {
   Get<void (*)()>("retro_deinit")();
   audio_.Close();
   Finish(end_error, end_code);
+}
+
+void Game::RunFrame(const std::optional<StepInput>& input) {
+  step_input_ = input;
+  if (input) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (connected_ports_ != input->connected) {
+      connected_ports_ = input->connected;
+      ports_changed_ = true;
+    }
+  }
+  ApplyPendingWork();
+  run_();
+  step_input_.reset();
+}
+
+bool Game::FrameFailed(std::string& end_error, std::string& end_code) {
+  switch (frame_failure_) {
+    case FrameResult::kShown:
+      return false;
+    case FrameResult::kTooLarge:
+      end_error = "The game's frame is larger than 8192 x 8192.";
+      end_code = "frameTooLarge";
+      return true;
+    case FrameResult::kNoMemory:
+      end_error = "The host could not make memory for the game's frames.";
+      end_code = "other";
+      return true;
+    case FrameResult::kGpuFailed:
+      end_error = "The GPU stopped handing over the game's picture.";
+      end_code = "other";
+      return true;
+  }
+  return false;
 }
 
 void Game::Finish(const std::string& error, const std::string& code) {
@@ -531,6 +571,13 @@ bool Game::Environment(unsigned command, void* data) {
     case RETRO_ENVIRONMENT_GET_SAVESTATE_CONTEXT:
       if (!data) return false;
       *static_cast<retro_savestate_context*>(data) = static_cast<retro_savestate_context>(savestate_context_);
+      return true;
+    case RETRO_ENVIRONMENT_GET_AUDIO_VIDEO_ENABLE:
+      // As RetroArch does for the frames runahead and netplay run again: no sound for a frame run
+      // again after a wrong prediction. Its picture is still made, since a later sync's video hash
+      // can be the hash of that picture (protocol.md "sync").
+      if (!data) return false;
+      *static_cast<int*>(data) = RETRO_AV_ENABLE_VIDEO | (resimulating_ ? 0 : RETRO_AV_ENABLE_AUDIO);
       return true;
     case RETRO_ENVIRONMENT_GET_CAN_DUPE:
       *static_cast<bool*>(data) = true;
@@ -776,6 +823,7 @@ void Game::Publish(uint32_t width, uint32_t height) {
     }
     video_hash_ = hash;
   }
+  if (resimulating_ && !publish_resimulated_) return;
   const FrameResult shown = events_.OnFrame(converted_.data(), width, height, config_.epoch);
   if (shown != FrameResult::kShown) {
     frame_failure_ = shown;
@@ -793,6 +841,7 @@ void Game::Publish(uint32_t width, uint32_t height) {
 }
 
 size_t Game::AudioBatch(const int16_t* samples, size_t frames) {
+  if (resimulating_) return frames;
   audio_.Write(samples, frames);
   return frames;
 }
@@ -828,12 +877,17 @@ void Game::Log(int level, const char* text) {
 
 bool Game::Rumble(unsigned port, int effect, uint16_t strength) {
   if (port > 1 || (effect != RETRO_RUMBLE_STRONG && effect != RETRO_RUMBLE_WEAK)) return false;
-  auto& motors = rumble_[port];
-  const size_t motor = effect == RETRO_RUMBLE_STRONG ? 0 : 1;
-  if (motors[motor] == strength) return true;
-  motors[motor] = strength;
-  events_.OnRumble(port, motors[0], motors[1]);
+  rumble_[port][effect == RETRO_RUMBLE_STRONG ? 0 : 1] = strength;
+  if (!resimulating_) SendRumble();
   return true;
+}
+
+void Game::SendRumble() {
+  for (unsigned port = 0; port < rumble_.size(); ++port) {
+    if (rumble_[port] == rumble_sent_[port]) continue;
+    rumble_sent_[port] = rumble_[port];
+    events_.OnRumble(port, rumble_[port][0], rumble_[port][1]);
+  }
 }
 
 Json Game::Status() const {
@@ -1107,7 +1161,12 @@ std::optional<uint64_t> Game::Lockstep(const LockstepConfig& config) {
   if (!lockstep_) {
     next_frame_ = 0;
     steps_.clear();
+    ClearRollback();
+    predicted_ = {};
     ++lockstep_entry_;
+  } else if (config.rollback != lockstep_->rollback &&
+             (!known_.empty() || !kept_.empty() || !corrections_.empty())) {
+    return std::nullopt;
   }
   lockstep_ = config;
   return next_frame_ + steps_.size();
@@ -1119,9 +1178,16 @@ bool Game::LeaveLockstep() {
     if (!AwaitFrameEnd(lock) || ended_) return false;
     lockstep_.reset();
     steps_.clear();
+    ClearRollback();
   }
   step_signal_.notify_all();
   return true;
+}
+
+void Game::ClearRollback() {
+  known_.clear();
+  corrections_.clear();
+  kept_.clear();
 }
 
 StepResult Game::Step(uint64_t frame, const StepInput& input) {
@@ -1129,10 +1195,147 @@ StepResult Game::Step(uint64_t frame, const StepInput& input) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (ended_) return StepResult::kIgnored;
     if (!lockstep_ || frame != next_frame_ + steps_.size() || steps_.size() >= kMaxSteps) return StepResult::kRefused;
+    const bool all_known = input.AllKnown();
+    if (!lockstep_->rollback) {
+      if (!all_known) return StepResult::kRefused;
+    } else {
+      // A port's input becomes known in frame order, and at most rollback frames are stepped beyond
+      // the last confirmed one.
+      for (unsigned port = 0; port < input.connected; ++port) {
+        if (!input.known[port]) continue;
+        for (const auto& known : known_) {
+          if (!known[port]) return StepResult::kRefused;
+        }
+      }
+      if (!known_.empty() || !all_known) {
+        if (known_.size() >= *lockstep_->rollback) return StepResult::kRefused;
+        known_.push_back({input.known[0], input.connected < 2 || input.known[1]});
+      }
+    }
     steps_.push_back(input);
   }
   step_signal_.notify_all();
   return StepResult::kTaken;
+}
+
+StepResult Game::Correct(uint64_t frame, unsigned port, const PortInput& input) {
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (ended_) return StepResult::kIgnored;
+    if (!lockstep_ || !lockstep_->rollback || port > 1) return StepResult::kRefused;
+    const uint64_t end = next_frame_ + steps_.size();
+    if (frame >= end || end - frame > known_.size()) return StepResult::kRefused;
+    const size_t at = known_.size() - static_cast<size_t>(end - frame);
+    if (known_[at][port]) return StepResult::kRefused;
+    for (size_t i = 0; i < at; ++i) {
+      if (!known_[i][port]) return StepResult::kRefused;
+    }
+    known_[at][port] = true;
+    corrections_.push_back({frame, port, input});
+    while (!known_.empty() && known_.front()[0] && known_.front()[1]) known_.pop_front();
+  }
+  step_signal_.notify_all();
+  return StepResult::kTaken;
+}
+
+StepInput Game::Predict(const StepInput& known) const {
+  StepInput input = known;
+  for (unsigned port = 0; port < input.connected; ++port) {
+    if (!input.known[port]) input.ports[port] = predicted_[port];
+  }
+  return input;
+}
+
+bool Game::Settle(std::string& end_error, std::string& end_code) {
+  std::optional<uint64_t> wrong;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (corrections_.empty() && kept_.empty()) return true;
+    for (const Correction& correction : corrections_) {
+      if (correction.frame >= next_frame_) {
+        StepInput& step = steps_.at(static_cast<size_t>(correction.frame - next_frame_));
+        step.ports[correction.port] = correction.input;
+        step.known[correction.port] = true;
+      } else {
+        KeptFrame& kept = kept_.at(static_cast<size_t>(correction.frame - kept_from_));
+        kept.known.ports[correction.port] = correction.input;
+        kept.known.known[correction.port] = true;
+      }
+      predicted_[correction.port] = correction.input;
+    }
+    corrections_.clear();
+    for (size_t i = 0; i < kept_.size() && !wrong; ++i) {
+      const KeptFrame& kept = kept_[i];
+      for (unsigned port = 0; port < kept.known.connected; ++port) {
+        if (kept.known.known[port] && !SameInput(kept.known.ports[port], kept.ran.ports[port])) wrong = kept_from_ + i;
+      }
+    }
+  }
+  if (wrong && !Resimulate(*wrong, end_error, end_code)) return false;
+  std::vector<SyncPoint> confirmed;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    while (!kept_.empty() && kept_.front().known.AllKnown()) {
+      if (kept_.front().sync) confirmed.push_back(*kept_.front().sync);
+      kept_.pop_front();
+      ++kept_from_;
+    }
+  }
+  for (const SyncPoint& point : confirmed) events_.OnSync(point);
+  return true;
+}
+
+// As GGPO and RetroArch do: load the state from before the first frame that ran on a wrong
+// prediction, and run it and every later frame again with the input known now, predicting the ports
+// still not known from their newest input. The frames already played their sound and showed their
+// pictures, so the run again passes on only the newest picture.
+bool Game::Resimulate(uint64_t first, std::string& end_error, std::string& end_code) {
+  const auto began = std::chrono::steady_clock::now();
+  uint64_t last = 0;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    last = next_frame_;
+  }
+  if (rollback_states_.empty() || !LoadMemory(rollback_states_[first % rollback_states_.size()])) {
+    end_error = "The game's state could not be loaded for a rollback.";
+    end_code = "other";
+    return false;
+  }
+  const uint64_t load_micros = MicrosSince(began);
+  resimulating_ = true;
+  for (uint64_t frame = first; frame < last; ++frame) {
+    StepInput input;
+    bool save = false;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      KeptFrame& kept = kept_.at(static_cast<size_t>(frame - kept_from_));
+      kept.ran = Predict(kept.known);
+      input = kept.ran;
+      save = kept.saved;
+    }
+    if (save && !SaveMemory(rollback_states_[frame % rollback_states_.size()], frame)) {
+      resimulating_ = false;
+      end_error = "The game's state could not be kept for a rollback.";
+      end_code = "other";
+      return false;
+    }
+    publish_resimulated_ = frame + 1 == last;
+    RunFrame(input);
+    auto sync = Measure(frame);
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      kept_.at(static_cast<size_t>(frame - kept_from_)).sync = std::move(sync);
+    }
+    if (FrameFailed(end_error, end_code)) {
+      resimulating_ = false;
+      return false;
+    }
+  }
+  resimulating_ = false;
+  publish_resimulated_ = false;
+  SendRumble();
+  events_.OnRollback(RollbackReport{first, last - first, MicrosSince(began), load_micros});
+  return true;
 }
 
 Game::NextStep Game::TakeStep(int64_t wait_ms) {
@@ -1140,25 +1343,40 @@ Game::NextStep Game::TakeStep(int64_t wait_ms) {
   NextStep next;
   if (!lockstep_) return next;
   if (steps_.empty()) {
-    step_signal_.wait_for(lock, std::chrono::milliseconds(wait_ms),
-                          [this] {
-                            return !lockstep_ || !steps_.empty() || state_request_ || stop_ || fence_waiters_ > 0;
-                          });
+    step_signal_.wait_for(lock, std::chrono::milliseconds(wait_ms), [this] {
+      return !lockstep_ || !steps_.empty() || state_request_ || stop_ || fence_waiters_ > 0 || !corrections_.empty();
+    });
   }
   if (!lockstep_) return next;
   next.lockstep = true;
   next.paced = lockstep_->paced;
-  if (steps_.empty() || state_request_ || fence_waiters_ > 0) return next;
+  // Corrections are taken before the next frame runs, so it runs with every input known so far.
+  if (steps_.empty() || state_request_ || fence_waiters_ > 0 || !corrections_.empty()) return next;
   next.frame = next_frame_++;
-  next.input = steps_.front();
+  const StepInput step = steps_.front();
   steps_.pop_front();
+  for (unsigned port = 0; port < step.connected; ++port) {
+    if (step.known[port]) predicted_[port] = step.ports[port];
+  }
+  next.input = Predict(step);
+  if (lockstep_->rollback && (!kept_.empty() || !step.AllKnown())) {
+    next.kept = true;
+    next.save = !step.AllKnown();
+    next.rollback = *lockstep_->rollback;
+    if (kept_.empty()) kept_from_ = next.frame;
+    kept_.push_back(KeptFrame{step, *next.input, next.save, std::nullopt});
+  }
   return next;
 }
 
 void Game::FinishStep(uint64_t frame) {
+  if (auto point = Measure(frame)) events_.OnSync(*point);
+}
+
+std::optional<SyncPoint> Game::Measure(uint64_t frame) {
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (!lockstep_ || frame % lockstep_->check != 0) return;
+    if (!lockstep_ || frame % lockstep_->check != 0) return std::nullopt;
   }
   SyncPoint point;
   point.frame = frame;
@@ -1169,7 +1387,7 @@ void Game::FinishStep(uint64_t frame) {
   savestate_context_ = RETRO_SAVESTATE_CONTEXT_ROLLBACK_NETPLAY;
   if (const std::string* state = Serialize()) point.state = Fnv(state->data(), state->size());
   savestate_context_ = RETRO_SAVESTATE_CONTEXT_NORMAL;
-  events_.OnSync(point);
+  return point;
 }
 
 const std::string* Game::Serialize() {
@@ -1243,7 +1461,7 @@ std::optional<StateResult> Game::WriteState(const std::string& path) {
   unsigned ports = 1;
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (!lockstep_) return std::nullopt;
+    if (!lockstep_ || !kept_.empty()) return std::nullopt;
     frame = next_frame_;
   }
   ports = core_ports_;
@@ -1287,6 +1505,7 @@ std::optional<StateResult> Game::ReadState(const std::string& path) {
     std::lock_guard<std::mutex> lock(mutex_);
     next_frame_ = frame;
     steps_.clear();
+    ClearRollback();
   }
   return StateResult{frame, file->size()};
 }
@@ -1307,32 +1526,13 @@ std::optional<StateResult> Game::WriteSlot(unsigned slot) {
   uint64_t entry = 0;
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (!lockstep_) return std::nullopt;
+    if (!lockstep_ || !kept_.empty()) return std::nullopt;
     frame = next_frame_;
     entry = lockstep_entry_;
   }
-  memory.ports = core_ports_;
-  const auto size_of = Get<size_t (*)()>("retro_serialize_size");
-  const auto serialize = Get<bool (*)(void*, size_t)>("retro_serialize");
-  if (!size_of || !serialize) return std::nullopt;
-  const size_t size = size_of();
-  if (size == 0) return std::nullopt;
-  memory.used = false;
-  try {
-    if (memory.data.size() != size) memory.data.assign(size, '\0');
-  } catch (const std::bad_alloc&) {
-    memory.data.clear();
-    return std::nullopt;
-  }
-  savestate_context_ = RETRO_SAVESTATE_CONTEXT_RUNAHEAD_SAME_INSTANCE;
-  const bool saved = serialize(memory.data.data(), size);
-  savestate_context_ = RETRO_SAVESTATE_CONTEXT_NORMAL;
-  if (!saved) return std::nullopt;
-  memory.frame = frame;
-  memory.video = video_hash_;
+  if (!SaveMemory(memory, frame)) return std::nullopt;
   memory.entry = entry;
-  memory.used = true;
-  return StateResult{frame, size};
+  return StateResult{frame, memory.data.size()};
 }
 
 std::optional<StateResult> Game::ReadSlot(unsigned slot) {
@@ -1341,20 +1541,50 @@ std::optional<StateResult> Game::ReadSlot(unsigned slot) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!lockstep_ || !memory.used || memory.entry != lockstep_entry_) return std::nullopt;
   }
-  const auto unserialize = Get<bool (*)(const void*, size_t)>("retro_unserialize");
-  if (!unserialize) return std::nullopt;
-  UsePorts(memory.ports);
-  savestate_context_ = RETRO_SAVESTATE_CONTEXT_RUNAHEAD_SAME_INSTANCE;
-  const bool loaded = unserialize(memory.data.data(), memory.data.size());
-  savestate_context_ = RETRO_SAVESTATE_CONTEXT_NORMAL;
-  if (!loaded) return std::nullopt;
-  video_hash_ = memory.video;
+  if (!LoadMemory(memory)) return std::nullopt;
   {
     std::lock_guard<std::mutex> lock(mutex_);
     next_frame_ = memory.frame;
     steps_.clear();
+    ClearRollback();
   }
   return StateResult{memory.frame, memory.data.size()};
+}
+
+bool Game::SaveMemory(MemoryState& memory, uint64_t frame) {
+  const auto size_of = Get<size_t (*)()>("retro_serialize_size");
+  const auto serialize = Get<bool (*)(void*, size_t)>("retro_serialize");
+  if (!size_of || !serialize) return false;
+  const size_t size = size_of();
+  if (size == 0) return false;
+  memory.used = false;
+  try {
+    if (memory.data.size() != size) memory.data.assign(size, '\0');
+  } catch (const std::bad_alloc&) {
+    memory.data.clear();
+    return false;
+  }
+  savestate_context_ = RETRO_SAVESTATE_CONTEXT_RUNAHEAD_SAME_INSTANCE;
+  const bool saved = serialize(memory.data.data(), size);
+  savestate_context_ = RETRO_SAVESTATE_CONTEXT_NORMAL;
+  if (!saved) return false;
+  memory.ports = core_ports_;
+  memory.frame = frame;
+  memory.video = video_hash_;
+  memory.used = true;
+  return true;
+}
+
+bool Game::LoadMemory(const MemoryState& memory) {
+  const auto unserialize = Get<bool (*)(const void*, size_t)>("retro_unserialize");
+  if (!unserialize || !memory.used) return false;
+  UsePorts(memory.ports);
+  savestate_context_ = RETRO_SAVESTATE_CONTEXT_RUNAHEAD_SAME_INSTANCE;
+  const bool loaded = unserialize(memory.data.data(), memory.data.size());
+  savestate_context_ = RETRO_SAVESTATE_CONTEXT_NORMAL;
+  if (!loaded) return false;
+  video_hash_ = memory.video;
+  return true;
 }
 
 }  // namespace retro_host

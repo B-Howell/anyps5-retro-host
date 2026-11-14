@@ -13,8 +13,10 @@ Version 1 runs one PS1 game for local players: start, play, change discs,
 change settings, stop. The `ps1Lockstep` capability adds the first step of
 online play: a game that runs one frame per input the launcher hands it, and
 can save and load its state, so two players' hosts stay frame for frame alike
-(see [Lockstep](#lockstep) and [netplay.md](netplay.md)). Rollback, PS2 and
-PS3 are later capabilities (see [Capabilities](#capabilities)).
+(see [Lockstep](#lockstep) and [netplay.md](netplay.md)). The `ps1Rollback`
+capability lets a game in lockstep run ahead on predicted input and run frames
+again when a prediction was wrong (see [Rollback](#rollback)). PS2 and PS3
+are later capabilities (see [Capabilities](#capabilities)).
 
 The words MUST, MUST NOT and SHOULD are used as in RFC 2119.
 
@@ -349,6 +351,8 @@ absolute or UNC name as it is.
 | [`rumble`](#rumble) | host → launcher | none |
 | [`step`](#step) | launcher → host | none (capability `ps1Lockstep`) |
 | [`sync`](#sync) | host → launcher | none (capability `ps1Lockstep`) |
+| [`correct`](#correct) | launcher → host | none (capability `ps1Rollback`) |
+| [`rollback`](#rollback-message) | host → launcher | none (capability `ps1Rollback`) |
 
 ### hello
 
@@ -407,8 +411,9 @@ a method whose capability the host did not list.
 | --- | --- |
 | `ps1` | The methods below, for PS1 games, with controller ports 1 and 2 |
 | `ps1Lockstep` | [Lockstep](#lockstep): `start.lockstep`, the methods `lockstep`, `saveState` and `loadState`, and the messages `step` and `sync` |
+| `ps1Rollback` | [Rollback](#rollback), with `ps1Lockstep`: `lockstep.rollback`, `null` ports in `step`, and the messages `correct` and `rollback` |
 
-Later versions add capabilities such as PS1 rollback, PS2 and PS3.
+Later versions add capabilities such as PS2 and PS3.
 
 ### call and reply
 
@@ -754,21 +759,27 @@ run for a step, so:
 
 ### lockstep
 
-Argument: `{"check":<integer 1 to 3600>,"paced":<boolean, optional>}`, or
-`false`.
+Argument: `{"check":<integer 1 to 3600>,"paced":<boolean, optional>,
+"rollback":{"frames":<integer 1 to 8>}}`, where `rollback` is optional
+(capability `ps1Rollback`), or `false`.
 
 - With an object, the game enters lockstep, or, when it already is in
   lockstep, keeps its frame count and takes the new settings. `check` is how
   often a `sync` is sent: after every frame whose number is a multiple of it.
   `paced` (default `true`) keeps the game to its core's frame rate even when
   steps queue up; `false` runs queued steps as fast as the machine can, as a
-  player catching up does. The change takes effect between two frames: the
-  host waits for the frame being run to end before it replies. Returns
-  `{"frame":<integer>}`, the frame the next `step` is for, which is 0 when the
-  game has just entered lockstep. Returns `false` when the game has ended, or
-  when the frame being run did not end within 4 seconds.
-- With `false`, the game leaves lockstep and drops the steps it has not run.
-  It then runs on its own, with the input of the last `input` messages, and
+  player catching up does. With `rollback`, the game runs in
+  [rollback](#rollback), with at most `frames` frames stepped beyond the last
+  confirmed one; without it, in plain lockstep. The change takes effect
+  between two frames: the host waits for the frame being run to end before it
+  replies. Returns `{"frame":<integer>}`, the frame the next `step` is for,
+  which is 0 when the game has just entered lockstep. Returns `false` when the
+  game has ended, when the frame being run did not end within 4 seconds, or
+  when the call would turn rollback on or off, or change its `frames`, while
+  a frame is not confirmed.
+- With `false`, the game leaves lockstep and drops the steps it has not run,
+  and in rollback the corrections it has not taken: frames it ran on
+  predicted input stay as they ran. It then runs on its own, with the input of the last `input` messages, and
   with as many connected ports as the last step it ran had. It too takes
   effect between two frames. Returns `true`, or `false` when the game has
   ended or the frame being run did not end within 4 seconds.
@@ -797,13 +808,16 @@ are carried out between two frames, before any step still queued.
 - `loadState` connects the ports the state was saved with (a port count
   `connectedPorts` would set), loads the state into the game, drops the steps
   not yet run, and sets the lockstep frame count to the frame in the state,
-  so the next `step` is for that frame. A file whose frame is above
-  4294967295 is not loaded. Returns the same object, with how long the load
-  took.
+  so the next `step` is for that frame. In rollback it also drops the
+  corrections not taken and every frame not confirmed: the frames before the
+  state's count as confirmed. A file whose frame is above 4294967295 is not
+  loaded. Returns the same object, with how long the load took.
 
 Both return `false` when the game is not in lockstep or has ended, when the
 file cannot be written or read, when the slot holds no state of this lockstep
-count, or when the core refuses the state. They also
+count, or when the core refuses the state. `saveState` also returns `false`
+in rollback while a frame the game has run is not confirmed, since the state
+would hold predicted input. They also
 return `false` when the game's thread does not get to them within 4 seconds,
 which can happen to a game started with `start.lockstep` that is still
 loading: such a game shows no `ready` before its first step, so a launcher
@@ -866,14 +880,14 @@ The input of one lockstep frame. It has no reply.
 | Field | Type | Meaning |
 | --- | --- | --- |
 | `frame` | integer, 0 to 4294967295 | The lockstep frame this is for |
-| `ports` | array of 1 or 2 objects | One per connected controller port, from port 1. Each has the fields of [`input`](#input) other than `type` and `port`. The number of entries is the number of connected ports for this frame, as [`connectedPorts`](#connectedports) would set it |
+| `ports` | array of 1 or 2 entries | One per connected controller port, from port 1. Each is an object with the fields of [`input`](#input) other than `type` and `port`, or, in [rollback](#rollback), `null` when the launcher does not know that port's input yet. The number of entries is the number of connected ports for this frame, as [`connectedPorts`](#connectedports) would set it |
 
 Steps come in frame order with no gaps: the first is for the frame the
 `lockstep` reply or the last `loadState` named, and each next one for the
 frame after. At most 600 steps wait to be run. A `step` sent while no game is
 loaded, while the game is not in lockstep, for any other frame, or as the
-601st waiting, is a protocol error. A `step` for a game that has ended is
-ignored.
+601st waiting, is a protocol error, as is a `step` that breaks a rule of
+[rollback](#rollback). A `step` for a game that has ended is ignored.
 
 ### sync
 
@@ -882,7 +896,8 @@ ignored.
 ```
 
 Sent after each lockstep frame whose number is a multiple of `check`, in
-frame order. Each hash is the 64-bit FNV-1a hash of some bytes, as 16
+frame order, exactly once. In [rollback](#rollback) it is sent once the frame
+is confirmed, with what the frame left behind the last time it was run. Each hash is the 64-bit FNV-1a hash of some bytes, as 16
 lowercase hexadecimal digits, or `null` when the core cannot give them:
 
 | Field | The hash of |
@@ -898,6 +913,85 @@ it names no path ([saveState and loadState](#savestate-and-loadstate)).
 round differently. For the same reason `state`, which holds the console's
 video memory read back from the GPU, may differ between two GPUs drawing at a
 resolution scale above 1x.
+
+## Rollback
+
+Capability `ps1Rollback`. A game in lockstep with `rollback` runs a step at
+once even when the launcher does not know every port's input for that frame
+yet, as GGPO and RetroArch's netplay do: the host predicts the missing input,
+and when the launcher later sends the real input with [`correct`](#correct)
+and it differs, the host loads its state from before that frame and runs that
+frame and every later one again. A player then sees the friend's input as soon
+as it arrives instead of waiting for it, and two hosts given the same steps
+and corrections reach the same confirmed frames as two hosts in plain
+lockstep given the final input ([netplay.md](netplay.md) "Rollback").
+
+A port's input for a frame is *known* once its `step` gave it, or a `correct`
+did later; a port the `step` does not connect is known, as it has no input. A
+frame is *confirmed* once every port's input in it and in every frame before
+it is known.
+
+- **Prediction.** A port whose input is not known runs with that port's
+  latest known input: the known input in the latest frame that has one, or
+  all zeros if none has since the game entered lockstep.
+- **Rules.** A port's input becomes known in frame order: a `step` that gives
+  a port's input while an earlier frame's input for that port is not known is
+  a protocol error. At most `rollback.frames` frames are stepped beyond the
+  last confirmed one: a `step` for frame *f* while frame *f* −
+  `rollback.frames` is not confirmed is a protocol error. A `null` port
+  outside rollback is a protocol error.
+- **States.** Before it runs a frame with a port not known, the host saves the
+  core's state in memory, in the same-instance form of
+  [saveState and loadState](#savestate-and-loadstate). These states are
+  separate from the 8 slots.
+- **Running again.** Between two frames, the host takes the corrections that
+  have come. When the input a frame last ran with differs from what is now
+  known, the host loads the state from before the first such frame and runs
+  it and every later frame it has run again, as fast as it can, with the
+  input known now and new predictions for the rest. It shows only the picture
+  of the last of them (one `frame` message), gives the core and the player no
+  sound for them (the frames' sound already played once), and sends `rumble`
+  only for a port whose motors end differently than the player was last
+  told. Then it sends a [`rollback`](#rollback-message) message.
+- **Syncs.** A frame's `sync` comes once the frame is confirmed, with what the
+  frame left behind the last time it was run, so two players' hosts compare
+  the same thing however often each ran it.
+
+### correct
+
+```json
+{"type":"correct","frame":121,"port":1,"buttons":0,"leftX":0,"leftY":0,"rightX":0,"rightY":0}
+```
+
+The input of one port in a frame whose `step` left it `null`. It has no reply.
+The fields other than `frame` are those of [`input`](#input).
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `frame` | integer, 0 to 4294967295 | The lockstep frame the input is for |
+| `port` | integer, 0 or 1 | The controller port |
+
+A `correct` sent while no game is loaded, while the game is not in rollback,
+for a frame not yet stepped, for a port the frame's `step` gave or did not
+connect, for a port already corrected in that frame, or while an earlier
+frame's input for that port is not known, is a protocol error. A `correct`
+for a game that has ended is ignored.
+
+### rollback message
+
+```json
+{"type":"rollback","frame":118,"frames":4,"micros":9120,"loadMicros":2410}
+```
+
+Sent after the host ran frames again. It has no reply. The launcher uses it
+for its statistics and logs; nothing in a match depends on it.
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `frame` | integer, 0 to 4294967295 | The first frame run again |
+| `frames` | integer, 1 to 8 | How many frames were run again |
+| `micros` | integer, 0 or more | Microseconds from the start of the state's load to the end of the last frame |
+| `loadMicros` | integer, 0 or more | Microseconds the load took |
 
 ## Frame ring
 
@@ -1088,7 +1182,8 @@ test provides on its own system:
 - `${playlist}`: an `.m3u` of two discs, `${disc1}` and `${disc2}`;
 - `${system}` and `${saves}`: directories.
 
-**`messages/`** has one file per message and per method:
+**`messages/`** has one file per message and per method (and more for some
+methods' forms, such as `lockstep` with `rollback`):
 
 - `from` is `launcher` or `host`, and `message` is the message as sent;
 - a call has its `reply`, and a ping has its `pong`;

@@ -11,7 +11,8 @@ SwanStation.
   are written from.
 - [docs/host.md](docs/host.md): how this host is put together.
 - [docs/netplay.md](docs/netplay.md): the design for PS1 online play, of
-  which lockstep (protocol.md "Lockstep") is built.
+  which lockstep and rollback (protocol.md "Lockstep" and "Rollback") are
+  built.
 - [fixtures/v1](fixtures/v1): every message, and whole conversations
   (valid and invalid), for the host's and the launcher's conformance tests.
 - [tools/check_fixtures.py](tools/check_fixtures.py): checks the fixtures
@@ -32,6 +33,7 @@ ctest --test-dir build -C Release --output-on-failure
 python3 tests/conformance.py --host build/anyps5-retro-host --core build/fake_core.so
 python3 tests/host_test.py --host build/anyps5-retro-host --core build/fake_core.so
 python3 tests/lockstep_test.py --host build/anyps5-retro-host --core build/fake_core.so
+python3 tests/rollback_test.py --host build/anyps5-retro-host --core build/fake_core.so
 ```
 
 The real-core tests need SwanStation built with the host's patches:

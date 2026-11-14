@@ -1,0 +1,14 @@
+{
+  "description": "Port 2's input for rollback frame 121, which its step left unknown: nothing held.",
+  "from": "launcher",
+  "message": {
+    "type": "correct",
+    "frame": 121,
+    "port": 1,
+    "buttons": 0,
+    "leftX": 0,
+    "leftY": 0,
+    "rightX": 0,
+    "rightY": 0
+  }
+}

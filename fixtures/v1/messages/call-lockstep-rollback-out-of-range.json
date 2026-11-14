@@ -1,0 +1,27 @@
+{
+  "description": "Rollback over more than 8 frames is out of range.",
+  "from": "launcher",
+  "invalid": "lockstep args.rollback.frames must be an integer from 1 to 8",
+  "message": {
+    "type": "call",
+    "id": 13,
+    "method": "lockstep",
+    "args": {
+      "check": 1,
+      "rollback": {
+        "frames": 9
+      }
+    }
+  },
+  "reply": {
+    "type": "reply",
+    "id": 13,
+    "error": {
+      "code": "argument",
+      "message": "lockstep.rollback.frames must be an integer from 1 to 8."
+    }
+  },
+  "anyValueFor": [
+    "error.message"
+  ]
+}

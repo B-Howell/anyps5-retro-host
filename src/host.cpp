@@ -91,6 +91,16 @@ LockstepConfig NeedLockstep(const Json& args, const std::string& where) {
     Need(paced->IsBool(), where + ".paced must be true or false.");
     config.paced = paced->AsBool();
   }
+  if (const Json* rollback = args.Find("rollback")) {
+    const std::string frames_error = where + ".rollback.frames must be an integer from 1 to " +
+                                     std::to_string(kMaxRollbackFrames) + ".";
+    Need(rollback->IsObject(), frames_error);
+    const Json* frames = rollback->Find("frames");
+    Need(frames != nullptr, frames_error);
+    const auto count = frames->Integer(1, kMaxRollbackFrames);
+    Need(count.has_value(), frames_error);
+    config.rollback = static_cast<unsigned>(*count);
+  }
   return config;
 }
 
@@ -134,6 +144,7 @@ Host::Outcome Host::Handle(const Json& message) {
   if (kind == "call") return Call(message);
   if (kind == "input") return Input(message);
   if (kind == "step") return Step(message);
+  if (kind == "correct") return Correct(message);
   if (kind == "ping") {
     const Json* id = message.Find("id");
     if (!id || !id->Integer(1, kMaxId)) return Outcome::kProtocolError;
@@ -174,7 +185,7 @@ Host::Outcome Host::Hello(const Json& message) {
                        {"version", 1},
                        {"pid", ProcessId()},
                        {"hostVersion", ANYPS5_RETRO_HOST_VERSION},
-                       {"capabilities", JsonArray{"ps1", "ps1Lockstep"}},
+                       {"capabilities", JsonArray{"ps1", "ps1Lockstep", "ps1Rollback"}},
                        {"pixelFormat", format_name}}));
   return Outcome::kContinue;
 }
@@ -228,12 +239,33 @@ Host::Outcome Host::Step(const Json& message) {
   StepInput input;
   input.connected = static_cast<unsigned>(ports->AsArray().size());
   for (size_t port = 0; port < input.connected; ++port) {
-    if (!ParsePort(ports->AsArray()[port], input.ports[port])) return Outcome::kProtocolError;
+    const Json& entry = ports->AsArray()[port];
+    if (entry.IsNull()) {
+      input.known[port] = false;
+    } else if (!ParsePort(entry, input.ports[port])) {
+      return Outcome::kProtocolError;
+    }
   }
   const auto game = CurrentGame();
   if (!game) return Outcome::kProtocolError;
   return game->Step(static_cast<uint64_t>(*number), input) == StepResult::kRefused ? Outcome::kProtocolError
                                                                                   : Outcome::kContinue;
+}
+
+Host::Outcome Host::Correct(const Json& message) {
+  const Json* frame = message.Find("frame");
+  const Json* port = message.Find("port");
+  if (!frame || !port) return Outcome::kProtocolError;
+  const auto number = frame->Integer(0, kMaxFrame);
+  const auto port_index = port->Integer(0, 1);
+  PortInput input;
+  if (!number || !port_index || !ParsePort(message, input)) return Outcome::kProtocolError;
+  const auto game = CurrentGame();
+  if (!game) return Outcome::kProtocolError;
+  return game->Correct(static_cast<uint64_t>(*number), static_cast<unsigned>(*port_index), input) ==
+                 StepResult::kRefused
+             ? Outcome::kProtocolError
+             : Outcome::kContinue;
 }
 
 Host::Reply Host::Dispatch(const std::string& method, const Json& args) {
@@ -400,6 +432,14 @@ void Host::OnSync(const SyncPoint& point) {
     else sync.emplace_back(name, nullptr);
   }
   Send(Json(std::move(sync)));
+}
+
+void Host::OnRollback(const RollbackReport& report) {
+  Send(Json(JsonObject{{"type", "rollback"},
+                       {"frame", report.frame},
+                       {"frames", report.frames},
+                       {"micros", report.micros},
+                       {"loadMicros", report.load_micros}}));
 }
 
 void Host::Send(const Json& message, NativeHandle memory) {

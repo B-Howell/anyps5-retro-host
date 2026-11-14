@@ -1,0 +1,18 @@
+{
+  "description": "The input of rollback frame 121: port 1 holds Cross, and port 2's input has not arrived, so the host predicts it.",
+  "from": "launcher",
+  "message": {
+    "type": "step",
+    "frame": 121,
+    "ports": [
+      {
+        "buttons": 1,
+        "leftX": 0,
+        "leftY": 0,
+        "rightX": 0,
+        "rightY": 0
+      },
+      null
+    ]
+  }
+}

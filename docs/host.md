@@ -22,7 +22,7 @@ through kqueue. On Windows a thread waits on the launcher's process handle.
 | --- | --- |
 | [`src/main.cpp`](../src/main.cpp) | The command line, the process setup, then the host |
 | [`src/host.cpp`](../src/host.cpp) | The protocol: `hello`, the order rules, every method's argument checks and replies, and the limits |
-| [`src/game.cpp`](../src/game.cpp) | One loaded game: the libretro callbacks, core options, disc control, the memory card, input, rumble, pixel conversion, and lockstep: the queue of steps, the `sync` hashes, the state files of `saveState` and `loadState`, and the 8 in-memory states, each a buffer kept for the game and reused, so a save allocates nothing after the first |
+| [`src/game.cpp`](../src/game.cpp) | One loaded game: the libretro callbacks, core options, disc control, the memory card, input, rumble, pixel conversion, and lockstep: the queue of steps, the `sync` hashes, the state files of `saveState` and `loadState`, and the 8 in-memory states, each a buffer kept for the game and reused, so a save allocates nothing after the first; and rollback (see "Rollback" below) |
 | [`cores/patches`](../cores/patches), [`cores/apply-swanstation-patches.sh`](../cores/apply-swanstation-patches.sh) | The host's SwanStation patches and the script the workflows apply them with (see "SwanStation patches" below) |
 | [`src/resolution.cpp`](../src/resolution.cpp) | Which internal resolutions a GPU game is offered (see "Resolution limits" below) |
 | [`src/ring.cpp`](../src/ring.cpp) | The frame ring writer: the header from protocol.md's byte table, slot choice, and capped doubling when a frame needs more room |
@@ -32,6 +32,47 @@ through kqueue. On Windows a thread waits on the launcher's process handle.
 | [`src/platform_posix.cpp`](../src/platform_posix.cpp), [`src/platform_windows.cpp`](../src/platform_windows.cpp) | The control stream, process setup, watching the launcher, shared memory, loading the core and files |
 | [`src/audio.cpp`](../src/audio.cpp) | Sound output through miniaudio, with the volume, mute and pause |
 | [`tools/package_release.py`](../tools/package_release.py) | Packs, lists and checks a release (see "Releases" below) |
+
+## Rollback
+
+[protocol.md](protocol.md) "Rollback" is the contract and
+[netplay.md](netplay.md) "Rollback" the design; this is how
+[`src/game.cpp`](../src/game.cpp) does it. It is GGPO's sync layer, as
+RetroArch's netplay and DuckStation's former netplay have it, with the
+network left to the launcher.
+
+- **What is checked where.** The thread that reads the control stream checks
+  each `step` and `correct` against `known_`: which ports of each frame from
+  the first one not confirmed are known. A step for a port whose earlier input
+  is not known, a step past the window, or a correction that is not the next
+  one for its port is a protocol error there, before the game's thread sees
+  it. Corrections then wait in `corrections_` for the game's thread.
+- **Prediction.** `predicted_` is each port's latest known input, set when
+  the game's thread takes a step that knows it or a correction. A step's
+  unknown ports run with it. A frame whose input is all known runs as in
+  plain lockstep unless an earlier frame is not confirmed; any other frame is
+  kept in `kept_` with the input known for it, the input it ran with, and the
+  `sync` hashes due after it.
+- **States.** Before a frame with an unknown port runs, the core's state is
+  saved in `rollback_states_`, at the frame modulo `rollback.frames`: frames
+  are stepped at most that far beyond the last confirmed one, so no state in
+  use is overwritten. The buffers are kept and reused, like the 8 slots.
+- **Settling.** Between two frames, inside the frame fence, `Settle` applies
+  the corrections (to a step not yet run, or to a kept frame), finds the first
+  kept frame whose known input differs from what it ran with, loads the state
+  saved before it and runs every kept frame from there again (`Resimulate`),
+  with each frame's state saved again and its hashes measured again. Then it
+  pops the kept frames now confirmed and sends their `sync` messages in order.
+  A step is not taken while a correction waits, so a frame never runs on a
+  prediction the host could already have replaced. `Settle` runs before state
+  requests, so a `saveState` sent after the last corrections sees them taken.
+- **Frames run again.** While `resimulating_`, the core is told through
+  `RETRO_ENVIRONMENT_GET_AUDIO_VIDEO_ENABLE` that audio is off (as RetroArch
+  tells it for runahead and netplay replays) and the host drops any samples;
+  video stays on, since a later frame's `sync.video` can be the hash of such a
+  frame's picture, and each picture is hashed but only the last frame's is
+  published. Rumble is held and sent once, for motors that changed. Then the
+  host sends a `rollback` message with the time the load and the frames took.
 
 ## Choices made for version 1
 
@@ -224,6 +265,41 @@ through kqueue. On Windows a thread waits on the launcher's process handle.
   fake core keeps four words of "system RAM" (the frame count, a mix of every
   input it read, and the last buttons of each port) and serializes them with
   its rumble state and memory card.
+- [`tests/rollback_test.py`](../tests/rollback_test.py) runs three hosts: a
+  reference in plain lockstep given every frame's input, and two players'
+  hosts in [rollback](protocol.md#rollback). Each player knows its own port's
+  input at once and gets the other's after a simulated delay of 1 to
+  `--delay` frames with jitter, in order; it steps each frame as soon as the
+  window allows, with the other port `null`, and sends each late input with
+  `correct`. Each simulated frame lasts `--tick` seconds, during which the
+  test reads every host. The input is held for 1 to 12 frames at a time, so
+  some predictions come true and some do not, and port 2 is unplugged for 20
+  frames. Every frame's `sync` must match the reference's (RAM, picture and
+  state), each must come once and in order, a rollback must have happened,
+  and the players may show at most one picture more than the reference for
+  each rollback (frames run again show only their last picture). A second
+  phase checks every 60th frame, as a match would, and prints what a rollback
+  cost: the load, and each frame run again. With the test core it also checks
+  that right predictions cost no rollback, that `saveState` and turning
+  rollback off are refused while frames are not confirmed and that a load
+  forgets them, and the protocol errors of `step` and `correct`. With
+  `--bios` it runs the real SwanStation core on the pad program below.
+- [`tests/pad_test.py`](../tests/pad_test.py) runs the pad program
+  (`make_test_disc.pad_program`) on two real SwanStation hosts in lockstep.
+  The program reads both controller ports once a frame through the
+  controller port's registers and keeps the replies in main RAM; acts on
+  port 1's buttons (Triangle locks that controller in digital mode with the
+  DualShock's configuration commands, Square unlocks it in analog mode,
+  Circle turns the SPU's interrupt on, which changes how often SwanStation
+  runs its sound unit); and draws what it read. After each frame of a script
+  the test saves each host's state to a file and reads the program's record
+  from it: both consoles must have read exactly the buttons, sticks and
+  controller mode the script gave that frame, including analog mode switched
+  by the button combination, the combination doing nothing while the game
+  holds the lock, and the lock and port 1's mode surviving port 2 being
+  unplugged and plugged in. The `real-core` workflow also runs
+  `lockstep_test.py` on the pad program, whose memory-state run then crosses
+  frames that change the SPU's interrupt.
 - [`tests/ring_access.c`](../tests/ring_access.c) gives the fake launcher the
   sequentially consistent loads and stores of `latest` and `reading` that
   protocol.md asks for; Python cannot make them on shared memory itself. It
@@ -279,6 +355,8 @@ play needs from a state ([netplay.md](netplay.md) "Determinism"):
 | [`swanstation-1-netplay-input-state`](../cores/patches/swanstation-1-netplay-input-state.patch) | Whether the analog-mode button combination is still held moves from one variable of the libretro layer, shared by all ports, into each controller, and is saved with it, as is whether the game locked the analog mode (state version 58). A load whose savestate context is not `NORMAL` (netplay, rollback, runahead) also restores each controller's buttons, analog mode and held combination, which a normal load leaves as the player has them. Port devices the frontend set just before a load take effect before the state is read |
 | [`swanstation-2-pathless-netplay-state`](../cores/patches/swanstation-2-pathless-netplay-state.patch) | A state saved with `RETRO_SAVESTATE_CONTEXT_ROLLBACK_NETPLAY` leaves out the game's title and the disc's path, in the state's header and in the disc trailer of the libretro layer, and sets a pathless flag; a pathless state finds its disc by its index in the frontend's disc list |
 | [`swanstation-3-vram-upload-colour`](../cores/patches/swanstation-3-vram-upload-colour.patch) | The shader that writes 16-bit video memory into the GPU's texture turns each 5-bit channel into the same byte the CPU does, as an exact multiple of 1/255, so video memory loaded from a state shows what the game drew |
+| [`swanstation-4-spu-sample-event-restore`](../cores/patches/swanstation-4-spu-sample-event-restore.patch) | Loading a state no longer reschedules the sound unit's always-active sample event, which ran the sample ticks of the timeline being discarded against the loaded sound unit (its tick carry, and so its timing, changed); the event's saved timing is restored with the other timing events. The AnyPS5 Desktop launcher's integrated builds carry the same change (`tool/patches/swanstation-spu-checkpoint.patch`), found by its PS1 determinism harness. Without it, `lockstep_test.py` on the pad program fails its memory-state run at the first frame (the state hash differs after a load) |
+| [`swanstation-5-port-change-keeps-other-controllers`](../cores/patches/swanstation-5-port-change-keeps-other-controllers.patch) | A port whose controller type changes gets a new controller; the other ports keep theirs. Stock SwanStation made every port's controller anew whenever any port's type changed, so plugging in port 2 (a friend joining) put port 1 back in digital mode and dropped the game's lock on it, which a real console does not do. Without it, `pad_test.py` fails at the frame port 2 is unplugged |
 
 States of the patched core are version 58, which stock SwanStation does not
 load; the host only ever runs the core of its own release.
