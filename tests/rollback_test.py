@@ -255,6 +255,22 @@ def right_guesses(match):
     print('predictions that come true cause no rollback and match lockstep')
 
 
+def predicted(peer, ports):
+    """Steps frames 5 to 7 with ports, one of them unknown, and waits until the host has shown their
+    three pictures, so it ran them on its prediction before any correction comes."""
+    shown = peer.pictures
+    for frame in range(5, 8):
+        peer.step(frame, ports)
+    deadline = time.monotonic() + 10
+    while peer.pictures < shown + 3:
+        if time.monotonic() > deadline:
+            raise c.Failed(f'{peer.name}: the predicted frames showed {peer.pictures - shown} pictures, not 3')
+        try:
+            peer.pump(timeout=0.1)
+        except c.Idle:
+            pass
+
+
 def settled(peer, last):
     """Waits for the sync of frame last and reads what followed. Returns the rollbacks, which must all
     end after frame last: the host takes whichever corrections have come at each frame's end, so the
@@ -281,16 +297,7 @@ def resimulated_picture(match):
         time.sleep(0.3)
         peer.drain()
         shown = peer.pictures
-        for frame in range(5, 8):
-            peer.step(frame, [ls.port(0), None])
-        deadline = time.monotonic() + 10
-        while peer.pictures < shown + 3:
-            if time.monotonic() > deadline:
-                raise c.Failed('the predicted frames showed no pictures')
-            try:
-                peer.pump(timeout=0.1)
-            except c.Idle:
-                pass
+        predicted(peer, [ls.port(0), None])
         if peer.first_pixel()[0] != 16:
             raise c.Failed(f'picture: the predicted frames show {peer.first_pixel()}, not 16 in red, from port 2')
         select = 1 << 2
@@ -327,10 +334,7 @@ def resimulated_rumble(match):
         peer.drain()
         if [(m['port'], m['strong']) for m in peer.rumbles] != [(0, 65535)]:
             raise c.Failed(f'{name}: holding Cross sent {peer.rumbles}, not one rumble on')
-        for frame in range(5, 8):
-            peer.step(frame, [None, ls.port(0)])
-        time.sleep(0.3)
-        peer.drain()
+        predicted(peer, [None, ls.port(0)])
         if len(peer.rumbles) != 1:
             raise c.Failed(f'{name}: the predicted frames, Cross still held, sent {peer.rumbles[1:]}')
         for frame, buttons in zip(range(5, 8), corrections):

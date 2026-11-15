@@ -427,19 +427,20 @@ Built now:
 
 What a rollback costs, measured by `rollback_test.py` on the real core in
 real-core run 43755458414 (pad program, with a check every 60 frames as in a
-match, about 80 rollbacks of 1 to 6 frames per player; each frame run again
-includes the save in memory before it when it is still predicted):
+match, 36 to 48 rollbacks of 1 to 6 frames per player; averages, and each
+frame run again includes the save in memory before it when it is still
+predicted):
 
 | Runner | Loading the state | Each frame run again |
 | --- | --- | --- |
-| Windows Server 2022 (software OpenGL) | 3.1 ms | 3.1 ms |
+| Windows Server 2022 (no OpenGL context: software rendering) | 3.1 ms | 3.1 ms |
 | Ubuntu 22.04 (Mesa) | 6.0 ms | 4.3 ms |
 | Ubuntu 24.04 (Mesa) | 6.8 ms | 5.9 ms |
 | hosted macOS (virtual GPU) | 5.9 ms | 63 ms |
 
-So on the Windows runner a rollback of up to 4 frames fits in one 16.7 ms
-frame, on Ubuntu 22.04 up to 2 and on 24.04 one; a longer one makes that frame
-late. With a check every frame (RAM and the state hashed after each) a frame
+So, going by these averages, on the Windows runner a rollback of up to 4
+frames fits in one 16.7 ms frame, on Ubuntu 22.04 up to 2 and on 24.04 one; a
+longer one makes that frame late. With a check every frame (RAM and the state hashed after each) a frame
 run again costs 22 to 27 ms on Windows and Linux. The hosted macOS runner's
 save reads its virtual GPU back and is far too slow to roll back; a real Mac
 is not measured yet.
