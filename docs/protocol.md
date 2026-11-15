@@ -166,8 +166,12 @@ storage: from its own directory on Windows and Linux, and from
 
 On Windows the launcher hashes each file from a handle it opened without
 `FILE_SHARE_WRITE` or `FILE_SHARE_DELETE`, and keeps those handles open
-until the first game's `status` shows `ready` or `ended`; the host has loaded
-the core by then. So the file it checked is the file that runs. On Linux the launcher hashes the host executable from a
+until the host has exited. The host loads the core library again for each
+game it starts, so a handle closed after the first game would leave the next
+game's load unprotected. Holding the handles does not stop the host loading
+the library, and no other program can write, rename or delete the file while
+they are open. So the file it checked is the file that runs. On Linux the
+launcher hashes the host executable from a
 descriptor it opened with `O_CLOEXEC` at a number above 3 (moved there with
 `F_DUPFD_CLOEXEC` if it came out lower, so the `dup2` to descriptor 3 cannot
 replace it), and starts the host through that same
@@ -329,9 +333,24 @@ it says that the file name cannot be used and sends nothing.
 
 File extensions (`.cue`, `.CUE`) match without regard to ASCII case.
 
-A file named inside a `.cue` or `.m3u` is found as the core finds it: a
-relative name against the directory of the file that names it, and an
-absolute or UNC name as it is.
+A file named inside a `.cue` or `.m3u` is found as the core finds it.
+SwanStation treats a name as absolute only when it is a drive path on
+Windows (`C:\Games\a.bin` or `C:/Games/a.bin`) or starts with `/` on Linux
+and macOS, and the core opens such a name as written. It joins any other
+name to the directory of the file that names it. The host's own reading of
+an `.m3u` entry, for `initialDisc`, follows the same rule.
+
+**UNC names.** On Windows, a `.cue` or `.m3u` can name a UNC path
+(`\server\share\track.bin`). The core does not open it as a UNC path: it
+joins the name to the directory of the file that names it, and Windows reads
+the run of separators as one, so the name points to a file under that
+directory (`C:\Games\server\share\track.bin`). So a UNC name in a shared
+`.cue` or `.m3u` does not make Windows connect to that server. A drive path
+is still opened as written, so a name on a mapped network drive reaches the
+server behind that drive. A core that opened UNC names as written would let
+the named server get the player's Windows account name and, when the sign-in
+uses NTLM, a response it can try to crack offline. Before the host moves to
+another SwanStation commit, its maintainers check this again.
 
 ## Messages
 
@@ -652,6 +671,8 @@ No argument. Returns `null` when no game is loaded, or:
 | `didNotStart` | The game produced no first frame in time |
 | `frameTooLarge` | The game's frame was larger than 8192 × 8192 |
 | `other` | Any other cause |
+| `hostExited` | Only the launcher's client reports it: the host exited without being asked or sent a protocol error (see [Host failure](#host-failure)) |
+| `hostHung` | Only the launcher's client reports it: the host missed one of the launcher's time limits and the launcher closed it (see [Host failure](#host-failure)) |
 
 The host always sends every field above (`discs` only for a multi-disc
 game, `core` only with the `coreIdentity` capability), including for a game
@@ -684,10 +705,10 @@ core the value the game started with).
 For the internal resolution (`swanstation_GPU_ResolutionScale`), while
 `hardware` is `true`, `values` lists only the whole-number scales whose
 largest frame the host can pass on (at most 8192 × 8192 and no larger than
-the GPU can draw), and any value that is not a whole number. A saved value
+the OpenGL context can draw), and any value that is not a whole number. A saved value
 larger than those starts the game at the largest one listed, and
 `resolutionError` says why until the player chooses another value. Without
-the GPU, or when not even the smallest scale fits, every value is listed; a
+an OpenGL context, or when not even the smallest scale fits, every value is listed; a
 frame larger than 8192 × 8192 then ends the game with `frameTooLarge`.
 
 `discs` has `labels` (array of strings), `inserted` (index of the inserted

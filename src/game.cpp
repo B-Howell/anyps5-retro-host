@@ -16,6 +16,7 @@
 #include <tuple>
 #include <utility>
 
+#include "paths.h"
 #include "resolution.h"
 
 namespace retro_host {
@@ -129,9 +130,11 @@ bool Listed(const char* const* list, size_t count, const std::string& key) {
 }
 
 #ifdef _WIN32
+constexpr bool kWindows = true;
 constexpr char kSeparators[] = "/\\";
 constexpr char kSeparator = '\\';
 #else
+constexpr bool kWindows = false;
 constexpr char kSeparators[] = "/";
 constexpr char kSeparator = '/';
 #endif
@@ -167,15 +170,6 @@ std::string IdentityText(const char* text) {
 uint64_t MicrosSince(std::chrono::steady_clock::time_point began) {
   return static_cast<uint64_t>(
       std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - began).count());
-}
-
-bool IsAbsolute(const std::string& path) {
-  if (!path.empty() && IsSeparator(path[0])) return true;
-#ifdef _WIN32
-  return path.size() > 2 && path[1] == ':' && IsSeparator(path[2]);
-#else
-  return false;
-#endif
 }
 
 }  // namespace
@@ -561,7 +555,7 @@ std::optional<std::string> Game::PlaylistEntry(unsigned index) const {
     while (first < line.size() && (line[first] == ' ' || line[first] == '\t')) ++first;
     line.erase(0, first);
     if (line.empty() || line[0] == '#') continue;
-    if (at == index) return IsAbsolute(line) ? line : Directory(config_.disc) + line;
+    if (at == index) return IsCoreAbsolute(line, kWindows) ? line : Directory(config_.disc) + line;
     ++at;
   }
   return std::nullopt;
@@ -1131,7 +1125,7 @@ std::optional<std::pair<uint32_t, uint32_t>> Game::LimitResolution(uint32_t max_
       resolution_refused_ = asked + " would make the game's picture up to " +
                             std::to_string(limit->refused_width) + " x " + std::to_string(limit->refused_height) +
                             ", more than the " + std::to_string(width_limit) + " x " + std::to_string(height_limit) +
-                            " the host can pass on with this GPU, so the game uses " +
+                            " the host can pass on with this OpenGL renderer, so the game uses " +
                             option.labels[option.selected] + ".";
     }
     if (limit->active_offered) return std::nullopt;
