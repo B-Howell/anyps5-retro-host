@@ -100,9 +100,11 @@ bool Listed(const char* const* list, size_t count, const std::string& key) {
 }
 
 #ifdef _WIN32
+constexpr bool kWindows = true;
 constexpr char kSeparators[] = "/\\";
 constexpr char kSeparator = '\\';
 #else
+constexpr bool kWindows = false;
 constexpr char kSeparators[] = "/";
 constexpr char kSeparator = '/';
 #endif
