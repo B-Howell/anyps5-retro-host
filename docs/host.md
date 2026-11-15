@@ -278,8 +278,12 @@ network left to the launcher.
   input at once and gets the other's after a simulated delay of 1 to
   `--delay` frames with jitter, in order; it steps each frame as soon as the
   window allows, with the other port `null`, and sends each late input with
-  `correct`. Each simulated frame lasts `--tick` seconds, during which the
-  test reads every host. The input is held for 1 to 12 frames at a time, so
+  `correct`. Each simulated frame lasts `--tick` seconds, or twice the
+  reference's time per frame plus a save in memory when that is longer, and
+  the test reads every host meanwhile: a host that ran frames slower than
+  they are stepped would fall behind, take every late input before running
+  its frame and so never predict (as the ThreadSanitizer build and hosted
+  macOS did). The input is held for 1 to 12 frames at a time, so
   some predictions come true and some do not, and port 2 is unplugged for 20
   frames. Every frame's `sync` must match the reference's (RAM, picture and
   state), each must come once and in order, a rollback must have happened,

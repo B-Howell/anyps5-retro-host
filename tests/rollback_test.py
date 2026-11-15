@@ -94,9 +94,23 @@ def rollback_args(check=1):
     return {'check': check, 'paced': False, 'rollback': {'frames': WINDOW}}
 
 
-def play_phase(options, players, first, count):
-    """Runs both players through frames first to first + count - 1 on simulated time. Returns the seconds
-    it took."""
+def frame_seconds(options, reference, frames, elapsed):
+    """How long a simulated frame lasts: --tick, or longer on a host slower than that. A host that runs
+    frames slower than they are stepped falls behind and takes each late input before it runs the frame,
+    so it never predicts; twice the reference's time per frame plus a save in memory (each predicted frame
+    saves first) keeps the players' hosts within a frame or two of their steps."""
+    saves = []
+    for slot in range(4):
+        saved = reference.call('saveState', {'slot': slot})
+        if not saved:
+            raise c.Failed('reference: saveState in a slot was refused')
+        saves.append(saved['micros'] / 1e6)
+    return max(options.tick, 2 * (elapsed / frames + sum(saves) / len(saves)))
+
+
+def play_phase(tick, players, first, count):
+    """Runs both players through frames first to first + count - 1 on simulated time, each frame lasting
+    tick seconds. Returns the seconds it took."""
     began = time.monotonic()
     deadline = began + 900
     now = first
@@ -105,9 +119,9 @@ def play_phase(options, players, first, count):
     while not all(player.done() for player in players):
         for player in players:
             player.tick(now)
-        # A simulated frame lasts options.tick seconds, while the hosts run what they were sent; every host is
-        # read in turn, since one left unread blocks on a full socket.
-        tick_end = time.monotonic() + options.tick
+        # While a simulated frame lasts, the hosts run what they were sent; every host is read in turn, since
+        # one left unread blocks on a full socket.
+        tick_end = time.monotonic() + tick
         while time.monotonic() < tick_end:
             for player in players:
                 try:
@@ -170,10 +184,12 @@ def network(options, match):
     reference.call('start', match.start_args('reference', lockstep=True))
     for peer in (first, second):
         peer.call('start', match.start_args(peer.name, lockstep=rollback_args()))
+    began = time.monotonic()
     expected = ls.advance([reference], 0, frames, lambda peer, frame: script[frame])['reference']
+    tick = frame_seconds(options, reference, frames, time.monotonic() - began)
     players = [Player(first, 0, script, 11, options.delay), Player(second, 1, script, 13, options.delay)]
     peers = [first, second]
-    elapsed = play_phase(options, players, 0, frames)
+    elapsed = play_phase(tick, players, 0, frames)
     wait_for_sync(peers, frames - 1)
     for peer in peers:
         if peer.log != list(range(frames)):
@@ -181,7 +197,8 @@ def network(options, match):
         compared = ls.same(f'{peer.name} against lockstep', [peer.syncs[f] for f in range(frames)], expected)
         summary = check_rollbacks(peer, peer.rollbacks, peer.pictures, reference.pictures)
         print(f'{peer.name}: {compared} frames match lockstep in RAM, picture and state; {summary}')
-    print(f'rollback: two players with up to {options.delay} frames of delay and jitter, {elapsed:.1f} s')
+    print(f'rollback: two players with up to {options.delay} frames of delay and jitter, {tick * 1000:.0f} ms a '
+          f'frame, {elapsed:.1f} s')
 
     for peer in (reference, first, second):
         peer.syncs.clear()
@@ -192,10 +209,12 @@ def network(options, match):
         if peer.call('lockstep', args) != {'frame': frames}:
             raise c.Failed(f'{peer.name}: lockstep with a check every 60 frames did not keep the frame count')
     checked = [frame for frame in range(frames, frames + later) if frame % 60 == 0]
+    began = time.monotonic()
     for frame in range(frames, frames + later):
         reference.step(frame, script[frame])
     wait_for_sync([reference], checked[-1])
-    play_phase(options, players, frames, later)
+    tick = frame_seconds(options, reference, later, time.monotonic() - began)
+    play_phase(tick, players, frames, later)
     wait_for_sync(peers, checked[-1])
     for peer in peers:
         if peer.log != checked:
@@ -203,7 +222,7 @@ def network(options, match):
         ls.same(f'{peer.name} checked every 60 frames', [peer.syncs[f] for f in checked],
                 [reference.syncs[f] for f in checked])
         summary = check_rollbacks(peer, peer.rollbacks, peer.pictures, reference.pictures)
-        print(f'{peer.name}, checking every 60 frames: {summary}')
+        print(f'{peer.name}, checking every 60 frames ({tick * 1000:.0f} ms a frame): {summary}')
     return players
 
 
@@ -396,7 +415,8 @@ def main():
     parser.add_argument('--frames', type=int, default=600, help='Frames each player runs')
     parser.add_argument('--delay', type=int, default=6, help='The most frames a player\'s input arrives late')
     parser.add_argument('--tick', type=float, default=0.004,
-                        help='Seconds each simulated frame lasts, for the hosts to run what they were sent')
+                        help='Seconds each simulated frame lasts at least, for the hosts to run what they were '
+                        'sent; longer on a host slower than that')
     options = parser.parse_args()
     options.program = disc.pad_program() if options.bios else None
     return play(options)
