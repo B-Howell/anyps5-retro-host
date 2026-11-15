@@ -291,9 +291,13 @@ network left to the launcher.
   each rollback (frames run again show only their newest picture). A second
   phase checks every 60th frame, as a match would, and prints what a rollback
   cost: the load, and each frame run again. With the test core it also checks
-  that a rollback whose last frame repeats an earlier picture still shows the
-  newest picture made again, once (the core's `fake-port2-picture` mode), and
-  that right predictions cost no rollback, that `saveState` and turning
+  that a rollback whose last frames repeat an earlier picture leaves the
+  newest picture made again in the frame ring, read pixel by pixel as a
+  launcher reads it (the core's `fake-port2-picture` mode), with at most one
+  picture per rollback; that frames run again send no `rumble` and that only
+  motors ending differently from what the player was last told are sent
+  (the core rumbles while Cross is held on port 1, and the corrections turn it
+  off, or off and back on); that right predictions cost no rollback, that `saveState` and turning
   rollback off are refused while frames are not confirmed and that a load
   forgets them, and the protocol errors of `step` and `correct`. With
   `--bios` it runs the real SwanStation core on the pad program below.

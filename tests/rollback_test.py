@@ -255,10 +255,22 @@ def right_guesses(match):
     print('predictions that come true cause no rollback and match lockstep')
 
 
+def settled(peer, last):
+    """Waits for the sync of frame last and reads what followed. Returns the rollbacks, which must all
+    end after frame last: the host takes whichever corrections have come at each frame's end, so the
+    corrections of frames 5 to 7 may come as one rollback or several, each from its first wrong frame."""
+    wait_for_sync([peer], last, 10)
+    time.sleep(0.3)
+    peer.drain()
+    if not peer.rollbacks or peer.rollbacks[0]['frame'] != 5 or             any(report['frame'] + report['frames'] != last + 1 for report in peer.rollbacks):
+        raise c.Failed(f'{peer.name}: expected rollbacks from frame 5 to {last}, got {peer.rollbacks}')
+    return peer.rollbacks
+
+
 def resimulated_picture(match):
-    """After a rollback whose last frame repeats an earlier picture, the newest picture the frames made
-    again is shown, not the predicted one, and only once; and nothing is shown for frames run again
-    before it."""
+    """After a rollback whose last frames repeat an earlier picture, the newest picture the frames made
+    again is what the frame ring shows, not the predicted one; and frames run again show nothing before
+    it."""
     system = Path(match.paths['system'])
     marker = system / 'fake-port2-picture'
     marker.write_bytes(b'')
@@ -279,24 +291,60 @@ def resimulated_picture(match):
                 peer.pump(timeout=0.1)
             except c.Idle:
                 pass
+        if peer.first_pixel()[0] != 16:
+            raise c.Failed(f'picture: the predicted frames show {peer.first_pixel()}, not 16 in red, from port 2')
         select = 1 << 2
         peer.correct(5, 1, ls.port(32))
         peer.correct(6, 1, ls.port(select))
         peer.correct(7, 1, ls.port(select))
-        wait_for_sync([peer], 7, 10)
-        time.sleep(0.3)
-        peer.drain()
-        if len(peer.rollbacks) != 1 or peer.rollbacks[0]['frame'] != 5 or peer.rollbacks[0]['frames'] != 3:
-            raise c.Failed(f'picture: expected one rollback of frames 5 to 7, got {peer.rollbacks}')
-        if peer.pictures != shown + 4:
-            raise c.Failed(f'picture: {peer.pictures - shown} pictures for 3 predicted frames and a rollback ending '
-                           'on a repeated picture, not 4')
+        rollbacks = settled(peer, 7)
+        # Each rollback shows one picture at most; the first, from frame 5, made one.
+        if not shown + 4 <= peer.pictures <= shown + 3 + len(rollbacks):
+            raise c.Failed(f'picture: {peer.pictures - shown} pictures for 3 predicted frames and '
+                           f'{len(rollbacks)} rollbacks ending on a repeated picture')
+        if peer.first_pixel()[0] != 32:
+            raise c.Failed(f'picture: after the rollback the ring shows {peer.first_pixel()}, not 32 in red, '
+                           'made by frame 5')
         peer.host.send_message({'type': 'shutdown'})
         if peer.host.exits(15) != 0:
             raise c.Failed('picture: the host did not exit cleanly')
     finally:
         marker.unlink(missing_ok=True)
-    print('a rollback ending on a repeated picture shows the newest picture made again, once')
+    print('a rollback ending on a repeated picture shows the newest picture made again')
+
+
+def resimulated_rumble(match):
+    """The test core rumbles port 1's large motor while Cross is held there. Frames run again send no
+    rumble of their own: once they are done, the player is told only of motors that ended differently
+    from what it was last told."""
+    cross = 1 << 0
+    for name, corrections, ends_on in (('rumble-off', [0, 0, 0], False),
+                                       ('rumble-on', [0, cross, cross], True)):
+        peer = match.peer(name)
+        peer.call('start', match.start_args(peer.name, lockstep=rollback_args()))
+        ls.advance([peer], 0, 5, lambda p, f: [ls.port(cross), ls.port(0)])
+        time.sleep(0.3)
+        peer.drain()
+        if [(m['port'], m['strong']) for m in peer.rumbles] != [(0, 65535)]:
+            raise c.Failed(f'{name}: holding Cross sent {peer.rumbles}, not one rumble on')
+        for frame in range(5, 8):
+            peer.step(frame, [None, ls.port(0)])
+        time.sleep(0.3)
+        peer.drain()
+        if len(peer.rumbles) != 1:
+            raise c.Failed(f'{name}: the predicted frames, Cross still held, sent {peer.rumbles[1:]}')
+        for frame, buttons in zip(range(5, 8), corrections):
+            peer.correct(frame, 0, ls.port(buttons))
+        rollbacks = settled(peer, 7)
+        told = [m['strong'] for m in peer.rumbles if m['port'] == 0]
+        if any(a == b for a, b in zip(told, told[1:])) or told[-1] != (65535 if ends_on else 0):
+            raise c.Failed(f'{name}: after {len(rollbacks)} rollbacks the player was told {told}')
+        if len(rollbacks) == 1 and len(told) != (1 if ends_on else 2):
+            raise c.Failed(f'{name}: one rollback sent the rumble of the frames run again: {told}')
+        peer.host.send_message({'type': 'shutdown'})
+        if peer.host.exits(15) != 0:
+            raise c.Failed(f'{name}: the host did not exit cleanly')
+    print('frames run again send no rumble; motors that ended differently are told once')
 
 
 def refusals(match):
@@ -389,8 +437,10 @@ def play(options):
     try:
         players = network(options, match)
         if not match.real:
+            c.load_atomics(Path(options.core).resolve())
             right_guesses(match)
             resimulated_picture(match)
+            resimulated_rumble(match)
             refusals(match)
             protocol_errors(match)
         for player in players:

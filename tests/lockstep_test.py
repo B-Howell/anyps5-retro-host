@@ -42,6 +42,8 @@ class Peer:
         self.log = []
         self.pictures = 0
         self.rollbacks = []
+        self.rumbles = []
+        self.ring = None
         self.epoch = None
         self.host.send_message({'type': 'hello', 'minVersion': 1, 'maxVersion': 1, 'pixelFormats': ['rgba8']})
         welcome = self.pump(lambda m: m.get('type') in ('welcome', 'unsupported'))
@@ -56,7 +58,10 @@ class Peer:
             if left <= 0:
                 raise c.Idle(f'{self.name}: the host sent nothing that was waited for')
             message, descriptors = self.host.read(left)
-            c.close_all(descriptors)
+            if message.get('type') == 'ring':
+                self.ring = self.host.ring(message, descriptors)
+            else:
+                c.close_all(descriptors)
             if message.get('type') == 'sync':
                 self.syncs[message['frame']] = message
                 self.log.append(message['frame'])
@@ -64,8 +69,22 @@ class Peer:
                 self.pictures += 1
             elif message.get('type') == 'rollback':
                 self.rollbacks.append(message)
+            elif message.get('type') == 'rumble':
+                self.rumbles.append(message)
             if wanted is None or wanted(message):
                 return message
+
+    def first_pixel(self):
+        """The red, green and blue of the top left pixel of the newest picture in the frame ring, read as
+        protocol.md "Frame ring" says a launcher reads it."""
+        if self.ring is None:
+            raise c.Failed(f'{self.name}: no frame ring was sent')
+        slot = self.ring.latest()
+        if slot is None:
+            raise c.Failed(f'{self.name}: the frame ring holds no picture')
+        index = self.ring.load(28)
+        at = self.ring.snapshot['headerBytes'] + index * self.ring.slot_bytes
+        return tuple(self.ring.memory[at:at + 3])
 
     def drain(self):
         """Reads every message already sent, up to the first pause between messages."""
