@@ -9,7 +9,8 @@
 # also apply where git writes CRLF (Windows, core.autocrlf). Last it writes anyps5-core-source.txt
 # into the checkout, which the sixth patch turns into the core's build identity (docs/netplay.md
 # "Core build identity"): the SwanStation commit and each patch's SHA-256 and name, in the order
-# applied, one per line with LF endings. The patches are LF in every checkout (.gitattributes).
+# applied, one per line with LF endings. The patches are LF in every checkout (.gitattributes). A
+# checkout with any change or untracked file is refused, so the manifest names the source exactly.
 set -euo pipefail
 
 if [[ $# -ne 1 ]]; then
@@ -24,6 +25,12 @@ sha256() {
     shasum -a 256 < "$1" | cut -d ' ' -f 1
   fi
 }
+
+if [[ -n "$(git -C "$1" status --porcelain --untracked-files=normal)" ]]; then
+  echo "$1 differs from its commit; the patches and the core build identity need a clean checkout" >&2
+  git -C "$1" status --short >&2
+  exit 1
+fi
 
 patches=$(cd "$(dirname "$0")/patches" && pwd)
 manifest="anyps5-retro-host core source 1

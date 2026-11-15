@@ -411,6 +411,17 @@ option MSB_FIRST=OFF
   another `library_name`. The CPU recompiler SwanStation builds for x64 or
   arm64 is meant to compute exactly as its interpreter does, and a fault in
   one shows as a desync in `sync`, not as a different identity.
+- The script refuses a SwanStation checkout that differs from its commit in
+  any way (a staged or unstaged change, an untracked file), so the manifest
+  names the source it patched exactly, as Dolphin's `-dirty` mark is meant
+  to. It cannot see an edit made after it ran, or a compiler flag that
+  changes what the code computes. The identity is therefore a promise about
+  builds made the way the `release` workflow makes them, and a release
+  launcher runs only those: the signed host releases (protocol.md "Finding
+  and checking the host"). A changed comment or patch name changes the
+  identity although the emulation is the same; that errs on the safe side.
+  Equal identities do not prove that two machines run alike either; the
+  `sync` hashes of every match are that check.
 - Without `anyps5-core-source.txt` (a SwanStation built without the script)
   the core keeps SwanStation's own `library_version`, which is not of the
   `anyps5-1-` form, so a launcher does not play online with it.
