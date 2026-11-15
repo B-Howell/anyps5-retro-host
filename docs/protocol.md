@@ -322,17 +322,24 @@ it says that the file name cannot be used and sends nothing.
 
 File extensions (`.cue`, `.CUE`) match without regard to ASCII case.
 
-A file named inside a `.cue` or `.m3u` is found as the core finds it: a
-relative name against the directory of the file that names it, and an
-absolute or UNC name as it is.
+A file named inside a `.cue` or `.m3u` is found as the core finds it.
+SwanStation treats a name as absolute only when it is a drive path on
+Windows (`C:\Games\a.bin` or `C:/Games/a.bin`) or starts with `/` on Linux
+and macOS, and the core opens such a name as written. It joins any other
+name to the directory of the file that names it. The host's own reading of
+an `.m3u` entry, for `initialDisc`, follows the same rule.
 
-**Known risk: UNC names.** On Windows, a `.cue` or `.m3u` can name a UNC
-path (`\\server\share\track.bin`), and the host opens it as written. Windows
-then connects to that server and tries to sign in to it with the player's
-Windows account. When that sign-in uses NTLM, the server gets the account name
-and a response it can try to crack offline. A shared `.cue` or `.m3u` can
-do this without the player seeing it. Version 1 does not prevent it; a player
-should only open `.cue` and `.m3u` files from sources they trust.
+**UNC names.** On Windows, a `.cue` or `.m3u` can name a UNC path
+(`\server\share\track.bin`). The core does not open it as a UNC path: it
+joins the name to the directory of the file that names it, and Windows reads
+the run of separators as one, so the name points to a file under that
+directory (`C:\Games\server\share\track.bin`). So a UNC name in a shared
+`.cue` or `.m3u` does not make Windows connect to that server. A drive path
+is still opened as written, so a name on a mapped network drive reaches the
+server behind that drive. A core that opened UNC names as written would let
+the named server get the player's Windows account name and, when the sign-in
+uses NTLM, a response it can try to crack offline. Before the host moves to
+another SwanStation commit, its maintainers check this again.
 
 ## Messages
 

@@ -74,6 +74,11 @@ bool IsProtocolPath(std::string_view path, bool windows) {
   return windows ? WindowsPath(path) : PosixPath(path);
 }
 
+bool IsCoreAbsolute(std::string_view name, bool windows) {
+  if (!windows) return !name.empty() && name[0] == '/';
+  return name.size() >= 3 && IsLetter(name[0]) && name[1] == ':' && (name[2] == '/' || name[2] == '\\');
+}
+
 bool HasExtension(std::string_view path, std::string_view extension) {
   if (path.size() < extension.size()) return false;
   const auto tail = path.substr(path.size() - extension.size());

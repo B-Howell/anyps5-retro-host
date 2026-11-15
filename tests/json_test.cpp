@@ -57,6 +57,21 @@ int main() {
   Expect(!IsProtocolPath("C:a.cue", true), "a drive-relative path");
   Expect(!IsProtocolPath(R"(\a.cue)", true), "a root-relative path");
   Expect(!IsProtocolPath(std::string("/a\0b", 4), false), "a path with NUL");
+  using retro_host::IsCoreAbsolute;
+  Expect(IsCoreAbsolute(R"(C:\Games\a.bin)", true), "a listed Windows drive path is opened as written");
+  Expect(IsCoreAbsolute("d:/Games/a.bin", true), "a listed drive path with a slash and a lower-case drive");
+  Expect(!IsCoreAbsolute(R"(\nas\share\a.bin)", true), "a listed UNC name is joined to the listing's folder");
+  Expect(!IsCoreAbsolute("//nas/share/a.bin", true), "a listed UNC name with slashes is joined too");
+  Expect(!IsCoreAbsolute(R"(\?\C:\Games\a.bin)", true), "a listed long path is joined too");
+  Expect(!IsCoreAbsolute(R"(\a.bin)", true), "a listed root-relative name is joined");
+  Expect(!IsCoreAbsolute("/a.bin", true), "a listed name starting with / is joined on Windows");
+  Expect(!IsCoreAbsolute("C:a.bin", true), "a listed drive-relative name is joined");
+  Expect(!IsCoreAbsolute(R"(1:\a.bin)", true), "a drive is a letter");
+  Expect(!IsCoreAbsolute("C:", true), "a bare drive is joined");
+  Expect(IsCoreAbsolute("/home/a/b.bin", false), "a listed POSIX absolute name");
+  Expect(!IsCoreAbsolute(R"(C:\a.bin)", false), "a Windows drive path on POSIX is joined");
+  Expect(!IsCoreAbsolute("b.bin", false), "a relative name is joined");
+  Expect(!IsCoreAbsolute("", true) && !IsCoreAbsolute("", false), "an empty name is joined");
   Expect(retro_host::HasExtension("/a/Game.CUE", ".cue"), "extensions ignore case");
 
   if (failures == 0) std::printf("All JSON and path checks passed.\n");

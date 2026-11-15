@@ -16,6 +16,7 @@
 #include <tuple>
 #include <utility>
 
+#include "paths.h"
 #include "resolution.h"
 
 namespace retro_host {
@@ -118,15 +119,6 @@ std::string Stem(const std::string& path) {
 std::string Directory(const std::string& path) {
   const size_t slash = path.find_last_of(kSeparators);
   return slash == std::string::npos ? std::string() : path.substr(0, slash + 1);
-}
-
-bool IsAbsolute(const std::string& path) {
-  if (!path.empty() && IsSeparator(path[0])) return true;
-#ifdef _WIN32
-  return path.size() > 2 && path[1] == ':' && IsSeparator(path[2]);
-#else
-  return false;
-#endif
 }
 
 }  // namespace
@@ -437,7 +429,7 @@ std::optional<std::string> Game::PlaylistEntry(unsigned index) const {
     while (first < line.size() && (line[first] == ' ' || line[first] == '\t')) ++first;
     line.erase(0, first);
     if (line.empty() || line[0] == '#') continue;
-    if (at == index) return IsAbsolute(line) ? line : Directory(config_.disc) + line;
+    if (at == index) return IsCoreAbsolute(line, kWindows) ? line : Directory(config_.disc) + line;
     ++at;
   }
   return std::nullopt;
