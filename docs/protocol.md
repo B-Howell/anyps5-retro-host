@@ -341,7 +341,7 @@ name to the directory of the file that names it. The host's own reading of
 an `.m3u` entry, for `initialDisc`, follows the same rule.
 
 **UNC names.** On Windows, a `.cue` or `.m3u` can name a UNC path
-(`\server\share\track.bin`). The core does not open it as a UNC path: it
+(`\\server\share\track.bin`). The core does not open it as a UNC path: it
 joins the name to the directory of the file that names it, and Windows reads
 the run of separators as one, so the name points to a file under that
 directory (`C:\Games\server\share\track.bin`). So a UNC name in a shared

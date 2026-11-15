@@ -60,9 +60,9 @@ int main() {
   using retro_host::IsCoreAbsolute;
   Expect(IsCoreAbsolute(R"(C:\Games\a.bin)", true), "a listed Windows drive path is opened as written");
   Expect(IsCoreAbsolute("d:/Games/a.bin", true), "a listed drive path with a slash and a lower-case drive");
-  Expect(!IsCoreAbsolute(R"(\nas\share\a.bin)", true), "a listed UNC name is joined to the listing's folder");
+  Expect(!IsCoreAbsolute(R"(\\nas\share\a.bin)", true), "a listed UNC name is joined to the listing's folder");
   Expect(!IsCoreAbsolute("//nas/share/a.bin", true), "a listed UNC name with slashes is joined too");
-  Expect(!IsCoreAbsolute(R"(\?\C:\Games\a.bin)", true), "a listed long path is joined too");
+  Expect(!IsCoreAbsolute(R"(\\?\C:\Games\a.bin)", true), "a listed long path is joined too");
   Expect(!IsCoreAbsolute(R"(\a.bin)", true), "a listed root-relative name is joined");
   Expect(!IsCoreAbsolute("/a.bin", true), "a listed name starting with / is joined on Windows");
   Expect(!IsCoreAbsolute("C:a.bin", true), "a listed drive-relative name is joined");
