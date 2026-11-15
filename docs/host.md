@@ -32,6 +32,7 @@ through kqueue. On Windows a thread waits on the launcher's process handle.
 | [`src/platform_posix.cpp`](../src/platform_posix.cpp), [`src/platform_windows.cpp`](../src/platform_windows.cpp) | The control stream, process setup, watching the launcher, shared memory, loading the core and files |
 | [`src/audio.cpp`](../src/audio.cpp) | Sound output through miniaudio, with the volume, mute and pause |
 | [`tools/package_release.py`](../tools/package_release.py) | Packs, lists and checks a release (see "Releases" below) |
+| [`tools/core_identity.py`](../tools/core_identity.py) | Computes the core build identity from the SwanStation commit and `cores/patches` without a build, and compares what each system's core reported ([netplay.md](netplay.md) "Core build identity") |
 
 ## Rollback
 
@@ -240,7 +241,11 @@ network left to the launcher.
 - [`tests/host_test.py`](../tests/host_test.py) covers what the fixtures do
   not: a stuck core (the stall limit, then `release` replying and the host
   exiting), a core that is not a library and a missing disc (each ending the
-  game with `errorCode` `core` or `disc`), and eight games in a row with
+  game with `errorCode` `core` or `disc`), `status.core` (`core_identity`:
+  the test core's `library_version` from the environment variable
+  `FAKE_CORE_VERSION`, passed as it is when it is printable ASCII of at most
+  256 bytes and as `""` otherwise, kept after the game ends, and `null` for a
+  core that did not load), and eight games in a row with
   `volume`, `pause` and `stop` calls in between, and the resolution limits
   (`gpu_limits`): the fake core started at 16x must start at 8x, offer 1x to
   8x, explain itself in `resolutionError`, draw 5120-wide frames, refuse 16x
@@ -333,7 +338,12 @@ network left to the launcher.
   two pictures a second or more apart are not black and differ (the
   program animates its background), and that `hardware` and `resolutionError`
   agree (a machine without an OpenGL context draws in software and must say
-  so). With `--expect-opengl`, which `real-core.yml` passes on Linux and macOS (the
+  so). With `--expect-core-version`, which both workflows pass with the value
+  [`tools/core_identity.py`](../tools/core_identity.py) computes, `welcome`
+  must list `coreIdentity` and `status.core` must be `SwanStation` with that
+  version; `--core-identity-out` writes `status.core`, and `real-core.yml`'s
+  `same-core` job checks that Windows, both Linux runners and macOS wrote the
+  same one. With `--expect-opengl`, which `real-core.yml` passes on Linux and macOS (the
   release workflow's check of the unpacked zips does not), the test also
   fails when the host made no OpenGL context, so neither system can slip back
   to the core's software renderer unnoticed. The Windows runner makes no
@@ -362,10 +372,15 @@ their names by
 The `real-core` and `release` workflows apply them after fetching SwanStation
 and before building it, and the release's source archive holds the patched
 source. The script applies them to git's index and checks the files out
-again, so they apply where git writes CRLF line endings too. A patch that no
+again, so they apply where git writes CRLF line endings too. Then it writes
+`anyps5-core-source.txt` into the checkout, the source part of the core
+build identity ([netplay.md](netplay.md) "Core build identity"), which the
+source archive holds too. A patch that no
 longer applies stops the build; one moved to a new `SWANSTATION_COMMIT` is
-made again with `git diff` against that commit. Each fixes something online
-play needs from a state ([netplay.md](netplay.md) "Determinism"):
+made again with `git diff` against that commit, after the patches before it.
+The first five fix something online play needs from a state
+([netplay.md](netplay.md) "Determinism"); the sixth gives the core its build
+identity:
 
 | Patch | What it changes |
 | --- | --- |
@@ -374,6 +389,7 @@ play needs from a state ([netplay.md](netplay.md) "Determinism"):
 | [`swanstation-3-vram-upload-colour`](../cores/patches/swanstation-3-vram-upload-colour.patch) | The shader that writes 16-bit video memory into the GPU's texture turns each 5-bit channel into the same byte the CPU does, as an exact multiple of 1/255, so video memory loaded from a state shows what the game drew |
 | [`swanstation-4-spu-sample-event-restore`](../cores/patches/swanstation-4-spu-sample-event-restore.patch) | Loading a state no longer reschedules the sound unit's always-active sample event, which ran the sample ticks of the timeline being discarded against the loaded sound unit (its tick carry, and so its timing, changed); the event's saved timing is restored with the other timing events. The AnyPS5 Desktop launcher's integrated builds carry the same change (`tool/patches/swanstation-spu-checkpoint.patch`), found by its PS1 determinism harness. Without it, `lockstep_test.py` on the pad program fails its memory-state run at the first frame (the state hash differs after a load) |
 | [`swanstation-5-port-change-keeps-other-controllers`](../cores/patches/swanstation-5-port-change-keeps-other-controllers.patch) | A port whose controller type changes gets a new controller; the other ports keep theirs. Stock SwanStation made every port's controller anew whenever any port's type changed, so plugging in port 2 (a friend joining) put port 1 back in digital mode and dropped the game's lock on it, which a real console does not do. Without it, `pad_test.py` fails at the frame port 2 is unplugged |
+| [`swanstation-6-core-build-identity`](../cores/patches/swanstation-6-core-build-identity.patch) | When the checkout holds the `anyps5-core-source.txt` the patch script writes (the SwanStation commit and each patch's SHA-256), CMake adds the build options that change what the core computes (`MSB_FIRST`), writes the whole as `anyps5-core-manifest.txt` in the build folder, and the core's `library_version` becomes `anyps5-1-<SHA-256 of it>`, the core build identity the host reports in `status.core` ([netplay.md](netplay.md) "Core build identity"). Without the file the core keeps SwanStation's own `library_version` |
 
 States of the patched core are version 58, which stock SwanStation does not
 load; the host only ever runs the core of its own release.

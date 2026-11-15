@@ -68,6 +68,8 @@ constexpr size_t kPathBytes = 3 * 32767 + 1;
 // The BIOS image sizes SwanStation loads: PS1, PS2 and PS3 (src/core/bios.h, BIOS_SIZE*).
 constexpr size_t kBiosSizes[] = {0x80000, 0x400000, 0x3E66F0};
 constexpr size_t kTextBytes = 256;
+// The longest library_name or library_version status.core passes on.
+constexpr size_t kIdentityBytes = 256;
 constexpr size_t kErrorBytes = 1024;
 // Lockstep (protocol.md "lockstep"): steps queued ahead of the game at most, how long the game's
 // thread waits for one before it looks at other work again, and the state file's header.
@@ -150,6 +152,18 @@ std::string Directory(const std::string& path) {
 
 bool SameInput(const PortInput& a, const PortInput& b) { return a.buttons == b.buttons && a.sticks == b.sticks; }
 
+// A core's library_name or library_version as status.core gives it: printable ASCII of at most
+// kIdentityBytes bytes, or "" for anything else, so a launcher can compare and show it as it is.
+std::string IdentityText(const char* text) {
+  if (!text) return std::string();
+  const size_t length = std::strlen(text);
+  if (length > kIdentityBytes) return std::string();
+  for (size_t i = 0; i < length; ++i) {
+    if (text[i] < 0x20 || text[i] > 0x7E) return std::string();
+  }
+  return std::string(text, length);
+}
+
 uint64_t MicrosSince(std::chrono::steady_clock::time_point began) {
   return static_cast<uint64_t>(
       std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - began).count());
@@ -183,7 +197,7 @@ bool Game::LoadCore(std::string& error) {
                                   "retro_set_input_state", "retro_init", "retro_deinit", "retro_load_game",
                                   "retro_unload_game", "retro_run", "retro_get_system_av_info",
                                   "retro_set_controller_port_device", "retro_get_memory_data",
-                                  "retro_get_memory_size"};
+                                  "retro_get_memory_size", "retro_get_system_info"};
   for (const char* name : required) {
     if (!library_.Symbol(name)) {
       error = std::string("The core has no ") + name + ".";
@@ -196,6 +210,10 @@ bool Game::LoadCore(std::string& error) {
     library_.Close();
     return false;
   }
+  retro_system_info info{};
+  Get<void (*)(retro_system_info*)>("retro_get_system_info")(&info);
+  std::lock_guard<std::mutex> lock(mutex_);
+  core_identity_.emplace(IdentityText(info.library_name), IdentityText(info.library_version));
   return true;
 }
 
@@ -923,6 +941,11 @@ Json Game::Status() const {
                     {"progressLabel", nullptr},
                     {"progressPercent", nullptr},
                     {"options", std::move(options)}};
+  if (core_identity_) {
+    status.emplace_back("core", JsonObject{{"name", core_identity_->first}, {"version", core_identity_->second}});
+  } else {
+    status.emplace_back("core", nullptr);
+  }
   if (disc_.labels.size() > 1) {
     JsonObject discs;
     discs.emplace_back("labels", JsonArray(disc_.labels.begin(), disc_.labels.end()));

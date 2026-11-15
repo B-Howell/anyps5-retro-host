@@ -257,6 +257,8 @@ class Game {
   bool finished_ = false;
   std::string error_;
   std::string error_code_;
+  // The core's retro_get_system_info names (protocol.md "status", core), once it is loaded.
+  std::optional<std::pair<std::string, std::string>> core_identity_;
   double aspect_ = 4.0 / 3.0;
   std::vector<Option> options_;
   bool options_changed_ = false;

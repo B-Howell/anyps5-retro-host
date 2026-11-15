@@ -14,11 +14,13 @@ on:
     paths:
       - .github/workflows/release.yml
       - tools/package_release.py
+      - tools/core_identity.py
       - cores/**
   pull_request:
     paths:
       - .github/workflows/release.yml
       - tools/package_release.py
+      - tools/core_identity.py
       - cores/**
   workflow_dispatch:
 permissions:
@@ -181,9 +183,11 @@ jobs:
           ${{ matrix.python }} -c "import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])" "release/$stem.zip" unpacked
           chmod +x "unpacked/${{ matrix.unpacked-host }}"
           cp "${{ matrix.ring-access }}" unpacked/
+          identity="$(${{ matrix.python }} tools/core_identity.py --swanstation-commit "$SWANSTATION_COMMIT")"
           ${{ matrix.python }} tests/real_core.py --host "unpacked/${{ matrix.unpacked-host }}" \
             --core "unpacked/${{ matrix.unpacked-core }}" --bios ps1-files/openbios.bin \
-            --program ps1-files/hello.exe --log real-core.log --picture real-core.png
+            --program ps1-files/hello.exe --log real-core.log --picture real-core.png \
+            --expect-core-version "$identity"
       - if: failure()
         run: tail -200 real-core.log || true
       - uses: actions/upload-artifact@v4

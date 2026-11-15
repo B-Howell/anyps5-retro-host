@@ -4,7 +4,9 @@
 # Boots the real SwanStation core through the host on each system, runs two of them in lockstep,
 # and two players' hosts in rollback against one in lockstep. The BIOS and one program are built
 # here from pcsx-redux's nugget (MIT): OpenBIOS and the psyqo "hello" example; the pad program comes
-# from tests/make_test_disc.py. No Sony BIOS or game is used.
+# from tests/make_test_disc.py. No Sony BIOS or game is used. Each system's core must report the
+# core build identity tools/core_identity.py computes, and the same-core job checks that every
+# system reports the same one (docs/netplay.md "Core build identity").
 name: real-core
 on: [push, pull_request]
 permissions:
@@ -106,8 +108,10 @@ jobs:
         run: |
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build --config Release
-      - name: Run the real core
-        run: ${{ matrix.python }} tests/real_core.py --host ${{ matrix.host }} --core ${{ matrix.core }} --bios ps1-files/openbios.bin --program ps1-files/hello.exe --log build/real-core.log --picture build/real-core.png ${{ matrix.opengl }}
+      - name: Run the real core, which must report the core build identity
+        run: |
+          identity="$(${{ matrix.python }} tools/core_identity.py --swanstation-commit "$SWANSTATION_COMMIT")"
+          ${{ matrix.python }} tests/real_core.py --host ${{ matrix.host }} --core ${{ matrix.core }} --bios ps1-files/openbios.bin --program ps1-files/hello.exe --log build/real-core.log --picture build/real-core.png ${{ matrix.opengl }} --expect-core-version "$identity" --core-identity-out "build/core-identity-${{ matrix.os }}.json"
       - name: Two real cores in lockstep, fed the same input, frame for frame, and states saved and loaded in memory
         run: ${{ matrix.python }} tests/lockstep_test.py --host ${{ matrix.host }} --core ${{ matrix.core }} --bios ps1-files/openbios.bin --program ps1-files/hello.exe --log build/lockstep.log --frames 600 ${{ matrix.budget }}
       - name: The same on the pad program, whose input changes the console's controllers and sound unit
@@ -126,3 +130,25 @@ jobs:
           name: real-core-${{ matrix.os }}
           path: build/real-core.png
           if-no-files-found: ignore
+      - uses: actions/upload-artifact@v4
+        with:
+          name: core-identity-${{ matrix.os }}
+          path: build/core-identity-${{ matrix.os }}.json
+          if-no-files-found: error
+
+  same-core:
+    needs: run
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: core-identity-*
+          path: identities
+          merge-multiple: true
+      - name: Windows, Linux and macOS builds report the same core build identity
+        run: |
+          test "$(ls identities/*.json | wc -l)" -eq 4
+          python3 tools/core_identity.py --same identities/*.json --swanstation-commit "$SWANSTATION_COMMIT"

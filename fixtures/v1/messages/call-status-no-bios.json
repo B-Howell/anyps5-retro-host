@@ -20,7 +20,11 @@
       "graphicsPending": false,
       "progressLabel": null,
       "progressPercent": null,
-      "options": {}
+      "options": {},
+      "core": {
+        "name": "SwanStation",
+        "version": "anyps5-1-0000000000000000000000000000000000000000000000000000000000000000"
+      }
     }
   }
 }

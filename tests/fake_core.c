@@ -24,7 +24,10 @@
  * inside retro_run, so a test can act while a frame is being run. While it holds fake-port2-picture,
  * a software frame's colour comes from port 2's buttons, and a frame with Select held on port 2
  * repeats the last picture (the video callback without pixels), as a core does for a frame that
- * drew nothing new. */
+ * drew nothing new.
+ *
+ * Its library_version is "1", or the environment variable FAKE_CORE_VERSION when it is set, so a
+ * test can give the host a core build identity it must not pass on (protocol.md "status", core). */
 
 #include <libretro.h>
 
@@ -234,7 +237,8 @@ RETRO_API void retro_deinit(void) {}
 RETRO_API void retro_get_system_info(struct retro_system_info* info) {
   memset(info, 0, sizeof *info);
   info->library_name = "fake";
-  info->library_version = "1";
+  const char* version = getenv("FAKE_CORE_VERSION");
+  info->library_version = version ? version : "1";
   info->valid_extensions = "cue|chd|pbp|m3u";
   info->need_fullpath = true;
 }

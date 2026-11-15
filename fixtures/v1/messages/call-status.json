@@ -38,6 +38,10 @@
           "restart": false
         }
       },
+      "core": {
+        "name": "SwanStation",
+        "version": "anyps5-1-0000000000000000000000000000000000000000000000000000000000000000"
+      },
       "discs": {
         "labels": [
           "Disc 1",

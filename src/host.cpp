@@ -185,7 +185,7 @@ Host::Outcome Host::Hello(const Json& message) {
                        {"version", 1},
                        {"pid", ProcessId()},
                        {"hostVersion", ANYPS5_RETRO_HOST_VERSION},
-                       {"capabilities", JsonArray{"ps1", "ps1Lockstep", "ps1Rollback"}},
+                       {"capabilities", JsonArray{"ps1", "ps1Lockstep", "ps1Rollback", "coreIdentity"}},
                        {"pixelFormat", format_name}}));
   return Outcome::kContinue;
 }

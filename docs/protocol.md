@@ -412,6 +412,7 @@ a method whose capability the host did not list.
 | `ps1` | The methods below, for PS1 games, with controller ports 1 and 2 |
 | `ps1Lockstep` | [Lockstep](#lockstep): `start.lockstep`, the methods `lockstep`, `saveState` and `loadState`, and the messages `step` and `sync` |
 | `ps1Rollback` | [Rollback](#rollback), with `ps1Lockstep`: `lockstep.rollback`, `null` ports in `step`, and the messages `correct` and `rollback` |
+| `coreIdentity` | `core` in [`status`](#status): the loaded core's name and build identity, which two players' launchers compare before a match |
 
 Later versions add capabilities such as PS2 and PS3.
 
@@ -620,6 +621,7 @@ No argument. Returns `null` when no game is loaded, or:
  "resolutionError":"","graphicsPending":false,"progressLabel":null,"progressPercent":null,
  "options":{"swanstation_GPU_ResolutionScale":{"title":"Internal Resolution","values":["1","2","4"],
    "labels":["1x","2x","4x"],"selected":2,"activeValue":"4","restart":false}},
+ "core":{"name":"SwanStation","version":"anyps5-1-0000000000000000000000000000000000000000000000000000000000000000"},
  "discs":{"labels":["Disc 1","Disc 2"],"inserted":0,"insertedDiscPath":"D:\\Games\\PS1\\FF7\\FF7 (Disc 1).cue",
    "playedDiscPath":"D:\\Games\\PS1\\FF7\\FF7 (Disc 1).cue","busy":false,"failed":false}}
 ```
@@ -637,6 +639,7 @@ No argument. Returns `null` when no game is loaded, or:
 | `progressLabel` | string or null | What is loading right now, while there is something to show |
 | `progressPercent` | integer 0 to 100, or null | How far it is, when known |
 | `options` | object | Each core option the player can change now, by key |
+| `core` | object or null | Capability `coreIdentity`: the core the game loaded, or `null` until it is loaded and when it could not be (`errorCode` `core`). It stays once the game has ended. See below |
 | `discs` | object, optional | Present for multi-disc games |
 
 | `errorCode` | Meaning |
@@ -651,9 +654,24 @@ No argument. Returns `null` when no game is loaded, or:
 | `other` | Any other cause |
 
 The host always sends every field above (`discs` only for a multi-disc
-game), including for a game that ended before its first frame. The shorter
+game, `core` only with the `coreIdentity` capability), including for a game
+that ended before its first frame. The shorter
 form in [Host failure](#host-failure) is never sent by a host; only the
 launcher's client reports it.
+
+`core` has `name` and `version`: the `library_name` and `library_version`
+the core gives `retro_get_system_info` when the host loads it, each as it is
+when it is printable ASCII (0x20 to 0x7E) of at most 256 bytes, and `""`
+otherwise. The host's SwanStation builds report `SwanStation` and
+`anyps5-1-<64 lowercase hex digits>`, the core build identity
+[netplay.md](netplay.md) "Core build identity" defines: the same on Windows,
+Linux and macOS for a core built from the same SwanStation commit, with the
+same patches and emulation build options. A Debug build reports another
+`name` (`SwanStation Debug`), and a core built without the host's patch
+script keeps SwanStation's own `version` (`1.0.0 ` and a git description).
+Before a match each launcher compares both strings with its friend's, and
+plays online only when both are equal and `version` has the `anyps5-1-`
+form; anything else is a different core. The host does not judge the value.
 
 Each option has `title` (string), `values` (array of strings), `labels`
 (array of strings, the same length as `values`), `selected` (index into
@@ -738,8 +756,9 @@ launcher does not show an error, and it starts a new host for the next game.
 
 Capability `ps1Lockstep`. A game in lockstep runs one frame for each `step`
 the launcher sends, with exactly the input in it, and runs no frame without
-one. Two hosts that start the same game with the same core, BIOS and options,
-or that load the same saved state, and are given the same steps, stay alike
+one. Two hosts that start the same game with the same core (the same
+`status.core`, capability `coreIdentity`), BIOS and options, or that load
+the same saved state, and are given the same steps, stay alike
 frame for frame. Each sends a [`sync`](#sync) with hashes of what the frame
 left behind, so the launchers can compare them. The launcher does all the
 networking; [netplay.md](netplay.md) is the design this is the first step of.

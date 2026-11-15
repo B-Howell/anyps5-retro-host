@@ -107,6 +107,43 @@ def unloadable(program, core, log):
         session.close()
 
 
+def core_identity(program, core, log):
+    """status.core gives the core's library_name and library_version as printable ASCII of at most
+    256 bytes, "" for anything else, and null for a core that did not load."""
+    cases = [(None, '1'), ('anyps5-1-' + 'a' * 64, 'anyps5-1-' + 'a' * 64), ('x' * 256, 'x' * 256),
+             ('x' * 257, ''), ('caf\u00e9', ''), ('tab\there', '')]
+    saved = c.os.environ.get('FAKE_CORE_VERSION')
+    try:
+        for given, shown in cases:
+            if given is None:
+                c.os.environ.pop('FAKE_CORE_VERSION', None)
+            else:
+                c.os.environ['FAKE_CORE_VERSION'] = given
+            session = Session(program, core, log)
+            try:
+                session.start()
+                status = session.wait(lambda s: s and s['ready'], 10)
+                if status.get('core') != {'name': 'fake', 'version': shown}:
+                    raise c.Failed(f'a core reporting version {given!r} gave core {status.get("core")!r}')
+                session.call('stop')
+                status = session.wait(lambda s: s['ended'], 5)
+                if status.get('core') != {'name': 'fake', 'version': shown}:
+                    raise c.Failed(f'an ended game gave core {status.get("core")!r}')
+                session.call('release')
+                session.call('start', {'core': session.paths['disc'], 'disc': session.paths['disc'],
+                                       'system': session.paths['system'], 'saves': session.paths['saves']})
+                status = session.wait(lambda s: s and s['ended'], 5)
+                if status['errorCode'] != 'core' or status.get('core', 'missing') is not None:
+                    raise c.Failed(f'a core that did not load gave {status}')
+            finally:
+                session.close()
+    finally:
+        if saved is None:
+            c.os.environ.pop('FAKE_CORE_VERSION', None)
+        else:
+            c.os.environ['FAKE_CORE_VERSION'] = saved
+
+
 def restart_option(program, core, log):
     session = Session(program, core, log)
     try:
@@ -244,7 +281,8 @@ def main():
     log = open(options.log, 'ab') if options.log else c.subprocess.DEVNULL
     c.load_atomics(options.core.resolve())
     failures = 0
-    tests = {'stuck_core': stuck_core, 'unloadable': unloadable, 'restart_option': restart_option,
+    tests = {'stuck_core': stuck_core, 'unloadable': unloadable, 'core_identity': core_identity,
+             'restart_option': restart_option,
              'many_games': many_games,
              'gpu_limits': lambda program, core, log: gpu_limits(program, core, log, options.require_gpu)}
     chosen = [(name, test) for name, test in tests.items() if not options.names or name in options.names]

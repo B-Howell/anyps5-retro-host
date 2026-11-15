@@ -1,0 +1,80 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index cac0d2f..8b864be 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -162,6 +162,30 @@ if(MSB_FIRST)
+   add_definitions("-DMSB_FIRST=1")
+ endif()
+ 
++# AnyPS5 core build identity (anyps5-retro-host docs/netplay.md "Core build identity"). The
++# host's cores/apply-swanstation-patches.sh writes anyps5-core-source.txt beside this file: the
++# SwanStation commit and the SHA-256 of each patch it applied, in order. The build options that
++# change what the core computes are added to it here, and library_version becomes
++# anyps5-1-<SHA-256 of the whole>, the same for the same emulation on every system. Without that
++# file the core keeps SwanStation's own library_version.
++set(ANYPS5_CORE_IDENTITY "")
++set(ANYPS5_CORE_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/anyps5-core-source.txt")
++if(EXISTS "${ANYPS5_CORE_SOURCE}")
++  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${ANYPS5_CORE_SOURCE}")
++  file(READ "${ANYPS5_CORE_SOURCE}" ANYPS5_CORE_MANIFEST)
++  if(MSB_FIRST)
++    string(APPEND ANYPS5_CORE_MANIFEST "option MSB_FIRST=ON\n")
++  else()
++    string(APPEND ANYPS5_CORE_MANIFEST "option MSB_FIRST=OFF\n")
++  endif()
++  file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/anyps5-core-manifest.txt" "${ANYPS5_CORE_MANIFEST}")
++  string(SHA256 ANYPS5_CORE_DIGEST "${ANYPS5_CORE_MANIFEST}")
++  set(ANYPS5_CORE_IDENTITY "anyps5-1-${ANYPS5_CORE_DIGEST}")
++  message("AnyPS5 core build identity: ${ANYPS5_CORE_IDENTITY}")
++endif()
++configure_file("${CMAKE_CURRENT_SOURCE_DIR}/src/libretro/anyps5_core_identity.h.in"
++               "${CMAKE_CURRENT_BINARY_DIR}/anyps5/anyps5_core_identity.h" @ONLY)
++
+ # Recursively include the source tree.
+ enable_testing()
+ add_subdirectory(dep)
+diff --git a/src/libretro/CMakeLists.txt b/src/libretro/CMakeLists.txt
+index a6ca192..1d59f1c 100644
+--- a/src/libretro/CMakeLists.txt
++++ b/src/libretro/CMakeLists.txt
+@@ -11,6 +11,7 @@ add_library(swanstation_libretro SHARED
+ )
+ 
+ target_link_libraries(swanstation_libretro PRIVATE core common glad vulkan-loader libretro-common)
++target_include_directories(swanstation_libretro PRIVATE "${CMAKE_BINARY_DIR}/anyps5")
+ 
+ # no lib prefix
+ set_target_properties(swanstation_libretro PROPERTIES PREFIX "")
+diff --git a/src/libretro/anyps5_core_identity.h.in b/src/libretro/anyps5_core_identity.h.in
+new file mode 100644
+index 0000000..a37b5cc
+--- /dev/null
++++ b/src/libretro/anyps5_core_identity.h.in
+@@ -0,0 +1,3 @@
++#pragma once
++
++#define ANYPS5_CORE_IDENTITY "@ANYPS5_CORE_IDENTITY@"
+diff --git a/src/libretro/libretro_host_interface.cpp b/src/libretro/libretro_host_interface.cpp
+index fc7a9a1..f30f253 100644
+--- a/src/libretro/libretro_host_interface.cpp
++++ b/src/libretro/libretro_host_interface.cpp
+@@ -26,6 +26,7 @@
+ #include "libretro_settings_interface.h"
+ #include "core/gpu_hw_vulkan.h"
+ #include "version.h"
++#include "anyps5_core_identity.h"
+ #include <array>
+ #include <cstring>
+ #include <tuple>
+@@ -121,7 +122,10 @@ RETRO_API void retro_get_system_info(struct retro_system_info* info)
+ #ifndef GIT_VERSION
+ #define GIT_VERSION "undefined"
+ #endif
+-  info->library_version = "1.0.0 " GIT_VERSION;
++  if (ANYPS5_CORE_IDENTITY[0] != '\0')
++    info->library_version = ANYPS5_CORE_IDENTITY;
++  else
++    info->library_version = "1.0.0 " GIT_VERSION;
+   info->valid_extensions = "exe|psexe|cue|bin|img|iso|chd|pbp|ecm|mds|psf|m3u";
+   info->need_fullpath = true;
+   info->block_extract = false;

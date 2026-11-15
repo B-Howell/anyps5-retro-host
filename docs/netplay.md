@@ -67,9 +67,10 @@ it is saving (`RETRO_ENVIRONMENT_GET_SAVESTATE_CONTEXT`, whose
 
 **SwanStation and DuckStation.** SwanStation, the libretro core version 1
 loads, has no netplay of its own and leaves it to the frontend. The host
-builds it with five patches of its own (host.md "SwanStation patches") that
-make its states and controllers fit for netplay; "Determinism" below says
-why. Its parent,
+builds it with six patches of its own (host.md "SwanStation patches"): five
+make its states and controllers fit for netplay ("Determinism" below says
+why), and one gives it a build identity two players can compare ("Core build
+identity"). Its parent,
 DuckStation, carried a GGPO-based rollback netplay for a time and later
 removed it. GGPO is the same model as RetroArch's: input delay plus rollback
 on saved states, with a sync test that saves, loads and replays every frame
@@ -275,6 +276,8 @@ What keeps two hosts alike, and what is known to break it:
   `input` messages wait until lockstep ends. Options and discs cannot change.
 - **Same start.** Both games use the same core build, BIOS and options. The
   match passes the options at `start`, so every player boots with the same.
+  The launchers confirm the core build with `status.core` ("Core build
+  identity" below).
 - **RAM and state are the cross-machine checks.** `sync.ram` and
   `sync.state` must match on every machine. `sync.video` matches only when
   both draw in software, since GPUs may round differently; for the same
@@ -350,6 +353,91 @@ What keeps two hosts alike, and what is known to break it:
   uses a `saves` directory made for the match, so the host never writes the
   host player's card over the friend's own (protocol.md "saveState and
   loadState").
+
+## Core build identity
+
+Two players' hosts stay alike only if their cores compute alike. A Windows
+player and a Linux player each run the SwanStation their own release ships,
+built on another runner with another compiler, so before a match the
+launchers need to know that the two builds are the same emulator: the same
+SwanStation source, with the same patches, built with the same options.
+
+**What others do.**
+
+- **RetroArch** sends each peer's core name and core version
+  (`library_name` and `library_version` from `retro_get_system_info`) and
+  the content's CRC in its netplay handshake. A different core name refuses
+  the connection; a different core version or CRC only warns. Its own build
+  is compared through a value mixed from RetroArch's version and the netplay
+  protocol version. A core's `library_version` is usually its release or git
+  description, which says nothing about local patches.
+- **Dolphin** refuses a netplay client whose version string, its git
+  revision, differs from the host's, so both players need the same build.
+  Its bug tracker shows where a git string goes wrong: builds made without
+  git had an empty version, and builds marked `-dirty` could not play with
+  the same revision built elsewhere.
+- **GGPO** compares no builds at all; a game using it adds its own version
+  or checksum to its handshake, and GGPO's checksums find a desync only
+  after it happened.
+
+So the established check is the RetroArch one, the core's own name and
+version compared before the match, made strict as Dolphin makes it, with a
+version that names exactly what changes emulation and that no checkout
+detail (git tags, a dirty tree, line endings) can change.
+
+**The identity.** The host's SwanStation reports `library_version`
+`anyps5-1-<SHA-256>`, and the host passes it, with `library_name`, in
+`status.core` (protocol.md "status", capability `coreIdentity`). The SHA-256
+is of this manifest, one line each, with LF endings:
+
+```
+anyps5-retro-host core source 1
+swanstation <SwanStation commit, 40 hex digits>
+patch <SHA-256 of the patch file> <patch file name>     (one per patch, in the order applied)
+option MSB_FIRST=OFF
+```
+
+- `cores/apply-swanstation-patches.sh` writes the first lines as
+  `anyps5-core-source.txt` into the SwanStation checkout after applying the
+  patches: the commit checked out and each patch's bytes, which are LF in
+  every checkout (`.gitattributes`). The release's source archive holds that
+  file, so building it again gives the same identity.
+- The patch `swanstation-6-core-build-identity` adds the `option` lines in
+  SwanStation's CMake, from the values the build is configured with, and
+  hashes the whole. The only build option of SwanStation that changes what
+  the core computes is `MSB_FIRST` (the byte order). Compiler, build type
+  among the release ones, MSVC runtime and macOS deployment target change
+  how fast it runs, not what it computes; a Debug build already reports
+  another `library_name`. The CPU recompiler SwanStation builds for x64 or
+  arm64 is meant to compute exactly as its interpreter does, and a fault in
+  one shows as a desync in `sync`, not as a different identity.
+- Without `anyps5-core-source.txt` (a SwanStation built without the script)
+  the core keeps SwanStation's own `library_version`, which is not of the
+  `anyps5-1-` form, so a launcher does not play online with it.
+- `tools/core_identity.py` computes the same value from `cores/patches` and
+  the commit without building anything. The `real-core` workflow checks that
+  each system's core reports it, and its `same-core` job that Windows, the
+  two Linux runners and macOS all report the same `status.core`; the
+  `release` workflow checks the core in each zip.
+
+**Why not something else.**
+
+- A hash of the core file differs on every system and with every compiler,
+  so two players on different systems would never match.
+- A hash computed by the host from the patches it was built with would say
+  nothing about the core file the launcher hands it at `start`; the core
+  itself carries its identity, as `library_version` does in libretro.
+- `hello` cannot carry it: the host loads the core only for a game, from the
+  path `start` names, and may load another core for the next game.
+
+**What it does not cover.** The core options are not in the identity: they
+are chosen per match, the launcher sends both players the same at `start`,
+and `status.options` shows each one's `activeValue`. Nor are the BIOS and the
+disc, which the launchers compare by content (the launcher's disc digest).
+Everything else that can still differ between two machines, such as a GPU's
+rounding at a resolution scale above 1x, is what the `sync` hashes are for.
+When a patch is added or changed, or the SwanStation commit moves, the
+identity changes, and players need the same host release to play together.
 
 ## Tests
 
@@ -444,6 +532,14 @@ longer one makes that frame late. With a check every frame (RAM and the state ha
 run again costs 22 to 27 ms on Windows and Linux. The hosted macOS runner's
 save reads its virtual GPU back and is far too slow to roll back; a real Mac
 is not measured yet.
+
+- The core build identity: `host_test.py`'s `core_identity` test runs the
+  test core with several `library_version` values and checks `status.core`
+  passes printable ASCII of at most 256 bytes as it is, gives `""` for
+  anything else, keeps the identity after the game ends, and is `null` for a
+  core that did not load. With the real core, `real-core`'s `same-core` job
+  compares what Windows, Linux and macOS report, as "Core build identity"
+  says.
 
 Next, for the launcher:
 

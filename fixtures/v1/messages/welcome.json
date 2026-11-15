@@ -9,7 +9,8 @@
     "capabilities": [
       "ps1",
       "ps1Lockstep",
-      "ps1Rollback"
+      "ps1Rollback",
+      "coreIdentity"
     ],
     "pixelFormat": "rgba8"
   },

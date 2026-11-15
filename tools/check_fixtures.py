@@ -185,6 +185,13 @@ def status_result(value, name=None, report=False):
         integer(option.get('selected'), 0, len(values) - 1, f'{key}.selected')
         need(option.get('activeValue') in values, f'{key}.activeValue must be one of values')
         boolean(option.get('restart'), f'{key}.restart')
+    if value.get('core') is not None:
+        core = obj(value['core'], 'status.core')
+        for field in ('name', 'version'):
+            text = core.get(field)
+            string(text, f'status.core.{field}')
+            need(len(text) <= 256 and all(' ' <= letter <= '~' for letter in text),
+                 f'status.core.{field} is printable ASCII of at most 256 bytes')
     if 'discs' in value:
         discs = obj(value['discs'], 'status.discs')
         labels = discs.get('labels')

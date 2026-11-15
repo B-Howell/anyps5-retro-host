@@ -3,11 +3,14 @@
 
 """Runs the real SwanStation core through the host with a freely licensed BIOS (OpenBIOS) and
 program, put on a disc image by make_test_disc.py, and checks that it starts, draws a picture
-that is not black and keeps changing, stops and exits cleanly.
+that is not black and keeps changing, stops and exits cleanly. With --expect-core-version it also
+checks the core build identity in status.core (docs/netplay.md "Core build identity") and can write
+it to a file, so CI can compare the identity each system's build reports.
 The renderer is whichever the machine allows: with no OpenGL context the host must say why a scale
 above 1x does not apply."""
 
 import argparse
+import json
 import shutil
 import struct
 import sys
@@ -29,6 +32,9 @@ parser.add_argument('--log', required=True)
 parser.add_argument('--picture', help='Where to save the last picture read, as a PNG')
 parser.add_argument('--expect-opengl', action='store_true',
                     help='Fail unless the host gives the core an OpenGL context (status.hardware)')
+parser.add_argument('--expect-core-version',
+                    help='Fail unless status.core is SwanStation with this library_version')
+parser.add_argument('--core-identity-out', help='Where to write status.core as JSON')
 options = parser.parse_args()
 
 host_path = Path(options.host).resolve()
@@ -143,6 +149,12 @@ def start(game):
         raise c.Failed('software drawing at 2x must explain itself in resolutionError')
     if status['hardware'] and status['resolutionError']:
         raise c.Failed('GPU drawing must leave resolutionError empty')
+    core = status.get('core')
+    print(f'core: {core}')
+    if options.expect_core_version and core != {'name': 'SwanStation', 'version': options.expect_core_version}:
+        raise c.Failed(f'status.core is {core!r}, not SwanStation {options.expect_core_version}')
+    if options.core_identity_out:
+        Path(options.core_identity_out).write_text(json.dumps(core, sort_keys=True) + '\n', encoding='utf-8')
     if options.expect_opengl and not status['hardware']:
         raise c.Failed('this machine has an OpenGL renderer, but the host made no context for the core')
     scales = status['options']['swanstation_GPU_ResolutionScale']['values']
@@ -197,7 +209,9 @@ def save_png(width, height, data, bgra):
 failed = False
 try:
     host.send_message({'type': 'hello', 'minVersion': 1, 'maxVersion': 1, 'pixelFormats': ['bgra8', 'rgba8']})
-    pump(lambda m: m.get('type') == 'welcome')
+    welcome = pump(lambda m: m.get('type') == 'welcome')
+    if options.expect_core_version and 'coreIdentity' not in welcome['capabilities']:
+        raise c.Failed(f'the host does not list coreIdentity: {welcome["capabilities"]}')
     call('volume', {'level': 0.0, 'muted': True})
     status = start(disc)
     before = state['frames']
