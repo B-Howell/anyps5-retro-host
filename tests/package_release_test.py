@@ -4,9 +4,10 @@
 """Checks that tools/package_release.py names in SOURCE.txt the repository and commit the host is
 really built from: HEAD of the checkout and the public https URL of the remote it tracks, with no
 user name, password or token, or GitHub Actions' GITHUB_REPOSITORY at GITHUB_SHA without a
-checkout, and that it refuses a checkout with changes that are not committed, a local remote and a
-build it cannot name, and does not take another repository's HEAD for an unpacked source inside it. Each case runs in a new git repository in a temporary folder, with the user's
-and the system's git configuration left out."""
+checkout, and that it refuses a checkout with changes that are not committed, a checkout git cannot
+read, a local remote and a build it cannot name, and does not take another repository's HEAD for an
+unpacked source inside it. Each case runs in a new git repository in a temporary folder, with the
+user's and the system's git configuration left out."""
 
 import os
 import subprocess
@@ -80,6 +81,9 @@ remotes = [
     ('file://', 'file:///srv/git/anyps5-retro-host', None),
     ('plain http', 'http://github.com/example-fork/anyps5-retro-host', None),
     ('no path', 'https://github.com/', None),
+    ('IPv6 https', 'https://[2001:db8::1]:8443/team/host.git', 'https://[2001:db8::1]:8443/team/host'),
+    ('IPv6 ssh', 'ssh://git@[2001:db8::1]/team/host', 'https://[2001:db8::1]/team/host'),
+    ('a port that is no number', 'https://github.com:http/team/host', None),
 ]
 for name, remote, want in remotes:
     check(f'public URL of {name}', p.public_url(remote), want)
@@ -131,6 +135,12 @@ with tempfile.TemporaryDirectory() as folder:
 
     check('--host-commit HEAD', outcome(root, commit=head, environment={}), (FORK, head))
     check('--host-commit not HEAD', refused(outcome(root, commit='a' * 40, environment={}), 'HEAD'), True)
+
+    broken = folder / 'broken'
+    broken.mkdir()
+    (broken / '.git').write_text('not a git file\n')
+    check('a checkout git cannot read is refused, not left to GitHub Actions',
+          refused(outcome(broken, environment=CI), 'failed in the checkout'), True)
 
     plain = folder / 'unpacked-source'
     plain.mkdir()
