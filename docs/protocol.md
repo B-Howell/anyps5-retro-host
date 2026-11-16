@@ -122,10 +122,24 @@ sessions, and fails on any `AF_INET`, `AF_INET6`, `AF_PACKET` or
 
 ### Finding and checking the host
 
-A release launcher runs only a host it ships with or downloads into its own
-storage: from its own directory on Windows and Linux, and from
-`Contents/Helpers` in the app bundle on macOS. It finds its own directory with
-`GetModuleFileNameW`, `/proc/self/exe` or `_NSGetExecutablePath`.
+A release launcher runs only a host it ships with or a host release it
+downloads, kept in storage of its own that only the user can write:
+
+- **A host it ships with** is in its own directory on Windows and Linux, and
+  in `Contents/Helpers` in the app bundle on macOS. It finds its own
+  directory with `GetModuleFileNameW`, `/proc/self/exe` or
+  `_NSGetExecutablePath`.
+- **A host it downloads** MAY be kept in a folder of its own data folder
+  instead: `%LOCALAPPDATA%\<launcher>` on Windows, `$XDG_DATA_HOME/<launcher>`
+  (by default `~/.local/share/<launcher>`) on Linux, and
+  `~/Library/Application Support/<launcher>` on macOS. Its own directory often
+  cannot take a download: an AppImage mounts it read-only, and an installer
+  may put the launcher where the user cannot write.
+
+Wherever the host is kept, the launcher makes the checks below, the
+signature first, and holds what it checked until the host has exited, as
+the paragraph after them says for each system. Where the host is kept
+changes nothing in those checks.
 
 **Signed files.** A host release is signed the way launcher releases are:
 
@@ -144,8 +158,9 @@ storage: from its own directory on Windows and Linux, and from
 
 **When it checks.**
 
-- *On download*: it checks the signature, then the zip and the `.files`
-  against `SHA256SUMS`, and only then unpacks the zip. It keeps
+- *On download*: it checks the signature first, before it uses anything
+  else it fetched, then the zip and the `.files` against `SHA256SUMS`, and
+  only then unpacks the zip. It keeps
   `SHA256SUMS`, `SHA256SUMS.sig` and the `.files` beside the unpacked host.
 - *Before each start*: it checks the signature again, the `.files` against
   `SHA256SUMS`, and the host executable and the SwanStation library against
@@ -171,8 +186,8 @@ descriptor itself never reaches the host), so the file
 it checked is the file that runs. On macOS the system itself checks the code
 signature of the host and of the SwanStation library as they are loaded (see
 macOS signing below), so a changed file does not run. The SwanStation
-library on Linux is checked by path in the launcher's own storage, which only
-the user can write.
+library on Linux is checked by path in the launcher's own storage (its own
+directory or its data folder, as above), which only the user can write.
 
 These checks protect against a damaged download and a changed mirror, not
 against another program the same user runs, which could change the launcher
