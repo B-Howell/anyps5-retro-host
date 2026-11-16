@@ -357,7 +357,16 @@ What keeps two hosts alike, and what is known to break it:
   drawn, until it drew them again. RAM and state still matched, but the
   memory-state test below saw the picture differ after every load. The patch
   `swanstation-3-vram-upload-colour` makes the shader give the CPU's bytes,
-  as exact multiples of 1/255.
+  as exact multiples of 1/255. Drawing still gives *x* / 31 (and blending
+  rounds as each GPU does), so a picture built from drawn pixels that is
+  loaded from a state holding video memory as 16-bit words (a file, a slot,
+  a join) can still show some colours one step off until they are drawn
+  again: `lockstep_test.py` on the vram program sees the picture of the first
+  frame after a file load differ (blue 164 drawn, 165 loaded, on the NVIDIA
+  desktop), while RAM and state matched over 300 such loads. A rollback state
+  keeps video memory in a GPU texture (patch 7), so rollback shows the same
+  picture; across machines `video` is not compared anyway (protocol.md
+  "sync").
 - **Restoring a state from another timeline.** The launcher's harness found
   that stock SwanStation, on loading a state, reschedules its sound unit's
   sample event with timing from the discarded timeline: when the frame after
@@ -378,6 +387,21 @@ What keeps two hosts alike, and what is known to break it:
   controller in analog mode would find it in digital mode. The patch
   `swanstation-5-port-change-keeps-other-controllers` gives a new controller
   only to the port whose type changed, as a console does.
+- **A CD-ROM command waiting for its turn.** A command sent while the CD-ROM
+  controller still has an interrupt unacknowledged waits, and the rest of its
+  delay stays in SwanStation's command event, inactive until the game
+  acknowledges the interrupt. The timing events save only active events, so
+  a state loaded while a command waited resumed it after whatever delay that
+  event object last held, from the timeline being discarded or from none, and
+  the command and the seek it started ran at another moment: the
+  memory-state test on the disc program found the drive event's seek
+  scheduled 17212 cycles later after a load, with RAM still equal. Stock
+  SwanStation does this for every kind of load (file and memory states, with
+  or without patch 7); DuckStation saves whether the event is active (its
+  state version 84) but not the delay. The patch
+  `swanstation-8-cd-command-delay-state` saves the command event's delay,
+  time since its last run and interval with the CD unit and restores them
+  when the event is inactive after the load (state version 59).
 - **Memory cards.** A state carries both memory cards. The friend's game
   uses a `saves` directory made for the match, so the host never writes the
   host player's card over the friend's own (protocol.md "saveState and
@@ -544,8 +568,8 @@ Built now:
   of a rollback: loading the state, and each frame run again. With the test
   core it also checks predictions that come true (no rollback), the
   refusals, and the protocol errors. CI runs it with the test core on every
-  system and under ThreadSanitizer, and with the real core on the pad program
-  on Linux, macOS and Windows. A simulated frame lasts at least twice the
+  system and under ThreadSanitizer, and with the real core on the pad, vram
+  and disc programs on Linux, macOS and Windows. A simulated frame lasts at least twice the
   reference host's time per frame plus a save in memory, so a slow host
   (ThreadSanitizer, hosted macOS) does not fall so far behind its steps that
   every late input arrives before its frame runs and nothing is predicted.
@@ -627,10 +651,18 @@ state hash needs it, so checking every frame stays at 77 ms there. Whether
 video memory came back right is checked by that hash: in the first phase
 every frame's `sync.state`, which holds all of video memory read back, must
 equal the lockstep reference's after dozens of rollbacks whose loads came
-from GPU textures, and the pad program draws what it reads from the
-controllers, so a stale texture shows. Persistent video memory a game draws
-once and keeps, and a disc being read during a rollback, are not in the
-test programs.
+from GPU textures. The pad program redraws its whole screen every frame, so
+only video memory off the screen showed a stale texture there (one player's
+state hash, at frame 181, with a load that skipped the texture). The vram
+program (host.md "Tests") builds its picture from video memory drawn over
+hundreds of frames, a texture uploaded at boot among it, and fails both
+picture and state at the first rollback with such a core, or with one that
+loads the newest kept texture instead of the state's. The disc program reads
+the disc through every rollback; it fails at frame 90 when a load leaves the
+CD reader where the frames run ahead left it, and found the waiting-command
+fault above (patch 8). CI runs both on every system; on hosted Windows the
+core draws in software, so there they check the drive and video memory
+saved as bytes, not the GPU texture.
 
 The disc and the arrays were changed together and not measured apart; the
 profile put the load's time outside its own copies (waiting), and the arrays

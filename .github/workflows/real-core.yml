@@ -3,8 +3,8 @@
 
 # Boots the real SwanStation core through the host on each system, runs two of them in lockstep,
 # and two players' hosts in rollback against one in lockstep. The BIOS and one program are built
-# here from pcsx-redux's nugget (MIT): OpenBIOS and the psyqo "hello" example; the pad program comes
-# from tests/make_test_disc.py. No Sony BIOS or game is used. Each system's core must report the
+# here from pcsx-redux's nugget (MIT): OpenBIOS and the psyqo "hello" example; the pad, vram and disc
+# programs come from tests/make_test_disc.py. No Sony BIOS or game is used. Each system's core must report the
 # core build identity tools/core_identity.py computes, and the same-core job checks that every
 # system reports the same one (docs/netplay.md "Core build identity").
 name: real-core
@@ -128,8 +128,12 @@ jobs:
         run: ${{ matrix.python }} tests/pad_test.py --host ${{ matrix.host }} --core ${{ matrix.core }} --bios ps1-files/openbios.bin --log build/pad.log
       - name: Two real cores in rollback, with late input and wrong predictions, against one in lockstep; rollback cost
         run: ${{ matrix.python }} tests/rollback_test.py --host ${{ matrix.host }} --core ${{ matrix.core }} --bios ps1-files/openbios.bin --log build/rollback.log --tick 0.03 ${{ matrix.rollback_budget }}
+      - name: The same on a picture built from video memory drawn once and kept, and on a disc read all the time
+        run: |
+          ${{ matrix.python }} tests/rollback_test.py --host ${{ matrix.host }} --core ${{ matrix.core }} --bios ps1-files/openbios.bin --log build/rollback-vram.log --tick 0.03 --program vram ${{ matrix.opengl }}
+          ${{ matrix.python }} tests/rollback_test.py --host ${{ matrix.host }} --core ${{ matrix.core }} --bios ps1-files/openbios.bin --log build/rollback-disc.log --tick 0.03 --program disc ${{ matrix.opengl }}
       - if: failure()
-        run: tail -200 build/real-core.log build/lockstep.log build/lockstep-pad.log build/pad.log build/rollback.log || true
+        run: tail -200 build/real-core.log build/lockstep.log build/lockstep-pad.log build/pad.log build/rollback.log build/rollback-vram.log build/rollback-disc.log || true
       - if: always()
         uses: actions/upload-artifact@v4
         with:

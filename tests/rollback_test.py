@@ -12,8 +12,12 @@ way. The test counts the rollbacks, checks that the frames run again showed only
 prints what a rollback cost per frame run again.
 
 With the test core it also checks the protocol errors and refusals of rollback. With --bios it runs the
-real SwanStation core on make_test_disc.py's pad program, which reads both controllers, acts on the analog
-lock and turns the SPU's interrupt on and off with the input, so a wrong prediction changes the console."""
+real SwanStation core on one of make_test_disc.py's programs (--program), each of which reads both
+controllers, so a wrong prediction changes the console: the pad program acts on the analog lock and turns
+the SPU's interrupt on and off; the vram program builds its picture over many frames from video memory it
+drew once and kept, a texture uploaded at boot among it; the disc program reads the disc all the time and
+seeks where the input says. A rollback must bring each of these back as it was, which every frame's state
+hash (all of video memory and the CD unit with the rest) and RAM hash check."""
 
 import argparse
 import random
@@ -27,6 +31,7 @@ import lockstep_test as ls  # noqa: E402
 import make_test_disc as disc  # noqa: E402
 
 WINDOW = 8
+PROGRAMS = {'pad': disc.pad_program, 'vram': disc.vram_program, 'disc': disc.disc_program}
 
 
 def held_script(frames, seed):
@@ -175,6 +180,14 @@ def check_rollbacks(peer, reports, pictures, reference_pictures):
             f'average, {longest:.2f} ms at most'), whole
 
 
+def check_hardware(peer):
+    """The host drew with the core's OpenGL renderer, under which a rollback state keeps video memory in
+    a GPU texture (SwanStation patch 7) rather than in the state's bytes."""
+    if not peer.call('status')['hardware']:
+        raise c.Failed(f'{peer.name}: this machine has an OpenGL renderer, but the host made no context for '
+                       'the core')
+
+
 def network(options, match):
     """Phase 1 compares every frame with lockstep. Phase 2 checks every 60th frame, as a match would, so a
     frame run again costs what it does in play, and prints that cost."""
@@ -195,6 +208,9 @@ def network(options, match):
     peers = [first, second]
     elapsed = play_phase(tick, players, 0, frames)
     wait_for_sync(peers, frames - 1)
+    if options.expect_opengl:
+        for peer in peers:
+            check_hardware(peer)
     for peer in peers:
         if peer.log != list(range(frames)):
             raise c.Failed(f'{peer.name}: syncs came for frames {peer.log[:20]}..., not each frame once in order')
@@ -474,7 +490,12 @@ def main():
     parser.add_argument('--host', required=True)
     parser.add_argument('--core', required=True)
     parser.add_argument('--log')
-    parser.add_argument('--bios', help='OpenBIOS, 512 KiB: run the real SwanStation core on the pad program')
+    parser.add_argument('--bios', help='OpenBIOS, 512 KiB: run the real SwanStation core on a program of '
+                        'make_test_disc.py')
+    parser.add_argument('--program', choices=PROGRAMS, default='pad',
+                        help='With --bios, the program: pad_program, vram_program or disc_program')
+    parser.add_argument('--expect-opengl', action='store_true',
+                        help='With --bios, fail unless the players\' hosts draw with the core\'s OpenGL renderer')
     parser.add_argument('--frames', type=int, default=600, help='Frames each player runs')
     parser.add_argument('--delay', type=int, default=6, help='The most frames a player\'s input arrives late')
     parser.add_argument('--budget-ms', type=float,
@@ -484,7 +505,8 @@ def main():
                         help='Seconds each simulated frame lasts at least, for the hosts to run what they were '
                         'sent; longer on a host slower than that')
     options = parser.parse_args()
-    options.program = disc.pad_program() if options.bios else None
+    options.disc_data = disc.disc_data() if options.bios and options.program == 'disc' else None
+    options.program = PROGRAMS[options.program]() if options.bios else None
     return play(options)
 
 

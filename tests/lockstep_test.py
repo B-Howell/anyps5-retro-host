@@ -220,9 +220,11 @@ class Match:
             # its own, as on two machines. A state for netplay must name neither.
             self.discs = {'host': self.work / 'host-disc' / 'program.cue',
                           'guest': self.work / 'guest-disc' / 'my copy.cue'}
+            # options.disc_data, when a test sets it, is the data its program reads from the disc.
             for disc in self.discs.values():
                 disc.parent.mkdir()
-                make_test_disc.build(options.program, disc.with_suffix('.bin'), disc)
+                make_test_disc.build(options.program, disc.with_suffix('.bin'), disc,
+                                     getattr(options, 'disc_data', None))
             self.core = Path(options.core).resolve()
         else:
             self.paths = c.place(self.work, Path(options.core).resolve())

@@ -1,0 +1,65 @@
+diff --git a/src/core/cdrom.cpp b/src/core/cdrom.cpp
+index 7df54bd8..9fcd924e 100644
+--- a/src/core/cdrom.cpp
++++ b/src/core/cdrom.cpp
+@@ -9,6 +9,7 @@
+ #include "system.h"
+ #include <cmath>
+ #include <cstring>
++#include <limits>
+ #if defined(CPU_X64)
+ #include <emmintrin.h>
+ #endif
+@@ -288,8 +289,25 @@ bool CDROM::DoState(StateWrapper& sw)
+   sw.Do(&m_audio_fifo);
+   sw.Do(&m_requested_lba);
+ 
++  /* A command held back by an unacknowledged interrupt keeps the rest of its delay in the inactive command event,
++   * which the timing events do not save, and acknowledging the interrupt resumes it from there (UpdateCommandEvent). */
++  TickCount command_downcount = m_command_event->m_downcount;
++  TickCount command_time_since_last_run = m_command_event->m_time_since_last_run;
++  TickCount command_interval = m_command_event->m_interval;
++  sw.DoEx(&command_downcount, 59, command_downcount);
++  sw.DoEx(&command_time_since_last_run, 59, command_time_since_last_run);
++  sw.DoEx(&command_interval, 59, command_interval);
++
+   if (sw.IsReading())
+   {
++    static constexpr TickCount MAX_LATENESS = System::MASTER_CLOCK / 60;
++    static constexpr TickCount MAX_TICKS = std::numeric_limits<TickCount>::max() / 2;
++    if (command_interval <= 0 || command_downcount < -MAX_LATENESS || command_downcount > MAX_TICKS ||
++        command_time_since_last_run < -MAX_LATENESS || command_time_since_last_run > MAX_TICKS)
++    {
++      return false;
++    }
++
+     if (m_xa_resample_p >= XA_RESAMPLE_RING_BUFFER_SIZE || m_current_read_sector_buffer >= NUM_SECTOR_BUFFERS ||
+         m_current_write_sector_buffer >= NUM_SECTOR_BUFFERS)
+     {
+@@ -304,6 +322,13 @@ bool CDROM::DoState(StateWrapper& sw)
+     if (m_reader.HasMedia())
+       m_reader.QueueReadSector(m_requested_lba);
+     UpdateCommandEvent();
++    /* An active command event gets its timing from the timing events' own state, loaded after this. */
++    if (!m_command_event->IsActive())
++    {
++      m_command_event->m_downcount = command_downcount;
++      m_command_event->m_time_since_last_run = command_time_since_last_run;
++      m_command_event->m_interval = command_interval;
++    }
+     m_drive_event->SetState(!IsDriveIdle());
+ 
+     // Time will get fixed up later.
+diff --git a/src/core/save_state_version.h b/src/core/save_state_version.h
+index bc579707..5e7a378f 100644
+--- a/src/core/save_state_version.h
++++ b/src/core/save_state_version.h
+@@ -2,7 +2,7 @@
+ #include "types.h"
+ 
+ static constexpr uint32_t SAVE_STATE_MAGIC = 0x43435544;
+-static constexpr uint32_t SAVE_STATE_VERSION = 58;
++static constexpr uint32_t SAVE_STATE_VERSION = 59;
+ static constexpr uint32_t SAVE_STATE_MINIMUM_VERSION = 42;
+ 
+ #pragma pack(push, 4)

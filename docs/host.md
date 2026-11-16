@@ -327,7 +327,11 @@ network left to the launcher.
   off, or off and back on); that right predictions cost no rollback, that `saveState` and turning
   rollback off are refused while frames are not confirmed and that a load
   forgets them, and the protocol errors of `step` and `correct`. With
-  `--bios` it runs the real SwanStation core on the pad program below.
+  `--bios` it runs the real SwanStation core on a program of
+  `make_test_disc.py` chosen with `--program`: the pad program below (the
+  default), or the vram or disc program, also below. `--expect-opengl` fails
+  the test unless the players' hosts draw with the core's OpenGL renderer,
+  under which a rollback state keeps video memory in a GPU texture (patch 7).
 - [`tests/pad_test.py`](../tests/pad_test.py) runs the pad program
   (`make_test_disc.pad_program`) on two real SwanStation hosts in lockstep.
   The program reads both controller ports once a frame through the
@@ -344,6 +348,29 @@ network left to the launcher.
   unplugged and plugged in. The `real-core` workflow also runs
   `lockstep_test.py` on the pad program, whose memory-state run then crosses
   frames that change the SPU's interrupt.
+- The vram and disc programs (`make_test_disc.vram_program` and
+  `disc_program`, MIPS written out in Python as the pad program is) each read
+  both controllers every frame, so a wrong prediction changes what they do,
+  and the `real-core` workflow runs `rollback_test.py` on each. The vram
+  program uploads a 64x64 texture beside the screen at boot and never clears
+  the screen: each frame it draws one textured 16x16 cell whose place and
+  texels come from the buttons, with the mask bit set while Square is held
+  and checked always, copies the cell beside the texture for later frames to
+  sample, and fills another cell grey. Its picture is video memory drawn
+  over hundreds of frames, so a rollback that brings back the wrong video
+  memory, or none, shows from then on. The disc program reads the disc all
+  the time through the CD-ROM controller's registers, with its interrupts
+  polled: double speed, a seek to `disc_data`'s first sector and `ReadN`,
+  each sector's 2048 bytes kept in RAM and added to a checksum; a new press
+  of Cross on port 1 seeks to one of 64 places port 2's buttons pick.
+  `make_test_disc.build`'s `data` puts `disc_data` on its disc as `DATA.BIN`
+  from sector 64; each sector starts with its own LBA. A rollback must put
+  the drive back where it was, mid-seek or mid-read, with any command still
+  waiting. Each fails `rollback_test.py` against a core broken on purpose:
+  the vram program at the first rollback (frame 189) when a load leaves
+  video memory as it was or takes the newest kept texture, the disc program
+  at frame 90 when a load leaves the CD reader where the frames run ahead
+  left it, and at frame 222 without patch 8.
 - [`tests/ring_access.c`](../tests/ring_access.c) gives the fake launcher the
   sequentially consistent loads and stores of `latest` and `reading` that
   protocol.md asks for; Python cannot make them on shared memory itself. It
@@ -408,7 +435,9 @@ made again with `git diff` against that commit, after the patches before it.
 The first five fix something online play needs from a state
 ([netplay.md](netplay.md) "Determinism"); the sixth gives the core its build
 identity; the seventh makes the states a rollback saves and loads cheap
-([netplay.md](netplay.md) "What a rollback costs"):
+([netplay.md](netplay.md) "What a rollback costs"); the eighth makes a state
+restore a CD-ROM command waiting for its turn ([netplay.md](netplay.md)
+"Determinism"):
 
 | Patch | What it changes |
 | --- | --- |
@@ -419,8 +448,9 @@ identity; the seventh makes the states a rollback saves and loads cheap
 | [`swanstation-5-port-change-keeps-other-controllers`](../cores/patches/swanstation-5-port-change-keeps-other-controllers.patch) | A port whose controller type changes gets a new controller; the other ports keep theirs. Stock SwanStation made every port's controller anew whenever any port's type changed, so plugging in port 2 (a friend joining) put port 1 back in digital mode and dropped the game's lock on it, which a real console does not do. Without it, `pad_test.py` fails at the frame port 2 is unplugged |
 | [`swanstation-6-core-build-identity`](../cores/patches/swanstation-6-core-build-identity.patch) | When the checkout holds the `anyps5-core-source.txt` the patch script writes (the SwanStation commit and each patch's SHA-256), CMake adds the build options that change what the core computes (`MSB_FIRST`), writes the whole as `anyps5-core-manifest.txt` in the build folder, and the core's `library_version` becomes `anyps5-1-<SHA-256 of it>`, the core build identity the host reports in `status.core` ([netplay.md](netplay.md) "Core build identity"). Without the file the core keeps SwanStation's own `library_version` |
 | [`swanstation-7-rollback-memory-states`](../cores/patches/swanstation-7-rollback-memory-states.patch) | As DuckStation's own memory states do: a state saved with `RETRO_SAVESTATE_CONTEXT_RUNAHEAD_SAME_INSTANCE` under a hardware renderer keeps video memory in a GPU texture instead of reading it back. The texture belongs to the buffer the state was saved into (at most 16 buffers, the one saved longest ago giving its texture up first) and is named by a token in the disc trailer (flag 16); such a state loads only in the same context, and only while that buffer holds no newer state. A load of a memory state (`RUNAHEAD_SAME_INSTANCE` or `RUNAHEAD_SAME_BINARY`) of the disc already in the drive no longer takes the disc out and puts it back, which read its system area and waited on the CD reader's thread every time: the CD unit's own state restores the drive. Arrays of integers in a state are written in one copy instead of one stream call per element (the bytes are the same; memory card and CD sector buffers made a save cost twice its copies). Without it, `rollback_test.py` on hosted macOS fails its 80 ms budget for a whole rollback (about 270 ms before: each state read video memory back from the virtual GPU) |
+| [`swanstation-8-cd-command-delay-state`](../cores/patches/swanstation-8-cd-command-delay-state.patch) | A CD-ROM command sent while an interrupt is still unacknowledged waits, and keeps the rest of its delay in the command event, which is inactive meanwhile; acknowledging the interrupt resumes it from there. The timing events save only active events, so a state loaded while a command waited resumed it after whatever delay that event last held (the loading timeline's, or none), and the command, its seek and everything timed from it ran at another moment. The CD unit's state now holds the command event's delay, time since its last run and interval, restored when the event is inactive after the load (state version 59). DuckStation saves whether the event is active (its version 84) but not its delay. Without it, `rollback_test.py --program disc` fails at the first rollback that loads such a state (frame 222 on the Windows desktop: the state hash differs, the drive event's seek scheduled 17212 cycles later), and so do saving, running, loading and running again one frame at a time and file states |
 
-States of the patched core are version 58, which stock SwanStation does not
+States of the patched core are version 59, which stock SwanStation does not
 load; the host only ever runs the core of its own release.
 
 ## Releases
