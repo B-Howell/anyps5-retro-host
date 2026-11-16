@@ -721,7 +721,9 @@ form; anything else is a different core. The host does not judge the value.
   loaded or from `RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO` after a frame, or
   60 when that is not above 1 and below 1000. SwanStation gives the
   vertical frequency of the video mode the game has set, about 60 for NTSC
-  and 50 for PAL, and gives a new one when the game changes it (to an
+  and 50 for PAL (at 631f0fb on every system: 59.81733322143555 for a
+  progressive NTSC mode and 49.74681854248047 for a PAL one), and gives a
+  new one when the game changes it (to an
   interlaced or a progressive picture, or to the other standard): the host
   takes it between two frames, and the next frame keeps to it.
 - `region` is what the core's `retro_get_region` answers at the same times:
@@ -730,7 +732,7 @@ form; anything else is a different core. The host does not judge the value.
   `swanstation_Console_Region` sets or, by default, the disc decides; NTSC-J
   and NTSC-U are both `ntsc`. The region is the console's and `fps` the
   video mode's, so a game on a PAL console that sets an NTSC mode reports
-  `pal` and about 60.
+  `pal` and about 60 (59.271724700927734 at 631f0fb).
 
 Both come from the emulated console, so two players' hosts running the same
 disc on the same core build report the same values at the same frame. A

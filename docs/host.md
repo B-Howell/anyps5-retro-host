@@ -362,10 +362,11 @@ network left to the launcher.
   [`tools/core_identity.py`](../tools/core_identity.py) computes, `welcome`
   must list `coreIdentity` and `status.core` must be `SwanStation` with that
   version. It checks
-  `status.timing` on the auto-detected console and on one set to PAL:
-  region `ntsc` or `pal` (`pal` for the PAL console) and a frame rate of
-  about 50 or 60, and no more frames in 10 (and 5) seconds than that rate
-  allows. `--core-identity-out` writes `status.core`, and `real-core.yml`'s
+  `status.timing` on the auto-detected console and on one set to PAL
+  running a corner program that sets a PAL video mode
+  (`corner_program(pal=True)`): region `ntsc` or `pal` (`pal` and about 50
+  for the PAL one) and a frame rate of about 50 or 60, and no more frames in
+  10 (and 5) seconds than that rate allows. `--core-identity-out` writes `status.core`, and `real-core.yml`'s
   `same-core` job checks that Windows, both Linux runners and macOS wrote the
   same one. With `--expect-opengl`, which `real-core.yml` passes on Linux and macOS (the
   release workflow's check of the unpacked zips does not), the test also
