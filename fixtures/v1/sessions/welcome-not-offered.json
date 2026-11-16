@@ -33,7 +33,8 @@
           "ps1Lockstep",
           "ps1Rollback",
           "coreIdentity",
-          "gameTiming"
+          "gameTiming",
+          "syncXxh3"
         ],
         "pixelFormat": "rgba8"
       },

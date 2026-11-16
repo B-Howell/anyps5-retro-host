@@ -35,6 +35,7 @@ else()
 endif()
 target_include_directories(retro_host_core PUBLIC src
   PRIVATE 3rdparty/libretro-common/include 3rdparty/miniaudio)
+target_include_directories(retro_host_core SYSTEM PRIVATE 3rdparty/xxHash)
 target_compile_definitions(retro_host_core PRIVATE ANYPS5_RETRO_HOST_VERSION="${PROJECT_VERSION}")
 target_link_libraries(retro_host_core PUBLIC Threads::Threads ${CMAKE_DL_LIBS})
 if(WIN32)

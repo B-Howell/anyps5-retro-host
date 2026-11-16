@@ -1,5 +1,5 @@
 {
-  "description": "What lockstep frame 120 left behind, as 64-bit FNV-1a hashes in hexadecimal.",
+  "description": "What lockstep frame 120 left behind, as 64-bit hashes in hexadecimal (XXH3-64 from a host with syncXxh3, FNV-1a from one without).",
   "from": "host",
   "message": {
     "type": "sync",

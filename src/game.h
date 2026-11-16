@@ -32,10 +32,12 @@ namespace retro_host {
 // How a game in lockstep runs (protocol.md "lockstep"): one frame per step the launcher sends, a
 // sync message every check frames, and, when paced, no faster than the core's frame rate. With
 // rollback (capability ps1Rollback) a step may leave ports unknown, and at most that many frames
-// are stepped beyond the last confirmed one.
+// are stepped beyond the last confirmed one. Without state (capability syncXxh3) a sync hashes main
+// RAM and the picture only, and the core is not serialized for it.
 struct LockstepConfig {
   uint32_t check = 1;
   bool paced = true;
+  bool state = true;
   std::optional<unsigned> rollback;
 };
 
@@ -77,8 +79,9 @@ struct RollbackReport {
   uint64_t load_micros = 0;
 };
 
-// What a lockstep frame left behind, as 64-bit FNV-1a hashes: the console's main RAM, the last
-// picture published and the core's serialized state. An absent hash is one the core cannot give.
+// What a lockstep frame left behind, as XXH3-64 hashes (hash.h): the console's main RAM, the last
+// picture published and the core's serialized state. An absent hash is one the core cannot give,
+// or a state lockstep was told not to hash.
 struct SyncPoint {
   uint64_t frame = 0;
   std::optional<uint64_t> ram;

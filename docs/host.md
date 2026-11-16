@@ -23,7 +23,7 @@ through kqueue. On Windows a thread waits on the launcher's process handle.
 | [`src/main.cpp`](../src/main.cpp) | The command line, the process setup, then the host |
 | [`src/host.cpp`](../src/host.cpp) | The protocol: `hello`, the order rules, every method's argument checks and replies, and the limits |
 | [`src/game.cpp`](../src/game.cpp) | One loaded game: the libretro callbacks, core options, disc control, the memory card, input, rumble, pixel conversion, and lockstep: the queue of steps, the `sync` hashes, the state files of `saveState` and `loadState`, and the 8 in-memory states, each a buffer kept for the game and reused, so a save allocates nothing after the first; and rollback (see "Rollback" below) |
-| [`src/hash.h`](../src/hash.h), [`src/hash.cpp`](../src/hash.cpp) | FNV-1a, and the two shortcuts that give the same hash of a state at a fraction of the cost: a run of zero bytes as one power of the prime, and the length of a buffer before its zero tail |
+| [`src/hash.h`](../src/hash.h), [`src/hash.cpp`](../src/hash.cpp) | The `sync` hashes (capability `syncXxh3`): XXH3-64 from the [xxHash](https://github.com/Cyan4973/xxHash) submodule (`3rdparty/xxHash`, 0.8.3, built in with `XXH_INLINE_ALL`) over main RAM, over a picture's RGB bytes taken a few thousand pixels at a time from either ring order, and over a state up to its last non-zero byte seeded with the buffer's size; and the used length of a state buffer, found from its end 64 bytes at a time |
 | [`cores/patches`](../cores/patches), [`cores/apply-swanstation-patches.sh`](../cores/apply-swanstation-patches.sh) | The host's SwanStation patches and the script the workflows apply them with (see "SwanStation patches" below) |
 | [`src/resolution.cpp`](../src/resolution.cpp) | Which internal resolutions a GPU game is offered (see "Resolution limits" below) |
 | [`src/ring.cpp`](../src/ring.cpp) | The frame ring writer: the header from protocol.md's byte table, slot choice, and capped doubling when a frame needs more room |
@@ -70,6 +70,11 @@ network left to the launcher.
   saved before it and runs every kept frame from there again (`Resimulate`),
   with each frame's state saved again and its hashes measured again. Then it
   pops the kept frames now confirmed and sends their `sync` messages in order.
+  A check frame is hashed every time it runs, as GGPO and GGRS take a
+  checksum with every save: a run the host cannot yet know to be the last
+  (one before the frame is confirmed) may be the one whose hashes are sent.
+  With `lockstep.state` `false`, `Measure` hashes main RAM and takes the
+  picture's hash only, and never serializes the core for a check.
   A step is not taken while a correction waits, so a frame never runs on a
   prediction the host could already have replaced. `Settle` runs before state
   requests, so a `saveState` sent after the last corrections sees them taken.
@@ -212,10 +217,12 @@ network left to the launcher.
 
 - `json_test` checks the JSON and path rules.
 - `hash_test` ([`tests/hash_test.cpp`](../tests/hash_test.cpp)) checks
-  [`src/hash.cpp`](../src/hash.cpp): FNV-1a's published
-  values, that a run of zeros hashes as it does byte by byte, and that the
-  used length plus the zero run gives the hash of the whole buffer, for every
-  length and end up to 40 bytes and for a buffer the size of a state.
+  [`src/hash.cpp`](../src/hash.cpp) against xxHash 0.8.3's published XXH3-64
+  vectors (its sanity buffer at 0, 1 and 1025 bytes, and the state hash's
+  seed), the used length for every length and end up to 200 bytes and for a
+  buffer the size of a state, that the buffer's size changes a state's hash,
+  and that a picture hashes as its size and RGB bytes hashed in one go, alike
+  from an rgba8 and a bgra8 copy, over more pixels than one chunk.
 - `resolution_test` checks which scales [`src/resolution.cpp`](../src/resolution.cpp)
   offers for a geometry and a limit, and which value it moves to.
 - [`tests/conformance.py`](../tests/conformance.py) is the fake launcher of
@@ -252,7 +259,10 @@ network left to the launcher.
   `fake_region` option at `pal` runs at 50 frames a second and answers
   `RETRO_REGION_PAL`, and a `fake-refresh-50` file makes an NTSC game switch
   to 50 through `SET_SYSTEM_AV_INFO` after a frame, as SwanStation does when a
-  game changes its video mode.
+  game changes its video mode. With a `fake-count-netplay` file, each
+  serialization in the netplay context adds a byte to
+  `fake-netplay-serialized`, so `rollback_test.py` can see that a check with
+  `lockstep.state` `false` serializes nothing.
 - [`tests/host_test.py`](../tests/host_test.py) covers what the fixtures do
   not: a stuck core (the stall limit, then `release` replying and the host
   exiting), a core that is not a library and a missing disc (each ending the
@@ -287,7 +297,7 @@ network left to the launcher.
   the frame, loads it and runs the frame again, and both runs must match; the
   average save and load time is printed and, with `--budget-ms`, checked. With
   the fake core it also checks that input reaches the console, the refusals
-  of lockstep and its protocol errors, and, holding the fake core inside a
+  of lockstep (a `state` that is not `true` or `false` among them) and its protocol errors, and, holding the fake core inside a
   frame, that leaving lockstep is answered only once that frame has ended and
   that nothing of the old frame count follows, and that a paused game told to
   connect port 2 saves the one port its core still has. It reads every host in turn
@@ -315,9 +325,14 @@ network left to the launcher.
   state), each must come once and in order, a rollback must have happened,
   and the players may show at most one picture more than the reference for
   each rollback (frames run again show only their newest picture). A second
-  phase checks every 60th frame, as a match would, and prints what a rollback
-  cost: the load, each frame run again, and the whole rollback, whose average
-  `--budget-ms` holds to a budget with the real core. With the test core it also checks
+  phase checks every frame with `lockstep.state` `false` against a reference
+  doing the same: RAM and picture must match, no `sync` may hold a state, and
+  with the test core no check may serialize it.
+  A third checks every 60th frame, as a match would. Each phase prints what a
+  rollback cost: the load, each frame run again, and the whole rollback,
+  whose average the real core holds to `--state-budget-ms` (every frame, the
+  state included), `--ram-budget-ms` (every frame, no state) and
+  `--budget-ms` (every 60th frame). With the test core it also checks
   that a rollback whose last frames repeat an earlier picture leaves the
   newest picture made again in the frame ring, read pixel by pixel as a
   launcher reads it (the core's `fake-port2-picture` mode), with at most one
@@ -472,7 +487,8 @@ release can be packed and checked by hand the same way.
   `SWANSTATION_COMMIT` with the host's patches (see "SwanStation patches"), `licenses/` with the host's and SwanStation's licences
   and every licence, copying, copyright or notice file under SwanStation's
   `dep/` (the libraries it builds in, such as libchdr, xxHash and VIXL, as
-  `licenses/swanstation-dep/<path>`), the Apache-2.0 text for SwanStation's
+  `licenses/swanstation-dep/<path>`), the host's own xxHash licence
+  (`licenses/xxHash-BSD-2-Clause.txt`, from the `3rdparty/xxHash` submodule), the Apache-2.0 text for SwanStation's
   Vulkan headers (`licenses/swanstation-vulkan-headers-Apache-2.0.txt`: the
   headers name the licence only by URL, so the workflow fetches SPDX's copy at
   a fixed tag and checks its sha256), and `SOURCE.txt` naming the host commit,

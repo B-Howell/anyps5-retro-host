@@ -34,7 +34,11 @@
  * directory holds fake-refresh-50, an NTSC game switches to 50 frames a second through
  * RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO after a frame, as SwanStation does when a game changes its
  * video mode, keeping its region. The rate is part of its state, and a loaded state with another rate
- * reports it after the next frame, as SwanStation's video timings come back with its state. */
+ * reports it after the next frame, as SwanStation's video timings come back with its state.
+ *
+ * While the system directory holds fake-count-netplay, each retro_serialize the frontend asks for in
+ * the netplay context (RETRO_SAVESTATE_CONTEXT_ROLLBACK_NETPLAY, which a sync's state hash uses)
+ * adds a byte to fake-netplay-serialized there, so a test can see whether a check serialized it. */
 
 #include <libretro.h>
 
@@ -444,10 +448,29 @@ RETRO_API void retro_run(void) {
 }
 
 RETRO_API size_t retro_serialize_size(void) { return STATE_BYTES; }
+static void count_netplay_serialize(void) {
+  int context = RETRO_SAVESTATE_CONTEXT_NORMAL;
+  const char* system = NULL;
+  char path[1100];
+  FILE* file;
+  if (!in_system_directory("fake-count-netplay")) return;
+  if (!environment(RETRO_ENVIRONMENT_GET_SAVESTATE_CONTEXT, &context) ||
+      context != RETRO_SAVESTATE_CONTEXT_ROLLBACK_NETPLAY) {
+    return;
+  }
+  if (!environment(RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY, &system) || !system) return;
+  snprintf(path, sizeof path, "%s/fake-netplay-serialized", system);
+  file = fopen(path, "ab");
+  if (!file) return;
+  fputc('s', file);
+  fclose(file);
+}
+
 RETRO_API bool retro_serialize(void* data, size_t size) {
   unsigned char* out = data;
   const uint32_t words[6] = {frame_count, memory[1], memory[2], memory[3], rumbling, fps == 50.0 ? 1u : 0u};
   if (size < STATE_BYTES) return false;
+  count_netplay_serialize();
   memcpy(out, STATE_MAGIC, 8);
   memcpy(out + 8, words, sizeof words);
   memcpy(out + 8 + sizeof words, card, CARD_BYTES);

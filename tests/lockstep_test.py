@@ -402,7 +402,12 @@ def refusals(peer, match):
         reply = peer.call_raw('saveState', args)
         if 'error' not in reply:
             raise c.Failed(f'saveState {args} was not an argument error: {reply}')
-    print('lockstep refuses option, connectedPorts, states it cannot write or read, and slots out of range')
+    for state in (0, 'false', None):
+        reply = peer.call_raw('lockstep', {'check': 1, 'paced': False, 'state': state})
+        if 'error' not in reply:
+            raise c.Failed(f'lockstep with state {state!r} was not an argument error: {reply}')
+    print('lockstep refuses option, connectedPorts, states it cannot write or read, slots out of range and a '
+          'state that is not true or false')
 
 
 def reentry(peer, match):
