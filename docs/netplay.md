@@ -601,14 +601,19 @@ of the four runs (one Windows run took 4.2 ms, one save in it 68 ms; 2.6 to
 In CI, real-core run 43755458414 (before) against run 43792444819 (after,
 on 098cc0a):
 
-| Runner | Loading the state | Each frame run again | A whole rollback (after) | Each frame run again, checking every frame |
-| --- | --- | --- | --- | --- |
-| Windows Server 2022 (software rendering) | 3.1 → 1.2 ms | 3.1 → 1.8 ms | 8.4 ms | 22 to 27 → 9.0 ms |
-| Ubuntu 22.04 (Mesa) | 6.0 → 0.8 ms | 4.3 → 1.6 ms | 7.5 ms | 22 to 27 → 9.6 ms |
-| Ubuntu 24.04 (Mesa) | 6.8 → 1.3 ms | 5.9 → 2.6 ms | 12.1 to 12.5 ms | 22 to 27 → 12.7 ms |
-| hosted macOS (virtual GPU) | 5.9 → 10.0 ms | 63 → 4.5 ms | 28 to 30 ms | 77 ms |
+| Runner | Loading the state | Each frame run again | Each frame run again, checking every frame |
+| --- | --- | --- | --- |
+| Windows Server 2022 (software rendering) | 3.1 → 1.2 ms | 3.1 → 1.8 ms | 22 to 27 → 9.0 ms |
+| Ubuntu 22.04 (Mesa) | 6.0 → 0.8 ms | 4.3 → 1.6 ms | 22 to 27 → 9.6 ms |
+| Ubuntu 24.04 (Mesa) | 6.8 → 1.3 ms | 5.9 → 2.6 ms | 22 to 27 → 12.7 ms |
+| hosted macOS (virtual GPU) | 5.9 → 10.0 ms | 63 → 4.5 ms | 77 ms |
 
-A whole rollback there ran about 4 frames again on average and at most 6.
+A rollback there ran about 4 frames again on average and at most 6. The
+whole rollback, measured by the next run (43794161139, on 7bb0a32), took on
+average (and at most) 5.3 to 5.6 ms (13 ms) on Windows, 12.3 to 12.8 ms
+(25 ms) on Ubuntu 22.04, 12.1 to 12.6 ms (24 ms) on 24.04 and 25 to 28 ms
+(111 ms) on hosted macOS; runners vary from run to run, which is why
+Ubuntu 22.04's frames run again cost less in the first run.
 `rollback_test.py --budget-ms` holds the average whole rollback (the load
 and every frame it ran again) to the budget: `real-core` gives 16 ms on
 Windows and Linux and 40 ms on hosted macOS, where about 270 ms before patch
