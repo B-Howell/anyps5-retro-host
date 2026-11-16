@@ -22,6 +22,7 @@ hash (all of video memory and the CD unit with the rest) and RAM hash check."""
 
 import argparse
 import random
+import struct
 import sys
 import time
 from pathlib import Path
@@ -233,6 +234,46 @@ def netplay_serializes(match):
     return counted.stat().st_size if counted.exists() else 0
 
 
+def program_record(peer, match, magic):
+    """The record the program keeps in main RAM, read from the player's state saved to a file, as
+    pad_test.py reads the pad program's."""
+    path = match.work / f'{peer.name}-record.state'
+    if not peer.call('saveState', {'path': str(path)}):
+        raise c.Failed(f'{peer.name}: a game with every frame confirmed did not save its state')
+    data = path.read_bytes()[48:]
+    path.unlink()
+    at = data.find(magic)
+    if at < 0 or data.find(magic, at + 1) >= 0:
+        raise c.Failed(f'{peer.name}: the program\'s record is not in the state once')
+    return data[at:at + 0x50]
+
+
+def check_program(options, match, peers, frames):
+    """The vram or disc program was running for most of the frames compared, rollbacks came while it ran,
+    and the disc program read sectors of its data the whole time, with no CD-ROM error: matching hashes
+    alone would also come from players stuck before the program."""
+    if options.program_name == 'pad':
+        return
+    magic = disc.VRAM_MAGIC if options.program_name == 'vram' else disc.DISC_MAGIC
+    for peer in peers:
+        record = program_record(peer, match, magic)
+        counted = struct.unpack_from('<I', record, 8)[0]
+        started = frames - counted
+        late = [report for report in peer.rollbacks if report['frame'] > started]
+        if counted < frames // 2 or len(late) < 10:
+            raise c.Failed(f'{peer.name}: the program ran {counted} of {frames} frames, with {len(late)} '
+                           'rollbacks while it ran')
+        summary = f'the program ran {counted} frames, with {len(late)} rollbacks'
+        if options.program_name == 'disc':
+            sectors, last, _, errors = struct.unpack_from('<4I', record, disc.DISC_SECTORS)
+            if (sectors < counted // 4 or errors or
+                    not disc.DISC_DATA_LBA <= last < disc.DISC_DATA_LBA + disc.DISC_DATA_SECTORS):
+                raise c.Failed(f'{peer.name}: the disc program read {sectors} sectors in {counted} frames, the '
+                               f'last from LBA {last}, with {errors} CD-ROM errors')
+            summary += f'; it read {sectors} sectors of its data meanwhile, with no CD-ROM error'
+        print(f'{peer.name}: {summary}')
+
+
 def network(options, match):
     """Phase 1 compares every frame with lockstep: RAM, picture and state. Phase 2 checks every frame
     without the state (lockstep's state false), as a launcher that compares only RAM asks: no check
@@ -271,6 +312,8 @@ def network(options, match):
     print(f'rollback: two players with up to {options.delay} frames of delay and jitter, {tick * 1000:.0f} ms a '
           f'frame, {elapsed:.1f} s')
 
+    if match.real:
+        check_program(options, match, peers, frames)
     serialized = netplay_serializes(match)
     if serialized == 0:
         raise c.Failed('checking every frame with the state never serialized the core for netplay')
@@ -580,6 +623,7 @@ def main():
                         help='Seconds each simulated frame lasts at least, for the hosts to run what they were '
                         'sent; longer on a host slower than that')
     options = parser.parse_args()
+    options.program_name = options.program
     options.disc_data = disc.disc_data() if options.bios and options.program == 'disc' else None
     options.program = PROGRAMS[options.program]() if options.bios else None
     return play(options)

@@ -737,7 +737,8 @@ program (host.md "Tests") builds its picture from video memory drawn over
 hundreds of frames, a texture uploaded at boot among it, and fails both
 picture and state at the first rollback with such a core, or with one that
 loads the newest kept texture instead of the state's. The disc program reads
-the disc through every rollback; it fails at frame 90 when a load leaves the
+the disc the whole time it runs (the test checks it read sectors throughout,
+with dozens of rollbacks meanwhile); it fails at frame 90 when a load leaves the
 CD reader where the frames run ahead left it, and found the waiting-command
 fault above (patch 8). CI runs both on every system; on hosted Windows the
 core draws in software, so there they check the drive and video memory

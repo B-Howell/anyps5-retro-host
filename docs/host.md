@@ -381,7 +381,13 @@ network left to the launcher.
   `make_test_disc.build`'s `data` puts `disc_data` on its disc as `DATA.BIN`
   from sector 64; each sector starts with its own LBA. A rollback must put
   the drive back where it was, mid-seek or mid-read, with any command still
-  waiting. Each fails `rollback_test.py` against a core broken on purpose:
+  waiting. After the first phase `rollback_test.py` reads each player's
+  record from its state: the program must have run for at least half the
+  frames compared, with at least 10 rollbacks while it ran, and the disc
+  program must have read a sector for every four frames it ran (311 in 416
+  frames on the Windows desktop), the last from its data, with no CD-ROM
+  error, so matching hashes from players stuck before the program fail. Each
+  fails `rollback_test.py` against a core broken on purpose:
   the vram program at the first rollback (frame 189) when a load leaves
   video memory as it was or takes the newest kept texture, the disc program
   at frame 90 when a load leaves the CD reader where the frames run ahead
