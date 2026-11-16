@@ -14,10 +14,12 @@ on:
     paths:
       - .github/workflows/release.yml
       - tools/package_release.py
+      - tests/package_release_test.py
   pull_request:
     paths:
       - .github/workflows/release.yml
       - tools/package_release.py
+      - tests/package_release_test.py
   workflow_dispatch:
 permissions:
   contents: read
@@ -161,6 +163,8 @@ jobs:
         run: |
           curl -fsSL "$APACHE_URL" -o apache-2.0.txt
           echo "$APACHE_SHA256  apache-2.0.txt" | ${{ matrix.python }} -c "import hashlib, sys; digest, name = sys.stdin.read().split(); sys.exit(hashlib.sha256(open(name, 'rb').read()).hexdigest() != digest)"
+      - name: Check how the packer names the host's source
+        run: ${{ matrix.python }} tests/package_release_test.py
       # macOS: the maintainers' Developer ID signing and notarization of the host and of SwanStation
       # go here, before packing, because signing changes the files the .files lists (docs/host.md
       # "Releases").
@@ -169,13 +173,18 @@ jobs:
           ${{ matrix.python }} tools/package_release.py --version "${{ needs.version.outputs.version }}" \
             --system ${{ matrix.system }} --host ${{ matrix.host }} --core ${{ matrix.core }} \
             --core-licence swanstation/LICENSE --core-notices swanstation/dep \
-            --notice swanstation-vulkan-headers-Apache-2.0.txt=apache-2.0.txt --host-commit "$GITHUB_SHA" \
+            --notice swanstation-vulkan-headers-Apache-2.0.txt=apache-2.0.txt \
             --swanstation-commit "$SWANSTATION_COMMIT" --out release
-      - name: Unpack the zip and boot the real core from it
+      - name: Unpack the zip, check that SOURCE.txt names this run's source, and boot the real core from it
         run: |
           stem="anyps5-retro-host-${{ needs.version.outputs.version }}-${{ matrix.system }}"
           ${{ matrix.python }} -c "import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])" "release/$stem.zip" unpacked
           chmod +x "unpacked/${{ matrix.unpacked-host }}"
+          grep -qxF "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY at commit $GITHUB_SHA." unpacked/SOURCE.txt || {
+            echo "SOURCE.txt does not name $GITHUB_REPOSITORY at $GITHUB_SHA, the source this run built" >&2
+            cat unpacked/SOURCE.txt >&2
+            exit 1
+          }
           cp "${{ matrix.ring-access }}" unpacked/
           ${{ matrix.python }} tests/real_core.py --host "unpacked/${{ matrix.unpacked-host }}" \
             --core "unpacked/${{ matrix.unpacked-core }}" --bios ps1-files/openbios.bin \
