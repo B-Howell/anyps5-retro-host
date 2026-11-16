@@ -1,0 +1,51 @@
+{
+  "description": "Status of a running one-disc game on a PAL console in a PAL video mode.",
+  "from": "launcher",
+  "message": {
+    "type": "call",
+    "id": 3,
+    "method": "status"
+  },
+  "reply": {
+    "type": "reply",
+    "id": 3,
+    "result": {
+      "ready": true,
+      "ended": false,
+      "error": "",
+      "errorCode": "",
+      "aspect": 1.3333333333333333,
+      "hardware": true,
+      "resolutionError": "",
+      "graphicsPending": false,
+      "progressLabel": null,
+      "progressPercent": null,
+      "options": {
+        "swanstation_GPU_ResolutionScale": {
+          "title": "Internal Resolution",
+          "values": [
+            "1",
+            "2",
+            "4"
+          ],
+          "labels": [
+            "1x",
+            "2x",
+            "4x"
+          ],
+          "selected": 2,
+          "activeValue": "4",
+          "restart": false
+        }
+      },
+      "core": {
+        "name": "SwanStation",
+        "version": "anyps5-1-0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "timing": {
+        "fps": 59.29286193847656,
+        "region": "ntsc"
+      }
+    }
+  }
+}

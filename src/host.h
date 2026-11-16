@@ -23,8 +23,8 @@ constexpr int kExitClean = 0;
 constexpr int kExitProtocolError = 2;
 constexpr int kExitMissedLimit = 3;
 
-// The host side of protocol.md, version 1, capabilities ps1, ps1Lockstep, ps1Rollback and
-// coreIdentity.
+// The host side of protocol.md, version 1, capabilities ps1, ps1Lockstep, ps1Rollback,
+// coreIdentity and gameTiming.
 class Host final : public GameEvents {
  public:
   explicit Host(Channel& channel) : channel_(channel) {}

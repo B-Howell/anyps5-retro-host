@@ -6,6 +6,7 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
@@ -216,6 +217,9 @@ class Game {
   void Run();
   void RunGame();
   bool LoadCore(std::string& error);
+  // Takes the core's newest retro_system_av_info timing and retro_get_region for status.timing and
+  // the audio output, and returns how long a paced frame lasts. On the game's thread, between frames.
+  std::chrono::duration<double> ApplyTiming();
   // Hands the frame in converted_ to the host.
   void Publish(uint32_t width, uint32_t height);
   // Tells the core its OpenGL context is going away, then releases it.
@@ -259,6 +263,13 @@ class Game {
   std::string error_code_;
   // The core's retro_get_system_info names (protocol.md "status", core), once it is loaded.
   std::optional<std::pair<std::string, std::string>> core_identity_;
+  // The frame rate the game is paced to and the core's region (protocol.md "status", timing), once
+  // the core has loaded the game.
+  struct Timing {
+    double fps = 60.0;
+    std::string region;
+  };
+  std::optional<Timing> timing_;
   double aspect_ = 4.0 / 3.0;
   std::vector<Option> options_;
   bool options_changed_ = false;

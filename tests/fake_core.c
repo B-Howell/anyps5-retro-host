@@ -27,7 +27,13 @@
  * drew nothing new.
  *
  * Its library_version is "1", or the environment variable FAKE_CORE_VERSION when it is set, so a
- * test can give the host a core build identity it must not pass on (protocol.md "status", core). */
+ * test can give the host a core build identity it must not pass on (protocol.md "status", core).
+ *
+ * A game started with fake_region "pal" is a PAL game: 50 frames a second and RETRO_REGION_PAL, as
+ * SwanStation gives for a PAL console; otherwise it runs at 60 and is NTSC. While the system
+ * directory holds fake-refresh-50, an NTSC game switches to 50 frames a second through
+ * RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO after a frame, as SwanStation does when a game changes its
+ * video mode, keeping its region. */
 
 #include <libretro.h>
 
@@ -69,7 +75,7 @@ static unsigned frame_count;
 static uint32_t memory[4];
 static unsigned rumbling;
 static uint32_t pixels[WIDTH * HEIGHT];
-static int16_t silence[2 * 735];
+static int16_t silence[2 * 882];
 static unsigned char card[CARD_BYTES];
 static char disc_paths[MAX_DISCS][2100];
 static unsigned disc_count;
@@ -79,6 +85,8 @@ static bool tray_open;
 static bool gpu_wanted;
 static bool gpu_ready;
 static unsigned scale = 1;
+static bool pal;
+static double fps = 60.0;
 static struct retro_hw_render_callback hw;
 static void(GL_CALL* gl_bind_framebuffer)(unsigned, unsigned);
 static void(GL_CALL* gl_viewport)(int, int, int, int);
@@ -213,6 +221,8 @@ RETRO_API void retro_init(void) {
   gpu_wanted = in_system_directory("fake-gpu");
   gpu_ready = false;
   scale = 1;
+  pal = false;
+  fps = 60.0;
   memset(&hw, 0, sizeof hw);
   memset(offered, 0, sizeof offered);
   memcpy(offered, definitions, count * sizeof definitions[0]);
@@ -251,7 +261,7 @@ RETRO_API void retro_get_system_av_info(struct retro_system_av_info* info) {
   info->geometry.max_width = hw.context_type ? VRAM_WIDTH * scale : WIDTH;
   info->geometry.max_height = hw.context_type ? VRAM_HEIGHT * scale : HEIGHT;
   info->geometry.aspect_ratio = 4.0f / 3.0f;
-  info->timing.fps = 60.0;
+  info->timing.fps = fps;
   info->timing.sample_rate = 44100.0;
 }
 
@@ -318,7 +328,10 @@ static void load_playlist(const char* path) {
 
 RETRO_API bool retro_load_game(const struct retro_game_info* game) {
   enum retro_pixel_format format = RETRO_PIXEL_FORMAT_XRGB8888;
+  struct retro_variable region = {"fake_region", NULL};
   if (!game || !game->path) return false;
+  pal = environment(RETRO_ENVIRONMENT_GET_VARIABLE, &region) && region.value && strcmp(region.value, "pal") == 0;
+  fps = pal ? 50.0 : 60.0;
   if (!environment(RETRO_ENVIRONMENT_SET_PIXEL_FORMAT, &format)) return false;
   if (environment(RETRO_ENVIRONMENT_SET_HW_RENDER, NULL) || environment(RETRO_ENVIRONMENT_GET_PREFERRED_HW_RENDER, NULL)) {
     return false;
@@ -358,12 +371,11 @@ RETRO_API bool retro_load_game_special(unsigned type, const struct retro_game_in
 
 RETRO_API void retro_unload_game(void) {}
 
-RETRO_API unsigned retro_get_region(void) { return RETRO_REGION_NTSC; }
+RETRO_API unsigned retro_get_region(void) { return pal ? RETRO_REGION_PAL : RETRO_REGION_NTSC; }
 
 RETRO_API void retro_run(void) {
   struct retro_variable color = {"fake_color", NULL};
   struct retro_variable hang = {"fake_hang", NULL};
-  struct retro_variable region = {"fake_region", NULL};
   uint32_t fill;
   unsigned i;
   bool cross;
@@ -380,7 +392,6 @@ RETRO_API void retro_run(void) {
     }
   }
   environment(RETRO_ENVIRONMENT_GET_VARIABLE, &color);
-  environment(RETRO_ENVIRONMENT_GET_VARIABLE, &region);
   fill = color.value && strcmp(color.value, "green") == 0 ? 0x0000C000u : 0x000000C0u;
   if (gpu_ready) {
     bool changed = false;
@@ -404,7 +415,7 @@ RETRO_API void retro_run(void) {
     for (i = 0; i < WIDTH * HEIGHT; ++i) pixels[i] = fill + (frame_count & 0xFF) * 0x10000u;
     video(pixels, WIDTH, HEIGHT, WIDTH * sizeof(uint32_t));
   }
-  audio_batch(silence, 735);
+  audio_batch(silence, (size_t)(44100.0 / fps));
   cross = input_state(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_B) != 0;
   memory[2] = (uint16_t)input_state(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_MASK);
   memory[3] = (uint16_t)input_state(1, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_MASK);
@@ -417,6 +428,12 @@ RETRO_API void retro_run(void) {
   card[0] = (unsigned char)(frame_count >= 30 ? 1 : 0);
   ++frame_count;
   memory[0] = frame_count;
+  if (fps != 50.0 && in_system_directory("fake-refresh-50")) {
+    struct retro_system_av_info info;
+    fps = 50.0;
+    retro_get_system_av_info(&info);
+    environment(RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO, &info);
+  }
 }
 
 RETRO_API size_t retro_serialize_size(void) { return STATE_BYTES; }

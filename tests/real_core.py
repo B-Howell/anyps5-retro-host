@@ -5,7 +5,9 @@
 program, put on a disc image by make_test_disc.py, and checks that it starts, draws a picture
 that is not black and keeps changing, stops and exits cleanly. With --expect-core-version it also
 checks the core build identity in status.core (docs/netplay.md "Core build identity") and can write
-it to a file, so CI can compare the identity each system's build reports.
+it to a file, so CI can compare the identity each system's build reports. It checks status.timing (the
+frame rate the host paces the game to and the console's region) on an auto-detected console and on a
+PAL one, and that the game publishes no more frames a second than that rate.
 The renderer is whichever the machine allows: with no OpenGL context the host must say why a scale
 above 1x does not apply."""
 
@@ -132,14 +134,15 @@ def picture():
     return width, height, data
 
 
-def start(game):
-    """Starts game at 2x and waits for its first frame; returns the status then."""
+def start(game, region=None):
+    """Starts game at 2x, on a console of region when given, and waits for its first frame; returns the
+    status then."""
+    core_options = {'swanstation_BIOS_PathNTSCU': 'openbios.bin', 'swanstation_BIOS_PathNTSCJ': 'openbios.bin',
+                    'swanstation_BIOS_PathPAL': 'openbios.bin', 'swanstation_GPU_ResolutionScale': '2'}
+    if region:
+        core_options['swanstation_Console_Region'] = region
     result = call('start', {'core': str(Path(options.core).resolve()), 'system': str(system),
-                            'saves': str(work / 'saves'), 'disc': str(game),
-                            'options': {'swanstation_BIOS_PathNTSCU': 'openbios.bin',
-                                        'swanstation_BIOS_PathNTSCJ': 'openbios.bin',
-                                        'swanstation_BIOS_PathPAL': 'openbios.bin',
-                                        'swanstation_GPU_ResolutionScale': '2'}})
+                            'saves': str(work / 'saves'), 'disc': str(game), 'options': core_options})
     state['epoch'] = result['epoch']
     status = wait_status(lambda s: s['ready'] or s['ended'], 60, 'the game was not ready')
     if status['ended']:
@@ -157,10 +160,38 @@ def start(game):
         Path(options.core_identity_out).write_text(json.dumps(core, sort_keys=True) + '\n', encoding='utf-8')
     if options.expect_opengl and not status['hardware']:
         raise c.Failed('this machine has an OpenGL renderer, but the host made no context for the core')
+    check_timing(status, 'pal' if region == 'PAL' else None)
     scales = status['options']['swanstation_GPU_ResolutionScale']['values']
     if status['hardware'] and max(int(value) for value in scales) > 8:
         raise c.Failed(f'scales whose largest geometry, 1024 x 512 times the scale, passes 8192 are offered: {scales}')
     return status
+
+
+def check_timing(status, region=None):
+    """status.timing is the console's region (region, when the console was set to one) and a frame rate of
+    one of the two video standards: SwanStation gives the vertical frequency of the video mode the game set."""
+    timing = status.get('timing')
+    print(f'timing: {timing}')
+    if not isinstance(timing, dict) or timing.get('region') not in ('ntsc', 'pal'):
+        raise c.Failed(f'status.timing is {timing!r}, not an NTSC or PAL region and a frame rate')
+    if region and timing['region'] != region:
+        raise c.Failed(f'a {region} console gave region {timing["region"]!r}')
+    if not (48 < timing["fps"] < 52 or 58 < timing["fps"] < 62):
+        raise c.Failed(f'status.timing.fps is {timing["fps"]!r}, neither about 50 nor about 60')
+    return timing
+
+
+def paced(seconds, what):
+    """Counts the frames published over seconds and checks they are no more than the frame rate in
+    status.timing allows."""
+    before = state['frames']
+    drain(seconds)
+    shown = state['frames'] - before
+    fps = check_timing(call('status'))['fps']
+    print(f'{what}: {shown} frames in {seconds} s at {fps:.3f} frames a second')
+    if shown > fps * seconds * 1.05:
+        raise c.Failed(f'{shown} frames in {seconds} s is faster than {fps:.3f} frames a second')
+    return shown
 
 
 def stop():
@@ -214,9 +245,7 @@ try:
         raise c.Failed(f'the host does not list coreIdentity: {welcome["capabilities"]}')
     call('volume', {'level': 0.0, 'muted': True})
     status = start(disc)
-    before = state['frames']
-    drain(10)
-    shown = state['frames'] - before
+    shown = paced(10, 'auto-detected console')
     pictures = []
     deadline = time.monotonic() + 30
     while len(set(p[2] for p in pictures)) < 2 and time.monotonic() < deadline:
@@ -247,6 +276,11 @@ try:
           f'bottom-right {colour(seen, seen[0] - 1 - seen[0] // 20, seen[1] - 1 - seen[1] // 20)}')
     if not is_corner_picture(seen):
         raise c.Failed('the corner program is not red at the top-left only: the picture is flipped or its colours are wrong')
+    stop()
+    # A PAL console: the region is PAL whatever video mode the program sets.
+    start(disc, 'PAL')
+    if paced(5, 'PAL console') < 50:
+        raise c.Failed('fewer than 50 frames in 5 s on a PAL console')
     stop()
     host.send_message({'type': 'shutdown'})
     code = host.exits(15)

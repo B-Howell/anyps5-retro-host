@@ -192,6 +192,11 @@ def status_result(value, name=None, report=False):
             string(text, f'status.core.{field}')
             need(len(text) <= 256 and all(' ' <= letter <= '~' for letter in text),
                  f'status.core.{field} is printable ASCII of at most 256 bytes')
+    if value.get('timing') is not None:
+        timing = obj(value['timing'], 'status.timing')
+        need(is_number(timing.get('fps')) and 1 < timing['fps'] < 1000,
+             'status.timing.fps must be a number above 1 and below 1000')
+        need(timing.get('region') in ('ntsc', 'pal', ''), 'status.timing.region must be "ntsc", "pal" or ""')
     if 'discs' in value:
         discs = obj(value['discs'], 'status.discs')
         labels = discs.get('labels')

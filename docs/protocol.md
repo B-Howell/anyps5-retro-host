@@ -432,6 +432,7 @@ a method whose capability the host did not list.
 | `ps1Lockstep` | [Lockstep](#lockstep): `start.lockstep`, the methods `lockstep`, `saveState` and `loadState`, and the messages `step` and `sync` |
 | `ps1Rollback` | [Rollback](#rollback), with `ps1Lockstep`: `lockstep.rollback`, `null` ports in `step`, and the messages `correct` and `rollback` |
 | `coreIdentity` | `core` in [`status`](#status): the loaded core's name and build identity, which two players' launchers compare before a match |
+| `gameTiming` | `timing` in [`status`](#status): the frame rate the host paces the game to and the game's region, which a launcher's frame clock follows in [rollback](#rollback) |
 
 Later versions add capabilities such as PS2 and PS3.
 
@@ -659,6 +660,7 @@ No argument. Returns `null` when no game is loaded, or:
 | `progressPercent` | integer 0 to 100, or null | How far it is, when known |
 | `options` | object | Each core option the player can change now, by key |
 | `core` | object or null | Capability `coreIdentity`: the core the game loaded, or `null` until it is loaded and when it could not be (`errorCode` `core`). It stays once the game has ended. See below |
+| `timing` | object or null | Capability `gameTiming`: the game's frame rate and region, or `null` until the core has loaded the game and when it did not (a game that ended with `bios`, `disc` or `core` before its first frame). It stays once the game has ended. See below |
 | `discs` | object, optional | Present for multi-disc games |
 
 | `errorCode` | Meaning |
@@ -675,7 +677,8 @@ No argument. Returns `null` when no game is loaded, or:
 | `hostHung` | Only the launcher's client reports it: the host missed one of the launcher's time limits and the launcher closed it (see [Host failure](#host-failure)) |
 
 The host always sends every field above (`discs` only for a multi-disc
-game, `core` only with the `coreIdentity` capability), including for a game
+game, `core` only with the `coreIdentity` capability, `timing` only with
+`gameTiming`), including for a game
 that ended before its first frame. The shorter
 form in [Host failure](#host-failure) is never sent by a host; only the
 launcher's client reports it.
@@ -693,6 +696,31 @@ script keeps SwanStation's own `version` (`1.0.0 ` and a git description).
 Before a match each launcher compares both strings with its friend's, and
 plays online only when both are equal and `version` has the `anyps5-1-`
 form; anything else is a different core. The host does not judge the value.
+
+`timing` has `fps` and `region`:
+
+- `fps`, a number above 1 and below 1000, is the frames a second the host
+  runs the game at when it keeps its own time: on its own, and in lockstep
+  with `paced`. It is the `timing.fps` of the core's newest
+  `retro_system_av_info`, from `retro_get_system_av_info` once the game has
+  loaded or from `RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO` after a frame, or
+  60 when that is not above 1 and below 1000. SwanStation gives the
+  vertical frequency of the video mode the game has set, about 60 for NTSC
+  and 50 for PAL, and gives a new one when the game changes it (to an
+  interlaced or a progressive picture, or to the other standard): the host
+  takes it between two frames, and the next frame keeps to it.
+- `region` is what the core's `retro_get_region` answers at the same times:
+  `ntsc` for `RETRO_REGION_NTSC`, `pal` for `RETRO_REGION_PAL`, and `""` for
+  any other value. SwanStation answers with the console's region, which
+  `swanstation_Console_Region` sets or, by default, the disc decides; NTSC-J
+  and NTSC-U are both `ntsc`. The region is the console's and `fps` the
+  video mode's, so a game on a PAL console that sets an NTSC mode reports
+  `pal` and about 60.
+
+Both come from the emulated console, so two players' hosts running the same
+disc on the same core build report the same values at the same frame. A
+launcher reads them from each `status`; a new `fps` reaches it with the next
+one.
 
 Each option has `title` (string), `values` (array of strings), `labels`
 (array of strings, the same length as `values`), `selected` (index into
@@ -806,8 +834,8 @@ Argument: `{"check":<integer 1 to 3600>,"paced":<boolean, optional>,
 - With an object, the game enters lockstep, or, when it already is in
   lockstep, keeps its frame count and takes the new settings. `check` is how
   often a `sync` is sent: after every frame whose number is a multiple of it.
-  `paced` (default `true`) keeps the game to its core's frame rate even when
-  steps queue up; `false` runs queued steps as fast as the machine can, as a
+  `paced` (default `true`) keeps the game to its core's frame rate
+  (`status.timing.fps`) even when steps queue up; `false` runs queued steps as fast as the machine can, as a
   player catching up does. With `rollback`, the game runs in
   [rollback](#rollback), with at most `frames` frames stepped beyond the last
   confirmed one; without it, in plain lockstep. The change takes effect
@@ -999,6 +1027,15 @@ it is known.
 - **Syncs.** A frame's `sync` comes once the frame is confirmed, with what the
   frame left behind the last time it was run, so two players' hosts compare
   the same thing however often each ran it.
+- **The clock.** As in GGPO, a game in rollback has one clock, the
+  launcher's: it sets `paced` to `false`, so the host runs each step as it
+  comes, and steps a frame every 1 ÷ `status.timing.fps` seconds (with
+  `gameTiming`), so a game in a PAL mode runs at 50 frames a second and
+  one in an NTSC mode at about 60, as on a console. When `fps` changes, the frames after the next `status`
+  keep to the new rate. The launcher also measures the round trip and the
+  cost of a rollback in frames of that length ([netplay.md](netplay.md)
+  "Lockstep first, rollback after"). A host without `gameTiming` gives no
+  rate, and a launcher steps its games at 60 frames a second.
 
 ### correct
 

@@ -96,7 +96,8 @@ desyncs are found by comparing hashes.
   input, saving and loading the core's state between frames, and hashing
   what each frame left behind. These need the core and the game's thread.
 - The cost is one more local hop for each frame's input, over a pipe or
-  socket on the same machine. It is far below a frame's 16.7 ms.
+  socket on the same machine. It is far below a frame's 16.7 ms (20 ms in a
+  PAL game).
 
 So each launcher is the network peer and the host is a deterministic
 machine it feeds:
@@ -158,8 +159,10 @@ Lockstep comes first because:
   patch, which the host now carries.
 
 A match picks *d* from the round trip it measures while the lobby is open:
-*d* = ⌈(round trip ÷ 2) ÷ 16.7 ms⌉ + 1, at most 8. Above 8 frames (about a
-270 ms round trip) the lobby says the connection is too slow for this game,
+*d* = ⌈(round trip ÷ 2) ÷ frame⌉ + 1, at most 8, where a frame lasts
+1 ÷ `status.timing.fps` (16.7 ms in an NTSC game, 20 ms in a PAL one;
+"Frame rate" below). Above 8 frames (a round trip above about 230 ms in an NTSC
+game, 280 ms in a PAL one) the lobby says the connection is too slow for this game,
 rather than offering a match that feels broken. Rollback later lowers the
 delay players feel to a fixed 1 or 2 frames, with the rest predicted.
 
@@ -200,6 +203,28 @@ ahead and acknowledges it, so it steps every frame on time with the friend's
 port `null` when that input is late, sends `correct` when it arrives, and
 lowers its input delay to 1 or 2 frames, leaving the rest of the round trip to
 prediction.
+
+### Frame rate
+
+In rollback the launcher's frame clock is the game's only clock (the host
+runs each step as it comes, `paced` `false`), so that clock must run at the
+game's own rate. A PS1 game does not always run at 60 frames a second:
+SwanStation gives the vertical frequency of the video mode the game set,
+about 60 for NTSC and 50 for PAL (a European game sets PAL), and gives a new
+one when the game changes its mode. A clock fixed at 60 would run a PAL game
+a fifth too fast, and an NTSC game slightly off its console's rate.
+
+RetroArch paces its main loop to the core's `retro_system_av_info`
+`timing.fps` and follows `RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO`; GGPO leaves
+the frame rate to the game, which advances its own clock. The host does the
+first already when it keeps its own time, and with capability `gameTiming`
+it reports that rate, and the core's `retro_get_region`, as `status.timing`
+([protocol.md](protocol.md) "status"), so the launcher's clock is the
+second: it steps a frame every 1 ÷ `fps` seconds and takes a new `fps` from
+the next `status`. The value comes from the emulated console, so both
+players' hosts report the same rate at the same frame; it is not a measure of
+either machine's speed. The input delay above, the round trip in frames and
+whether a rollback fits in a frame are all counted in frames of that length.
 
 ## Joining a running game
 
@@ -538,7 +563,8 @@ predicted):
 | hosted macOS (virtual GPU) | 5.9 ms | 63 ms |
 
 So, going by these averages, on the Windows runner a rollback of up to 4
-frames fits in one 16.7 ms frame, on Ubuntu 22.04 up to 2 and on 24.04 one; a
+frames fits in one 16.7 ms NTSC frame, on Ubuntu 22.04 up to 2 and on 24.04 one
+(in a 20 ms PAL frame, up to 5, 3 and 2); a
 longer one makes that frame late. With a check every frame (RAM and the state hashed after each) a frame
 run again costs 22 to 27 ms on Windows and Linux. The hosted macOS runner's
 save reads its virtual GPU back and is far too slow to roll back; a real Mac
@@ -551,9 +577,17 @@ is not measured yet.
   core that did not load. With the real core, `real-core`'s `same-core` job
   compares what Windows, Linux and macOS report, as "Core build identity"
   says.
+- The frame rate: `host_test.py`'s `game_timing` test checks `status.timing`
+  for the test core's NTSC (60) and PAL (50) games and for one that switches
+  to 50 while it runs, and that a paced game, on its own or in lockstep, runs
+  no faster than that; `real_core.py` checks SwanStation's rate and region on
+  an auto-detected console and a PAL one ("Frame rate" above).
 
 Next, for the launcher:
 
+- The frame clock of a match follows `status.timing.fps` (the launcher's
+  rollback clock is fixed at 60 Hz until then), and the input delay and the
+  rollback window are counted in frames of that length.
 - In the launcher, the existing input-wire, checkpoint-transfer and
   network-simulation tests, pointed at two hosts instead of the in-process
   runner, under delay, jitter, loss and reordering, with rollback.

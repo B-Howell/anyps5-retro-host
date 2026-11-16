@@ -3,13 +3,13 @@
 
 # How the host is put together
 
-The host implements [protocol version 1](protocol.md) with the `ps1` and
-`ps1Lockstep` capabilities. It is a small C++17 program with three threads:
+The host implements [protocol version 1](protocol.md) with the `ps1`,
+`ps1Lockstep`, `ps1Rollback`, `coreIdentity` and `gameTiming` capabilities. It is a small C++17 program with three threads:
 
 | Thread | Does |
 | --- | --- |
 | Control (`main`) | Reads each message, answers calls and pings in order, and enforces the connection's order rules |
-| Game | Started once the `start` reply is sent. Opens the core and the disc, then `retro_init`, `retro_load_game` and `retro_run` paced to the core's frame rate, or in lockstep one `retro_run` per step. Publishes frames, sends `ring`, `frame`, `rumble` and `sync`, and saves and loads states between frames. It marks each frame (`in_frame_`), and the control thread's `lockstep` calls wait on a condition variable for the frame to end, so the change falls between two frames |
+| Game | Started once the `start` reply is sent. Opens the core and the disc, then `retro_init`, `retro_load_game` and `retro_run` paced to the core's frame rate, or in lockstep one `retro_run` per step. `ApplyTiming` takes the core's `timing.fps` and `retro_get_region` once the game has loaded and again between frames after `SET_SYSTEM_AV_INFO`, so pacing and `status.timing` use the same rate (60 when the core gives none above 1 and below 1000). Publishes frames, sends `ring`, `frame`, `rumble` and `sync`, and saves and loads states between frames. It marks each frame (`in_frame_`), and the control thread's `lockstep` calls wait on a condition variable for the frame to end, so the change falls between two frames |
 | Watch | Every 100 ms: the 5 s write limit, the stall and first-frame game limits, the `stop` limit, and the 10 s limit for leaving |
 
 On Linux and macOS a fourth thread waits for `SIGTERM` (sent by
@@ -237,7 +237,11 @@ network left to the launcher.
   `fake-hold-run` makes it wait inside `retro_run`, so a test can act while a
   frame is being run. With `fake-port2-picture` a frame's colour comes
   from port 2's buttons, and Select held on port 2 makes it repeat the last
-  picture (the video callback without pixels).
+  picture (the video callback without pixels). A game started with the
+  `fake_region` option at `pal` runs at 50 frames a second and answers
+  `RETRO_REGION_PAL`, and a `fake-refresh-50` file makes an NTSC game switch
+  to 50 through `SET_SYSTEM_AV_INFO` after a frame, as SwanStation does when a
+  game changes its video mode.
 - [`tests/host_test.py`](../tests/host_test.py) covers what the fixtures do
   not: a stuck core (the stall limit, then `release` replying and the host
   exiting), a core that is not a library and a missing disc (each ending the
@@ -245,7 +249,13 @@ network left to the launcher.
   the test core's `library_version` from the environment variable
   `FAKE_CORE_VERSION`, passed as it is when it is printable ASCII of at most
   256 bytes and as `""` otherwise, kept after the game ends, and `null` for a
-  core that did not load), and eight games in a row with
+  core that did not load), `status.timing` (`game_timing`: 60 and `ntsc` for
+  the test core's NTSC game, 50 and `pal` for its PAL game, 50 and `ntsc`
+  after the game switches to 50 while it runs, each kept after the game ends;
+  the frames a second the game publishes over 3 seconds, which must not pass
+  that rate by more than 5%; known before the first step of a PAL game
+  started in lockstep, whose 100 paced steps must take 99 frames of 20 ms;
+  and `null` for a core that did not load), and eight games in a row with
   `volume`, `pause` and `stop` calls in between, and the resolution limits
   (`gpu_limits`): the fake core started at 16x must start at 8x, offer 1x to
   8x, explain itself in `resolutionError`, draw 5120-wide frames, refuse 16x
@@ -341,7 +351,11 @@ network left to the launcher.
   so). With `--expect-core-version`, which both workflows pass with the value
   [`tools/core_identity.py`](../tools/core_identity.py) computes, `welcome`
   must list `coreIdentity` and `status.core` must be `SwanStation` with that
-  version; `--core-identity-out` writes `status.core`, and `real-core.yml`'s
+  version. It checks
+  `status.timing` on the auto-detected console and on one set to PAL:
+  region `ntsc` or `pal` (`pal` for the PAL console) and a frame rate of
+  about 50 or 60, and no more frames in 10 (and 5) seconds than that rate
+  allows. `--core-identity-out` writes `status.core`, and `real-core.yml`'s
   `same-core` job checks that Windows, both Linux runners and macOS wrote the
   same one. With `--expect-opengl`, which `real-core.yml` passes on Linux and macOS (the
   release workflow's check of the unpacked zips does not), the test also

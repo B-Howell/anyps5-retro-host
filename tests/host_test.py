@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2026 AnyPS5 Desktop contributors
 
 """Host behaviour the fixtures do not cover: a stuck core, many start, volume and stop calls
-in a row, and the internal resolutions a GPU game is offered."""
+in a row, the internal resolutions a GPU game is offered, and the frame rate a game is paced to."""
 
 import argparse
 import shutil
@@ -51,12 +51,28 @@ class Session:
             raise c.Failed(f'{method} failed: {reply["error"]}')
         return reply['result']
 
-    def start(self, options=None):
+    def start(self, options=None, lockstep=None):
         args = {'core': self.paths['core'], 'disc': self.paths['disc'], 'system': self.paths['system'],
                 'saves': self.paths['saves']}
         if options is not None:
             args['options'] = options
+        if lockstep is not None:
+            args['lockstep'] = lockstep
         return self.call('start', args)['epoch']
+
+    def frame_rate(self, seconds):
+        """The frames a second the game published over seconds, counted from the host's frame messages."""
+        self.read(lambda m: m.get('type') == 'frame')
+        began = time.monotonic()
+        frames = 0
+        while time.monotonic() < began + seconds:
+            try:
+                message = self.read(lambda m: True, max(0.01, began + seconds - time.monotonic()))
+            except c.Idle:
+                continue
+            if message.get('type') == 'frame':
+                frames += 1
+        return frames / (time.monotonic() - began)
 
     def wait(self, test, seconds):
         deadline = time.monotonic() + seconds
@@ -142,6 +158,71 @@ def core_identity(program, core, log):
             c.os.environ.pop('FAKE_CORE_VERSION', None)
         else:
             c.os.environ['FAKE_CORE_VERSION'] = saved
+
+
+def game_timing(program, core, log):
+    """status.timing gives the frame rate the host paces the game to and the core's region: the fake
+    core's NTSC game at 60, its PAL game at 50, and a game that switches to 50 through
+    SET_SYSTEM_AV_INFO while it runs. A paced game, on its own or in lockstep, publishes no more frames
+    a second than that; timing is null for a core that did not load and known before a game started
+    in lockstep runs its first step."""
+    pal = {'fps': 50.0, 'region': 'pal'}
+    session = Session(program, core, log)
+    try:
+        for options, timing in ((None, {'fps': 60.0, 'region': 'ntsc'}), ({'fake_region': 'pal'}, pal)):
+            session.start(options)
+            status = session.wait(lambda s: s and s['ready'], 10)
+            if status.get('timing') != timing:
+                raise c.Failed(f'a game started with {options} gave timing {status.get("timing")!r}, not {timing}')
+            rate = session.frame_rate(3)
+            print(f'      {timing["region"]} game: {rate:.1f} frames a second')
+            if not 0.5 * timing['fps'] < rate < 1.05 * timing['fps']:
+                raise c.Failed(f'a {timing["fps"]:g} Hz game ran at {rate:.1f} frames a second')
+            session.call('stop')
+            status = session.wait(lambda s: s['ended'], 5)
+            if status.get('timing') != timing:
+                raise c.Failed(f'an ended game gave timing {status.get("timing")!r}')
+            session.call('release')
+
+        session.start()
+        session.wait(lambda s: s and s['ready'], 10)
+        (Path(session.paths['system']) / 'fake-refresh-50').write_bytes(b'')
+        status = session.wait(lambda s: (s.get('timing') or {}).get('fps') == 50.0, 5)
+        if status['timing'] != {'fps': 50.0, 'region': 'ntsc'}:
+            raise c.Failed(f'a game that switched to 50 Hz gave timing {status["timing"]!r}')
+        rate = session.frame_rate(3)
+        if not rate < 1.05 * 50:
+            raise c.Failed(f'a game that switched to 50 Hz ran at {rate:.1f} frames a second')
+        (Path(session.paths['system']) / 'fake-refresh-50').unlink()
+        session.call('stop')
+        session.wait(lambda s: s['ended'], 5)
+        session.call('release')
+
+        session.start({'fake_region': 'pal'}, {'check': 1})
+        status = session.wait(lambda s: s and s.get('timing') is not None, 10)
+        if status['timing'] != pal or status['ready']:
+            raise c.Failed(f'a PAL game waiting for its first step gave {status}')
+        steps = 100
+        for frame in range(steps):
+            session.host.send_message({'type': 'step', 'frame': frame, 'ports': [
+                {'buttons': 0, 'leftX': 0, 'leftY': 0, 'rightX': 0, 'rightY': 0}]})
+        began = time.monotonic()
+        session.read(lambda m: m.get('type') == 'sync' and m['frame'] == steps - 1, 30)
+        took = time.monotonic() - began
+        print(f'      {steps} paced lockstep steps of a PAL game: {took:.2f} s')
+        if took < 0.95 * (steps - 1) / 50:
+            raise c.Failed(f'{steps} paced lockstep steps of a 50 Hz game took {took:.2f} s')
+        session.call('stop')
+        session.wait(lambda s: s['ended'], 5)
+        session.call('release')
+
+        session.call('start', {'core': session.paths['disc'], 'disc': session.paths['disc'],
+                               'system': session.paths['system'], 'saves': session.paths['saves']})
+        status = session.wait(lambda s: s and s['ended'], 5)
+        if status['errorCode'] != 'core' or status.get('timing', 'missing') is not None:
+            raise c.Failed(f'a core that did not load gave {status}')
+    finally:
+        session.close()
 
 
 def restart_option(program, core, log):
@@ -282,7 +363,7 @@ def main():
     c.load_atomics(options.core.resolve())
     failures = 0
     tests = {'stuck_core': stuck_core, 'unloadable': unloadable, 'core_identity': core_identity,
-             'restart_option': restart_option,
+             'game_timing': game_timing, 'restart_option': restart_option,
              'many_games': many_games,
              'gpu_limits': lambda program, core, log: gpu_limits(program, core, log, options.require_gpu)}
     chosen = [(name, test) for name, test in tests.items() if not options.names or name in options.names]

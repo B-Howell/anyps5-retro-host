@@ -167,6 +167,21 @@ std::string IdentityText(const char* text) {
   return std::string(text, length);
 }
 
+// The frame rate a game is paced to (protocol.md "status", timing): the core's timing.fps, or 60
+// when the core gives none a game could run at.
+double PacedFps(double fps) { return fps > 1 && fps < 1000 ? fps : 60.0; }
+
+const char* RegionName(unsigned region) {
+  switch (region) {
+    case RETRO_REGION_NTSC:
+      return "ntsc";
+    case RETRO_REGION_PAL:
+      return "pal";
+    default:
+      return "";
+  }
+}
+
 uint64_t MicrosSince(std::chrono::steady_clock::time_point began) {
   return static_cast<uint64_t>(
       std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - began).count());
@@ -191,7 +206,7 @@ bool Game::LoadCore(std::string& error) {
                                   "retro_set_input_state", "retro_init", "retro_deinit", "retro_load_game",
                                   "retro_unload_game", "retro_run", "retro_get_system_av_info",
                                   "retro_set_controller_port_device", "retro_get_memory_data",
-                                  "retro_get_memory_size", "retro_get_system_info"};
+                                  "retro_get_memory_size", "retro_get_system_info", "retro_get_region"};
   for (const char* name : required) {
     if (!library_.Symbol(name)) {
       error = std::string("The core has no ") + name + ".";
@@ -319,8 +334,7 @@ void Game::RunGame() {
   RefreshDiscs();
   fps_ = info.timing.fps;
   sample_rate_ = info.timing.sample_rate;
-  timing_changed_ = true;
-  auto frame_time = std::chrono::duration<double>(1.0 / 60.0);
+  auto frame_time = ApplyTiming();
 
   run_ = Get<void (*)()>("retro_run");
   auto next = std::chrono::steady_clock::now();
@@ -348,17 +362,12 @@ void Game::RunGame() {
       break;
     }
     ServeStateRequest();
+    if (timing_changed_) frame_time = ApplyTiming();
     if (paused_) {
       EndFrame();
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
       next = std::chrono::steady_clock::now();
       continue;
-    }
-    if (timing_changed_) {
-      timing_changed_ = false;
-      audio_.Open(sample_rate_);
-      const double fps = fps_ > 1 && fps_ < 1000 ? fps_ : 60.0;
-      frame_time = std::chrono::duration<double>(1.0 / fps);
     }
     const NextStep step = TakeStep(kStepWaitMs);
     if (step.lockstep && !step.input) {
@@ -410,6 +419,16 @@ void Game::RunGame() {
   Get<void (*)()>("retro_deinit")();
   audio_.Close();
   Finish(end_error, end_code);
+}
+
+std::chrono::duration<double> Game::ApplyTiming() {
+  timing_changed_ = false;
+  audio_.Open(sample_rate_);
+  Timing timing{PacedFps(fps_), RegionName(Get<unsigned (*)()>("retro_get_region")())};
+  const auto frame_time = std::chrono::duration<double>(1.0 / timing.fps);
+  std::lock_guard<std::mutex> lock(mutex_);
+  timing_ = std::move(timing);
+  return frame_time;
 }
 
 void Game::RunFrame(const std::optional<StepInput>& input) {
@@ -939,6 +958,11 @@ Json Game::Status() const {
     status.emplace_back("core", JsonObject{{"name", core_identity_->first}, {"version", core_identity_->second}});
   } else {
     status.emplace_back("core", nullptr);
+  }
+  if (timing_) {
+    status.emplace_back("timing", JsonObject{{"fps", timing_->fps}, {"region", timing_->region}});
+  } else {
+    status.emplace_back("timing", nullptr);
   }
   if (disc_.labels.size() > 1) {
     JsonObject discs;
