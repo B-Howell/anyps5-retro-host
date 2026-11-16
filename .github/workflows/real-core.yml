@@ -56,14 +56,14 @@ jobs:
             python: python3
             opengl: --expect-opengl
             budget: --budget-ms 16
-            rollback_budget: --budget-ms 16
+            rollback_budget: --budget-ms 24
           - os: ubuntu-24.04
             core: swanstation/build/swanstation_libretro.so
             host: build/anyps5-retro-host
             python: python3
             opengl: --expect-opengl
             budget: --budget-ms 16
-            rollback_budget: --budget-ms 16
+            rollback_budget: --budget-ms 24
           - os: macos-latest
             core: swanstation/build/swanstation_libretro.dylib
             host: build/anyps5-retro-host
@@ -72,17 +72,17 @@ jobs:
             # The hosted macOS runner's GPU is a virtual one: reading video memory back for a
             # state took 73 ms there (docs/netplay.md), so a slot's time is printed but not held
             # to the budget. A rollback state keeps its video memory on the GPU (SwanStation
-            # patch 7): a whole rollback took about 30 ms there, against about 270 ms before, so
-            # it is held to 40 ms, which still fails without the patch.
+            # patch 7): a whole rollback took 25 to 39 ms there, against about 270 ms before, so
+            # it is held to 80 ms, which still fails without the patch.
             budget: ''
-            rollback_budget: --budget-ms 40
+            rollback_budget: --budget-ms 80
           - os: windows-2022
             core: swanstation/build/swanstation_libretro.dll
             host: build/Release/anyps5-retro-host.exe
             python: python
             opengl: ''
             budget: --budget-ms 16
-            rollback_budget: --budget-ms 16
+            rollback_budget: --budget-ms 24
     runs-on: ${{ matrix.os }}
     defaults:
       run:

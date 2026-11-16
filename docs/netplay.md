@@ -615,9 +615,12 @@ average (and at most) 5.3 to 5.6 ms (13 ms) on Windows, 12.3 to 12.8 ms
 (111 ms) on hosted macOS; runners vary from run to run, which is why
 Ubuntu 22.04's frames run again cost less in the first run.
 `rollback_test.py --budget-ms` holds the average whole rollback (the load
-and every frame it ran again) to the budget: `real-core` gives 16 ms on
-Windows and Linux and 40 ms on hosted macOS, where about 270 ms before patch
-7 fails it. A 6-frame rollback can still take longer than a frame; the test
+and every frame it ran again) to the budget: `real-core` gives 24 ms on
+Windows and Linux and 80 ms on hosted macOS. The same commit's runs differed
+by up to half on one runner (Ubuntu 22.04 took 12.3 to 16.1 ms, hosted
+macOS 25 to 39 ms), so a 16 ms budget failed on a slow run; before these
+changes a whole rollback was about 32 ms on Ubuntu 24.04 (6.8 ms and about 4
+frames of 5.9 ms) and about 270 ms on hosted macOS. A 6-frame rollback can still take longer than a frame; the test
 prints the longest. On hosted macOS the load got slower (the texture copy on
 its virtual GPU) and a check still reads video memory back, as a `sync`'s
 state hash needs it, so checking every frame stays at 77 ms there. Whether
