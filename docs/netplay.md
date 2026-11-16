@@ -67,10 +67,11 @@ it is saving (`RETRO_ENVIRONMENT_GET_SAVESTATE_CONTEXT`, whose
 
 **SwanStation and DuckStation.** SwanStation, the libretro core version 1
 loads, has no netplay of its own and leaves it to the frontend. The host
-builds it with six patches of its own (host.md "SwanStation patches"): five
-make its states and controllers fit for netplay ("Determinism" below says
-why), and one gives it a build identity two players can compare ("Core build
-identity"). Its parent,
+builds it with seven patches of its own (host.md "SwanStation patches"):
+five make its states and controllers fit for netplay ("Determinism" below
+says why), one gives it a build identity two players can compare ("Core
+build identity"), and one makes a rollback's states cheap ("What a rollback
+costs"). Its parent,
 DuckStation, carried a GGPO-based rollback netplay for a time and later
 removed it. GGPO is the same model as RetroArch's: input delay plus rollback
 on saved states, with a sync test that saves, loads and replays every frame
@@ -140,8 +141,8 @@ Lockstep comes first because:
   protocol (SwanStation at 631f0fb, 11 MiB of state, Windows), far over a
   16.7 ms frame. So `saveState` and `loadState` also keep up to 8 states in
   memory (protocol.md "saveState and loadState"), saved and loaded in the
-  core's same-instance form
-  (`RETRO_SAVESTATE_CONTEXT_RUNAHEAD_SAME_INSTANCE`, which keeps the
+  core's same-binary form
+  (`RETRO_SAVESTATE_CONTEXT_RUNAHEAD_SAME_BINARY`, which keeps the
   recompiled code and needs no file), and report what each took. The test
   below saves before every frame, runs it, loads and runs it again: on a
   desktop PC drawing with OpenGL on an NVIDIA GPU (Windows, 1x) a save took 2.4 ms
@@ -150,10 +151,11 @@ Lockstep comes first because:
   4.4 ms to load on average (Windows in software, Linux with Mesa), but the
   hosted macOS runner, whose GPU is a virtual one, took 73 ms to save: a
   save under a GPU reads the console's video memory back from it, which is
-  slow there. Whether a real Mac does better is not measured yet; if it does
-  not, SwanStation would have to keep a same-instance state's video memory
-  on the GPU, as DuckStation's own memory states do. Replaying several frames
-  after a wrong guess costs their emulation on top;
+  slow there. These are the slots' figures before the seventh SwanStation
+  patch; "What a rollback costs" below has what a rollback's own states cost
+  now, whose video memory stays on the GPU as DuckStation's memory states
+  keep it. Replaying several frames after a wrong guess costs their
+  emulation on top;
 - the launcher's own harness found that rollback with the stock core is not
   exact (the sound unit restore below), so rollback also depended on that
   patch, which the host now carries.
@@ -549,26 +551,59 @@ Built now:
   repeated pictures (the newest picture made again must be there) and checks
   that frames run again send no `rumble`.
 
-What a rollback costs, measured by `rollback_test.py` on the real core in
-real-core run 43755458414 (pad program, with a check every 60 frames as in a
-match, 36 to 48 rollbacks of 1 to 6 frames per player; averages, and each
-frame run again includes the save in memory before it when it is still
-predicted):
+What a rollback costs, measured by `rollback_test.py` on the real core (pad
+program, with a check every 60 frames as in a match, 34 to 48 rollbacks of 1
+to 6 frames per player; averages over both players, and each frame run again
+includes the save in memory before it when it is still predicted). It was
+profiled first (Linux `perf` with frame pointers, and the host's own timers
+around each part), which found where the time went:
 
-| Runner | Loading the state | Each frame run again |
-| --- | --- | --- |
-| Windows Server 2022 (no OpenGL context: software rendering) | 3.1 ms | 3.1 ms |
-| Ubuntu 22.04 (Mesa) | 6.0 ms | 4.3 ms |
-| Ubuntu 24.04 (Mesa) | 6.8 ms | 5.9 ms |
-| hosted macOS (virtual GPU) | 5.9 ms | 63 ms |
+- **Hashing zeros.** SwanStation asks for an 11 MiB state buffer and fills
+  about a third of it. Every `sync` cleared the whole buffer and ran FNV-1a
+  over all of it a byte at a time: 13 ms of a frame with a check, two thirds
+  of the host's time in a run checking every frame. The host now clears only
+  what the last state used and hashes the zero tail as one power of the FNV
+  prime, which gives the same hash (`src/hash.cpp`, `hash_test`).
+- **Video memory read back from the GPU.** A state saved under a GPU read the
+  console's video memory back from it, a stall on every save; on hosted
+  macOS's virtual GPU, most of the 63 ms of a frame run again. A rollback
+  state now keeps it in a GPU texture (SwanStation patch 7); a slot, which
+  can wait any time to be loaded, still reads it back.
+- **Taking the disc out at every load.** SwanStation's load took the disc
+  out of the drive and put it back, reading its system area and waiting on
+  the CD reader's thread twice, though the CD unit's own state restores the
+  drive (read from the code: the profile showed the load's time spent
+  waiting, not copying). Patch 7 leaves the disc in for a memory state of
+  the same disc.
+- **One stream call per array element.** A state wrote the memory cards and
+  the CD sector buffers a byte at a time through a virtual call, half of a
+  save's own work; patch 7 writes such arrays in one copy (the same bytes).
+- **The picture's conversion.** The software picture's conversion decided
+  its pixel format for every pixel; it now has a loop for each.
 
-So, going by these averages, on the Windows runner a rollback of up to 4
-frames fits in one 16.7 ms NTSC frame, on Ubuntu 22.04 up to 2 and on 24.04 one
-(in a 20 ms PAL frame, up to 5, 3 and 2); a
-longer one makes that frame late. With a check every frame (RAM and the state hashed after each) a frame
-run again costs 22 to 27 ms on Windows and Linux. The hosted macOS runner's
-save reads its virtual GPU back and is far too slow to roll back; a real Mac
-is not measured yet.
+Run again on the same machine before (`netplay-design` fb85606, patches 1 to
+6) and after, each twice, alternating:
+
+| Machine | Loading the state | Each frame run again | Each frame run again, checking every frame |
+| --- | --- | --- | --- |
+| Desktop PC, Windows 11, OpenGL on an NVIDIA GPU | 5.4 and 18 → 0.9 and 1.1 ms | 4.9 and 5.4 → 2.9 and 3.0 ms | 22.5 and 25.2 → 12.1 and 12.4 ms |
+| The same PC under WSL 2 (Ubuntu 22.04, no OpenGL: software rendering) | 3.9 and 5.7 → 1.4 and 1.5 ms | 3.0 and 5.3 → 2.2 and 6.6 ms | 19.7 and 23.6 → 10.6 and 11.3 ms |
+
+The WSL figures are from a PC busy with other work, which is why each pair
+differs (the second "after" run of each frame run again took 4.1 and 9.1 ms
+for the two players). With the same changes `lockstep_test.py`'s slots, saved
+in memory and loaded before every frame, took 1.4 to 1.9 ms to save in three
+of the four runs (one Windows run took 4.2 ms, one save in it 68 ms; 2.6 to
+3.2 ms before) and 1.3 to 1.8 ms to load (4.2 to 12 ms before).
+`real-core` holds a rollback to 16 ms for loading the state and for each
+frame run again, on average, on every system, hosted macOS included.
+
+The disc and the arrays were changed together and not measured apart; the
+profile put the load's time outside its own copies (waiting), and the arrays
+at half of a save's work in the core. A check every 60 frames is still a
+spike of its own: main RAM (2 MiB) and the state (about 4 MiB) are hashed
+byte by byte, FNV-1a having no faster form; on the desktop PC a frame run
+again with a check after it took about 12 ms against 3 ms without.
 
 - The core build identity: `host_test.py`'s `core_identity` test runs the
   test core with several `library_version` values and checks `status.core`

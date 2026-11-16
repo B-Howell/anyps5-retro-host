@@ -154,7 +154,8 @@ def wait_for_sync(peers, frame, seconds=120):
 
 def check_rollbacks(peer, reports, pictures, reference_pictures):
     """The rollback messages are in range, and the frames run again showed only their last picture: a
-    rollback adds at most one picture to the ones lockstep showed for the same frames."""
+    rollback adds at most one picture to the ones lockstep showed for the same frames. Returns a summary, and the
+    average milliseconds of a load and of each frame run again."""
     if not reports:
         raise c.Failed(f'{peer.name}: no prediction was ever wrong, so nothing was rolled back')
     for report in reports:
@@ -168,7 +169,7 @@ def check_rollbacks(peer, reports, pictures, reference_pictures):
     per_frame = sum(report['micros'] - report['loadMicros'] for report in reports) / again / 1000
     return (f'{len(reports)} rollbacks ran {again} frames again (at most '
             f'{max(report["frames"] for report in reports)} at once); loading the state took {load:.2f} ms '
-            f'and each frame run again {per_frame:.2f} ms, on average')
+            f'and each frame run again {per_frame:.2f} ms, on average'), load, per_frame
 
 
 def network(options, match):
@@ -195,7 +196,7 @@ def network(options, match):
         if peer.log != list(range(frames)):
             raise c.Failed(f'{peer.name}: syncs came for frames {peer.log[:20]}..., not each frame once in order')
         compared = ls.same(f'{peer.name} against lockstep', [peer.syncs[f] for f in range(frames)], expected)
-        summary = check_rollbacks(peer, peer.rollbacks, peer.pictures, reference.pictures)
+        summary, _, _ = check_rollbacks(peer, peer.rollbacks, peer.pictures, reference.pictures)
         print(f'{peer.name}: {compared} frames match lockstep in RAM, picture and state; {summary}')
     print(f'rollback: two players with up to {options.delay} frames of delay and jitter, {tick * 1000:.0f} ms a '
           f'frame, {elapsed:.1f} s')
@@ -221,8 +222,12 @@ def network(options, match):
             raise c.Failed(f'{peer.name}: syncs came for frames {peer.log}, not {checked}')
         ls.same(f'{peer.name} checked every 60 frames', [peer.syncs[f] for f in checked],
                 [reference.syncs[f] for f in checked])
-        summary = check_rollbacks(peer, peer.rollbacks, peer.pictures, reference.pictures)
+        summary, load, per_frame = check_rollbacks(peer, peer.rollbacks, peer.pictures, reference.pictures)
         print(f'{peer.name}, checking every 60 frames ({tick * 1000:.0f} ms a frame): {summary}')
+        # A rollback is one load and a few frames run again, all inside one 16.7 ms frame of play.
+        if match.real and options.budget_ms is not None and max(load, per_frame) > options.budget_ms:
+            raise c.Failed(f'{peer.name}: loading the state ({load:.2f} ms) or each frame run again '
+                           f'({per_frame:.2f} ms) took longer than the {options.budget_ms} ms budget, on average')
     return players
 
 
@@ -468,6 +473,9 @@ def main():
     parser.add_argument('--bios', help='OpenBIOS, 512 KiB: run the real SwanStation core on the pad program')
     parser.add_argument('--frames', type=int, default=600, help='Frames each player runs')
     parser.add_argument('--delay', type=int, default=6, help='The most frames a player\'s input arrives late')
+    parser.add_argument('--budget-ms', type=float,
+                        help='With the real core, the most loading the state and each frame run again may '
+                        'take, on average, while checking every 60 frames')
     parser.add_argument('--tick', type=float, default=0.004,
                         help='Seconds each simulated frame lasts at least, for the hosts to run what they were '
                         'sent; longer on a host slower than that')

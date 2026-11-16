@@ -16,6 +16,7 @@ add_library(retro_host_core STATIC
   src/audio.cpp
   src/channel.cpp
   src/game.cpp
+  src/hash.cpp
   src/host.cpp
   src/json.cpp
   src/paths.cpp
@@ -69,6 +70,9 @@ if(ANYPS5_RETRO_HOST_TESTS)
   target_link_libraries(json_test PRIVATE retro_host_core)
   enable_testing()
   add_test(NAME json COMMAND json_test)
+  add_executable(hash_test tests/hash_test.cpp)
+  target_link_libraries(hash_test PRIVATE retro_host_core)
+  add_test(NAME hash COMMAND hash_test)
   add_executable(resolution_test tests/resolution_test.cpp)
   target_link_libraries(resolution_test PRIVATE retro_host_core)
   add_test(NAME resolution COMMAND resolution_test)

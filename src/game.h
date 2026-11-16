@@ -351,9 +351,13 @@ class Game {
   // What lockstep frame frame left behind, when a check is due after it.
   std::optional<SyncPoint> Measure(uint64_t frame);
   // The core's serialized state, in a buffer of retro_serialize_size bytes that starts zeroed, or
-  // nothing when the core cannot serialize now.
+  // nothing when the core cannot serialize now. The first serialized_used_ bytes hold every byte
+  // that is not zero: a state fills only part of the size the core asks for, and clearing and
+  // hashing the zeros after it a byte at a time cost more than the state (docs/netplay.md "What a
+  // rollback costs").
   const std::string* Serialize();
   std::string serialized_;
+  size_t serialized_used_ = 0;
   std::optional<StateResult> RequestState(StateWork work, const StateTarget& target, int64_t timeout_ms);
   // Serves a save or load the launcher asked for; runs on the game's thread between frames.
   void ServeStateRequest();
@@ -363,7 +367,12 @@ class Game {
   // reuses, the lockstep frame and picture hash it continues with, the motors as the core had set
   // them, and the lockstep count it was saved in: entering lockstep anew starts frames at 0 again,
   // so older slots no longer load.
-  // The core is told the state stays in this process (RETRO_SAVESTATE_CONTEXT_RUNAHEAD_SAME_INSTANCE).
+  // The core is told the state stays in this process. A rollback state is the newest one in its
+  // buffer and is only ever loaded from it (RETRO_SAVESTATE_CONTEXT_RUNAHEAD_SAME_INSTANCE), so the
+  // patched core keeps its video memory on the GPU, keyed by that buffer, instead of reading it back
+  // (host.md "SwanStation patches", patch 7). A slot may wait any time before it is loaded, so it is
+  // saved whole (RETRO_SAVESTATE_CONTEXT_RUNAHEAD_SAME_BINARY): its load still keeps the core's
+  // recompiled code, as a same-instance one does.
   struct MemoryState {
     std::string data;
     uint64_t frame = 0;
@@ -371,14 +380,15 @@ class Game {
     std::array<std::array<uint16_t, 2>, 2> rumble{};
     unsigned ports = 1;
     uint64_t entry = 0;
+    int context = 0;
     bool used = false;
   };
   std::array<MemoryState, kStateSlots> slots_;
   std::optional<StateResult> WriteSlot(unsigned slot);
   std::optional<StateResult> ReadSlot(unsigned slot);
-  // Saves the core's state in memory, in the same-instance form, as the state lockstep frame frame
-  // continues from, or loads it back.
-  bool SaveMemory(MemoryState& memory, uint64_t frame);
+  // Saves the core's state in memory, in the savestate context given (MemoryState says which), as
+  // the state lockstep frame frame continues from, or loads it back in the context it was saved in.
+  bool SaveMemory(MemoryState& memory, uint64_t frame, int context);
   bool LoadMemory(const MemoryState& memory);
   // Forgets the rollback input, corrections and kept frames; with mutex_ held.
   void ClearRollback();

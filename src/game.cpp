@@ -16,6 +16,7 @@
 #include <tuple>
 #include <utility>
 
+#include "hash.h"
 #include "paths.h"
 #include "resolution.h"
 
@@ -29,6 +30,48 @@ struct Game::DiscControl {
 namespace {
 
 Game* g_game = nullptr;
+
+struct Rgb {
+  uint8_t r, g, b;
+};
+
+Rgb FromXrgb8888(const uint8_t* at) {
+  uint32_t pixel;
+  std::memcpy(&pixel, at, 4);
+  return {static_cast<uint8_t>(pixel >> 16), static_cast<uint8_t>(pixel >> 8), static_cast<uint8_t>(pixel)};
+}
+
+Rgb FromRgb565(const uint8_t* at) {
+  uint16_t pixel;
+  std::memcpy(&pixel, at, 2);
+  return {static_cast<uint8_t>(((pixel >> 11) & 0x1F) * 255 / 31), static_cast<uint8_t>(((pixel >> 5) & 0x3F) * 255 / 63),
+          static_cast<uint8_t>((pixel & 0x1F) * 255 / 31)};
+}
+
+Rgb From0rgb1555(const uint8_t* at) {
+  uint16_t pixel;
+  std::memcpy(&pixel, at, 2);
+  return {static_cast<uint8_t>(((pixel >> 10) & 0x1F) * 255 / 31), static_cast<uint8_t>(((pixel >> 5) & 0x1F) * 255 / 31),
+          static_cast<uint8_t>((pixel & 0x1F) * 255 / 31)};
+}
+
+// A software frame in the ring's byte order, one loop for each pixel format and order: deciding them
+// for every pixel, from members the stores could alias, made the conversion cost more than the hash.
+template <size_t kInBytes, Rgb (*kUnpack)(const uint8_t*), bool kBgra>
+void ConvertFrame(const void* data, unsigned width, unsigned height, size_t pitch, uint8_t* out) {
+  for (unsigned y = 0; y < height; ++y) {
+    const auto* row = static_cast<const uint8_t*>(data) + y * pitch;
+    for (unsigned x = 0; x < width; ++x, out += 4) {
+      const Rgb pixel = kUnpack(row + x * kInBytes);
+      out[0] = kBgra ? pixel.b : pixel.r;
+      out[1] = pixel.g;
+      out[2] = kBgra ? pixel.r : pixel.b;
+      out[3] = 0xFF;
+    }
+  }
+}
+
+using ConvertFrameFn = void (*)(const void* data, unsigned width, unsigned height, size_t pitch, uint8_t* out);
 
 bool OnEnvironment(unsigned command, void* data) { return g_game && g_game->Environment(command, data); }
 void OnVideo(const void* data, unsigned width, unsigned height, size_t pitch) {
@@ -82,15 +125,6 @@ constexpr char kStateMagic[8] = {'A', 'P', '5', 'S', 'T', 'A', 'T', 'E'};
 constexpr uint32_t kStateVersion = 2;
 constexpr size_t kStateHeaderBytes = 48;
 constexpr uint64_t kMaxLockstepFrame = 4294967295ULL;
-constexpr uint64_t kFnvOffset = 14695981039346656037ULL;
-constexpr uint64_t kFnvPrime = 1099511628211ULL;
-
-uint64_t Fnv(const void* data, size_t size, uint64_t hash = kFnvOffset) {
-  const auto* bytes = static_cast<const uint8_t*>(data);
-  for (size_t i = 0; i < size; ++i) hash = (hash ^ bytes[i]) * kFnvPrime;
-  return hash;
-}
-
 void PutLe(std::string& out, uint64_t value, int bytes) {
   for (int i = 0; i < bytes; ++i) out.push_back(static_cast<char>((value >> (8 * i)) & 0xFF));
 }
@@ -378,7 +412,8 @@ void Game::RunGame() {
     }
     if (step.save) {
       if (rollback_states_.size() != step.rollback) rollback_states_.resize(step.rollback);
-      if (!SaveMemory(rollback_states_[step.frame % step.rollback], step.frame)) {
+      if (!SaveMemory(rollback_states_[step.frame % step.rollback], step.frame,
+                      RETRO_SAVESTATE_CONTEXT_RUNAHEAD_SAME_INSTANCE)) {
         EndFrame();
         end_error = "The game's state could not be kept for a rollback.";
         end_code = "other";
@@ -810,35 +845,13 @@ void Game::Video(const void* data, unsigned width, unsigned height, size_t pitch
     return;
   }
   const bool bgra = format_ == PixelFormat::kBgra8;
-  for (unsigned y = 0; y < height; ++y) {
-    const auto* row = static_cast<const uint8_t*>(data) + y * pitch;
-    uint8_t* out = converted_.data() + static_cast<size_t>(y) * width * 4;
-    for (unsigned x = 0; x < width; ++x, out += 4) {
-      uint8_t r, g, b;
-      if (core_pixel_format_ == RETRO_PIXEL_FORMAT_XRGB8888) {
-        uint32_t pixel;
-        std::memcpy(&pixel, row + x * 4, 4);
-        r = (pixel >> 16) & 0xFF;
-        g = (pixel >> 8) & 0xFF;
-        b = pixel & 0xFF;
-      } else {
-        uint16_t pixel;
-        std::memcpy(&pixel, row + x * 2, 2);
-        if (core_pixel_format_ == RETRO_PIXEL_FORMAT_RGB565) {
-          r = static_cast<uint8_t>(((pixel >> 11) & 0x1F) * 255 / 31);
-          g = static_cast<uint8_t>(((pixel >> 5) & 0x3F) * 255 / 63);
-        } else {
-          r = static_cast<uint8_t>(((pixel >> 10) & 0x1F) * 255 / 31);
-          g = static_cast<uint8_t>(((pixel >> 5) & 0x1F) * 255 / 31);
-        }
-        b = static_cast<uint8_t>((pixel & 0x1F) * 255 / 31);
-      }
-      out[0] = bgra ? b : r;
-      out[1] = g;
-      out[2] = bgra ? r : b;
-      out[3] = 0xFF;
-    }
+  ConvertFrameFn convert = bgra ? ConvertFrame<2, From0rgb1555, true> : ConvertFrame<2, From0rgb1555, false>;
+  if (core_pixel_format_ == RETRO_PIXEL_FORMAT_XRGB8888) {
+    convert = bgra ? ConvertFrame<4, FromXrgb8888, true> : ConvertFrame<4, FromXrgb8888, false>;
+  } else if (core_pixel_format_ == RETRO_PIXEL_FORMAT_RGB565) {
+    convert = bgra ? ConvertFrame<2, FromRgb565, true> : ConvertFrame<2, FromRgb565, false>;
   }
+  convert(data, width, height, pitch, converted_.data());
   Publish(width, height);
 }
 
@@ -848,9 +861,13 @@ void Game::Publish(uint32_t width, uint32_t height) {
     const uint32_t size[2] = {width, height};
     uint64_t hash = Fnv(size, sizeof size);
     const bool bgra = format_ == PixelFormat::kBgra8;
-    for (size_t at = 0; at < converted_.size(); at += 4) {
-      const uint8_t rgb[3] = {converted_[at + (bgra ? 2 : 0)], converted_[at + 1], converted_[at + (bgra ? 0 : 2)]};
-      hash = Fnv(rgb, sizeof rgb, hash);
+    const size_t red = bgra ? 2 : 0;
+    const size_t blue = bgra ? 0 : 2;
+    const uint8_t* pixels = converted_.data();
+    for (size_t at = 0, end = converted_.size(); at < end; at += 4) {
+      hash = (hash ^ pixels[at + red]) * kFnvPrime;
+      hash = (hash ^ pixels[at + 1]) * kFnvPrime;
+      hash = (hash ^ pixels[at + blue]) * kFnvPrime;
     }
     video_hash_ = hash;
   }
@@ -1358,7 +1375,8 @@ bool Game::Resimulate(uint64_t first, std::string& end_error, std::string& end_c
       input = kept.ran;
       save = kept.saved;
     }
-    if (save && !SaveMemory(rollback_states_[frame % rollback_states_.size()], frame)) {
+    if (save && !SaveMemory(rollback_states_[frame % rollback_states_.size()], frame,
+                            RETRO_SAVESTATE_CONTEXT_RUNAHEAD_SAME_INSTANCE)) {
       resimulating_ = false;
       end_error = "The game's state could not be kept for a rollback.";
       end_code = "other";
@@ -1435,7 +1453,9 @@ std::optional<SyncPoint> Game::Measure(uint64_t frame) {
   const size_t ram_size = Get<size_t (*)(unsigned)>("retro_get_memory_size")(RETRO_MEMORY_SYSTEM_RAM);
   if (ram && ram_size) point.ram = Fnv(ram, ram_size);
   savestate_context_ = RETRO_SAVESTATE_CONTEXT_ROLLBACK_NETPLAY;
-  if (const std::string* state = Serialize()) point.state = Fnv(state->data(), state->size());
+  if (const std::string* state = Serialize()) {
+    point.state = FnvZeros(state->size() - serialized_used_, Fnv(state->data(), serialized_used_));
+  }
   savestate_context_ = RETRO_SAVESTATE_CONTEXT_NORMAL;
   return point;
 }
@@ -1447,11 +1467,23 @@ const std::string* Game::Serialize() {
   const size_t size = size_of();
   if (size == 0) return nullptr;
   try {
-    serialized_.assign(size, '\0');
+    if (serialized_.size() != size) {
+      serialized_.assign(size, '\0');
+      serialized_used_ = 0;
+    }
   } catch (const std::bad_alloc&) {
+    serialized_.clear();
+    serialized_used_ = 0;
     return nullptr;
   }
-  return serialize(serialized_.data(), size) ? &serialized_ : nullptr;
+  // Only the bytes the last state used can be other than zero, so only they are cleared.
+  std::memset(serialized_.data(), 0, serialized_used_);
+  if (!serialize(serialized_.data(), size)) {
+    serialized_used_ = size;
+    return nullptr;
+  }
+  serialized_used_ = UsedLength(serialized_.data(), size);
+  return &serialized_;
 }
 
 std::optional<StateResult> Game::SaveState(const StateTarget& target, int64_t timeout_ms) {
@@ -1580,7 +1612,7 @@ std::optional<StateResult> Game::WriteSlot(unsigned slot) {
     frame = next_frame_;
     entry = lockstep_entry_;
   }
-  if (!SaveMemory(memory, frame)) return std::nullopt;
+  if (!SaveMemory(memory, frame, RETRO_SAVESTATE_CONTEXT_RUNAHEAD_SAME_BINARY)) return std::nullopt;
   memory.entry = entry;
   return StateResult{frame, memory.data.size()};
 }
@@ -1602,7 +1634,7 @@ std::optional<StateResult> Game::ReadSlot(unsigned slot) {
   return StateResult{memory.frame, memory.data.size()};
 }
 
-bool Game::SaveMemory(MemoryState& memory, uint64_t frame) {
+bool Game::SaveMemory(MemoryState& memory, uint64_t frame, int context) {
   const auto size_of = Get<size_t (*)()>("retro_serialize_size");
   const auto serialize = Get<bool (*)(void*, size_t)>("retro_serialize");
   if (!size_of || !serialize) return false;
@@ -1615,10 +1647,11 @@ bool Game::SaveMemory(MemoryState& memory, uint64_t frame) {
     memory.data.clear();
     return false;
   }
-  savestate_context_ = RETRO_SAVESTATE_CONTEXT_RUNAHEAD_SAME_INSTANCE;
+  savestate_context_ = context;
   const bool saved = serialize(memory.data.data(), size);
   savestate_context_ = RETRO_SAVESTATE_CONTEXT_NORMAL;
   if (!saved) return false;
+  memory.context = context;
   memory.ports = core_ports_;
   memory.frame = frame;
   memory.video = video_hash_;
@@ -1631,7 +1664,7 @@ bool Game::LoadMemory(const MemoryState& memory) {
   const auto unserialize = Get<bool (*)(const void*, size_t)>("retro_unserialize");
   if (!unserialize || !memory.used) return false;
   UsePorts(memory.ports);
-  savestate_context_ = RETRO_SAVESTATE_CONTEXT_RUNAHEAD_SAME_INSTANCE;
+  savestate_context_ = memory.context;
   const bool loaded = unserialize(memory.data.data(), memory.data.size());
   savestate_context_ = RETRO_SAVESTATE_CONTEXT_NORMAL;
   if (!loaded) return false;

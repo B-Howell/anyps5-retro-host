@@ -56,27 +56,32 @@ jobs:
             python: python3
             opengl: --expect-opengl
             budget: --budget-ms 16
+            rollback_budget: --budget-ms 16
           - os: ubuntu-24.04
             core: swanstation/build/swanstation_libretro.so
             host: build/anyps5-retro-host
             python: python3
             opengl: --expect-opengl
             budget: --budget-ms 16
+            rollback_budget: --budget-ms 16
           - os: macos-latest
             core: swanstation/build/swanstation_libretro.dylib
             host: build/anyps5-retro-host
             python: python3
             opengl: --expect-opengl
             # The hosted macOS runner's GPU is a virtual one: reading video memory back for a
-            # state took 73 ms there (docs/netplay.md), so its time is printed but not held to
-            # the budget.
+            # state took 73 ms there (docs/netplay.md), so a slot's time is printed but not held
+            # to the budget. A rollback state keeps its video memory on the GPU (SwanStation
+            # patch 7), so rollback is held to it.
             budget: ''
+            rollback_budget: --budget-ms 16
           - os: windows-2022
             core: swanstation/build/swanstation_libretro.dll
             host: build/Release/anyps5-retro-host.exe
             python: python
             opengl: ''
             budget: --budget-ms 16
+            rollback_budget: --budget-ms 16
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -121,7 +126,7 @@ jobs:
       - name: Input, analog mode and the game's analog lock read alike by two real cores (tests/pad_test.py)
         run: ${{ matrix.python }} tests/pad_test.py --host ${{ matrix.host }} --core ${{ matrix.core }} --bios ps1-files/openbios.bin --log build/pad.log
       - name: Two real cores in rollback, with late input and wrong predictions, against one in lockstep; rollback cost
-        run: ${{ matrix.python }} tests/rollback_test.py --host ${{ matrix.host }} --core ${{ matrix.core }} --bios ps1-files/openbios.bin --log build/rollback.log --tick 0.03
+        run: ${{ matrix.python }} tests/rollback_test.py --host ${{ matrix.host }} --core ${{ matrix.core }} --bios ps1-files/openbios.bin --log build/rollback.log --tick 0.03 ${{ matrix.rollback_budget }}
       - if: failure()
         run: tail -200 build/real-core.log build/lockstep.log build/lockstep-pad.log build/pad.log build/rollback.log || true
       - if: always()

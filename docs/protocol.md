@@ -928,9 +928,10 @@ While the host saves or loads a file, or hashes the state for a
 [`sync`](#sync), it tells the core the state is for netplay
 (`RETRO_ENVIRONMENT_GET_SAVESTATE_CONTEXT` answers
 `RETRO_SAVESTATE_CONTEXT_ROLLBACK_NETPLAY`); for a slot it answers
-`RETRO_SAVESTATE_CONTEXT_RUNAHEAD_SAME_INSTANCE`, the state never leaving
-the process; at any other time `RETRO_SAVESTATE_CONTEXT_NORMAL`. With the
-host's SwanStation patches:
+`RETRO_SAVESTATE_CONTEXT_RUNAHEAD_SAME_BINARY`, the state never leaving
+the process; for a [rollback](#rollback) state
+`RETRO_SAVESTATE_CONTEXT_RUNAHEAD_SAME_INSTANCE`; at any other time
+`RETRO_SAVESTATE_CONTEXT_NORMAL`. With the host's SwanStation patches:
 
 - a file, and the state a `sync` hashes, name no file or folder: the disc is
   named by its place in the game's disc list, so a state from another machine
@@ -1024,9 +1025,12 @@ it is known.
   `rollback.frames` is not confirmed is a protocol error. A `null` port
   outside rollback is a protocol error.
 - **States.** Before it runs a frame with a port not known, the host saves the
-  core's state in memory, in the same-instance form of
-  [saveState and loadState](#savestate-and-loadstate). These states are
-  separate from the 8 slots.
+  core's state in memory, as for a slot of
+  [saveState and loadState](#savestate-and-loadstate) but in the
+  same-instance context, since such a state is loaded only from where it was
+  saved and only while it is the newest one there: the host's SwanStation
+  then keeps the state's video memory on the GPU instead of reading it back.
+  These states are separate from the 8 slots.
 - **Running again.** Between two frames, the host takes the corrections that
   have come. When the input a frame last ran with differs from what is now
   known, the host loads the state from before the first such frame and runs

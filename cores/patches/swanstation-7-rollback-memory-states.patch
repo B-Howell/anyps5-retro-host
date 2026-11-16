@@ -1,0 +1,438 @@
+diff --git a/src/common/state_wrapper.h b/src/common/state_wrapper.h
+index 45b8280..da0dbac 100644
+--- a/src/common/state_wrapper.h
++++ b/src/common/state_wrapper.h
+@@ -88,8 +88,18 @@ public:
+   template<typename T>
+   void DoArray(T* values, size_t count)
+   {
+-    for (size_t i = 0; i < count; i++)
+-      Do(&values[i]);
++    /* Do() writes an integer or float as its bytes, so an array of them is the same bytes in one copy.
++     * One stream call per element made in-memory states (runahead, rollback) cost twice their copies.
++     * A bool keeps Do(bool*), which reads any byte but 0 as true. */
++    if constexpr ((std::is_integral_v<T> && !std::is_same_v<T, bool>) || std::is_floating_point_v<T>)
++    {
++      DoBytes(values, sizeof(T) * count);
++    }
++    else
++    {
++      for (size_t i = 0; i < count; i++)
++        Do(&values[i]);
++    }
+   }
+ 
+   void DoBytes(void* data, size_t length);
+diff --git a/src/core/gpu.h b/src/core/gpu.h
+index 0a0959f..1073182 100644
+--- a/src/core/gpu.h
++++ b/src/core/gpu.h
+@@ -63,6 +63,8 @@ public:
+   virtual bool Initialize(HostDisplay* host_display);
+   virtual void Reset(bool clear_vram);
+   virtual bool DoState(StateWrapper& sw, HostDisplayTexture** save_to_texture, bool update_display);
++  /// Whether DoState can keep VRAM in a host texture (save_to_texture) instead of the state's bytes.
++  virtual bool CanSaveVRAMToTexture() const { return false; }
+ 
+   // Graphics API state reset/restore - call when drawing the UI etc.
+   virtual void ResetGraphicsAPIState();
+diff --git a/src/core/gpu_hw_d3d11.h b/src/core/gpu_hw_d3d11.h
+index b93b3f1..e9fffe4 100644
+--- a/src/core/gpu_hw_d3d11.h
++++ b/src/core/gpu_hw_d3d11.h
+@@ -95,6 +95,7 @@ public:
+   bool Initialize(HostDisplay* host_display) override;
+   void Reset(bool clear_vram) override;
+   bool DoState(StateWrapper& sw, HostDisplayTexture** host_texture, bool update_display) override;
++  bool CanSaveVRAMToTexture() const override { return !m_sw_renderer; }
+ 
+   void ResetGraphicsAPIState() override;
+   void RestoreGraphicsAPIState() override;
+diff --git a/src/core/gpu_hw_opengl.h b/src/core/gpu_hw_opengl.h
+index 69e1f36..75bb4e3 100644
+--- a/src/core/gpu_hw_opengl.h
++++ b/src/core/gpu_hw_opengl.h
+@@ -94,6 +94,7 @@ public:
+   bool Initialize(HostDisplay* host_display) override;
+   void Reset(bool clear_vram) override;
+   bool DoState(StateWrapper& sw, HostDisplayTexture** host_texture, bool update_display) override;
++  bool CanSaveVRAMToTexture() const override { return !m_sw_renderer; }
+ 
+   void ResetGraphicsAPIState() override;
+   void RestoreGraphicsAPIState() override;
+diff --git a/src/core/gpu_hw_vulkan.h b/src/core/gpu_hw_vulkan.h
+index 5e2b93f..845bc3c 100644
+--- a/src/core/gpu_hw_vulkan.h
++++ b/src/core/gpu_hw_vulkan.h
+@@ -98,6 +98,7 @@ public:
+   bool Initialize(HostDisplay* host_display) override;
+   void Reset(bool clear_vram) override;
+   bool DoState(StateWrapper& sw, HostDisplayTexture** host_texture, bool update_display) override;
++  bool CanSaveVRAMToTexture() const override { return !m_sw_renderer; }
+ 
+   void ResetGraphicsAPIState() override;
+   void RestoreGraphicsAPIState() override;
+diff --git a/src/core/system.cpp b/src/core/system.cpp
+index 75854db..e5328f2 100644
+--- a/src/core/system.cpp
++++ b/src/core/system.cpp
+@@ -35,6 +35,8 @@
+ #include "texture_replacements.h"
+ #include "timers.h"
+ #include "xxhash.h"
++#include <algorithm>
++#include <array>
+ #include <cctype>
+ #include <cmath>
+ #include <cstdio>
+@@ -66,6 +68,16 @@ struct MemorySaveState
+ static bool SaveMemoryState(MemorySaveState* mss);
+ static bool LoadMemoryState(const MemorySaveState& mss);
+ 
++/// The VRAM of a same-instance state SaveState kept on the GPU, for the key (the buffer) the state went to.
++struct VRAMStateTexture
++{
++  const void* key = nullptr;
++  uint64_t token = 0;
++  std::unique_ptr<HostDisplayTexture> texture;
++};
++
++static void ClearVRAMStateTextures();
++
+ static bool LoadEXE(const char* filename);
+ 
+ /// Opens CD image, preloading if needed.
+@@ -80,7 +92,7 @@ static void UpdatePerGameMemoryCards();
+ 
+ static bool DoLoadState(ByteStream* stream, bool force_software_renderer, bool update_display, bool is_memory_state,
+                         const char* media_path = nullptr, uint32_t media_subimage_index = 0,
+-                        bool apply_input_state = false);
++                        bool apply_input_state = false, uint64_t vram_token = 0);
+ static bool DoState(StateWrapper& sw, HostDisplayTexture** host_texture, bool update_display, bool is_memory_state,
+                     bool apply_input_state = false);
+ static void DoRunFrame();
+@@ -111,6 +123,8 @@ static float s_vertical_frequency = 60.0f;
+ static std::unique_ptr<CheatList> s_cheat_list;
+ 
+ static std::deque<MemorySaveState> s_runahead_states;
++static std::array<VRAMStateTexture, MAX_VRAM_STATE_TEXTURES> s_vram_state_textures;
++static uint64_t s_vram_state_tokens = 0;
+ static bool s_runahead_replay_pending = false;
+ static uint32_t s_runahead_frames = 0;
+ 
+@@ -485,6 +499,7 @@ DiscRegion GetRegionForPsf(const char* path)
+ bool RecreateGPU(GPURenderer renderer, bool update_display /* = true*/)
+ {
+   ClearMemorySaveStates();
++  ClearVRAMStateTextures();
+   g_gpu->RestoreGraphicsAPIState();
+ 
+   // save current state
+@@ -769,6 +784,7 @@ void Shutdown()
+     return;
+ 
+   ClearMemorySaveStates();
++  ClearVRAMStateTextures();
+ 
+   g_texture_replacements.Shutdown();
+ 
+@@ -958,14 +974,15 @@ void Reset()
+ }
+ 
+ bool LoadState(ByteStream* state, bool is_memory_state, bool restore_on_failure, const char* media_path,
+-               uint32_t media_subimage_index, bool apply_input_state)
++               uint32_t media_subimage_index, bool apply_input_state, uint64_t vram_token)
+ {
+   if (IsShutdown())
+     return false;
+ 
+   if (!restore_on_failure)
+   {
+-    if (DoLoadState(state, false, false, is_memory_state, media_path, media_subimage_index, apply_input_state))
++    if (DoLoadState(state, false, false, is_memory_state, media_path, media_subimage_index, apply_input_state,
++                    vram_token))
+       return true;
+ 
+     Reset();
+@@ -980,7 +997,8 @@ bool LoadState(ByteStream* state, bool is_memory_state, bool restore_on_failure,
+   s_backup->SeekAbsolute(0);
+   const bool have_backup = SaveState(s_backup.get());
+ 
+-  if (DoLoadState(state, false, false, is_memory_state, media_path, media_subimage_index, apply_input_state))
++  if (DoLoadState(state, false, false, is_memory_state, media_path, media_subimage_index, apply_input_state,
++                  vram_token))
+     return true;
+ 
+   if (!have_backup || !s_backup->SeekAbsolute(0) || !DoLoadState(s_backup.get(), false, false, false))
+@@ -989,8 +1007,23 @@ bool LoadState(ByteStream* state, bool is_memory_state, bool restore_on_failure,
+ }
+ 
+ bool DoLoadState(ByteStream* state, bool force_software_renderer, bool update_display, bool is_memory_state,
+-                 const char* media_path, uint32_t media_subimage_index, bool apply_input_state)
++                 const char* media_path, uint32_t media_subimage_index, bool apply_input_state, uint64_t vram_token)
+ {
++  HostDisplayTexture* vram_texture = nullptr;
++  if (vram_token != 0)
++  {
++    if (s_state == State::Starting || !g_gpu->CanSaveVRAMToTexture())
++      return false;
++    for (const VRAMStateTexture& kept : s_vram_state_textures)
++    {
++      if (kept.token == vram_token)
++        vram_texture = kept.texture.get();
++    }
++    /* The key's texture now holds a newer state's VRAM, or none: this state can no longer be loaded. */
++    if (!vram_texture)
++      return false;
++  }
++
+   SAVE_STATE_HEADER header;
+   if (!state->Read2(&header, sizeof(header)))
+     return false;
+@@ -1019,6 +1052,7 @@ bool DoLoadState(ByteStream* state, bool force_software_renderer, bool update_di
+   Common::Error error;
+   std::string media_filename;
+   std::unique_ptr<CDImage> media;
++  bool keep_media = false;
+   if (media_path)
+   {
+     media_filename = media_path;
+@@ -1039,7 +1073,17 @@ bool DoLoadState(ByteStream* state, bool force_software_renderer, bool update_di
+       }
+     }
+ 
+-    if (g_cdrom.HasMedia() && g_cdrom.GetMediaFileName() == media_filename)
++    /* A memory state (runahead, rollback) of the disc already in the drive leaves the drive alone, as
++     * DuckStation's memory states do: CDROM::DoState restores it, and taking the disc out and putting it
++     * back read its system area and waited on the reader thread at every load. */
++    if (is_memory_state && s_state != State::Starting && g_cdrom.HasMedia() &&
++        g_cdrom.GetMediaFileName() == media_filename &&
++        (g_cdrom.GetMedia()->HasSubImages() ? g_cdrom.GetMedia()->GetCurrentSubImage() == header.media_subimage_index :
++                                             header.media_subimage_index == 0))
++    {
++      keep_media = true;
++    }
++    else if (g_cdrom.HasMedia() && g_cdrom.GetMediaFileName() == media_filename)
+     {
+       Log_InfoPrintf("Re-using same media '%s'", media_filename.c_str());
+       media = g_cdrom.RemoveMedia(false);
+@@ -1061,7 +1105,8 @@ bool DoLoadState(ByteStream* state, bool force_software_renderer, bool update_di
+     }
+   }
+ 
+-  UpdateRunningGame(media_filename.c_str(), media.get());
++  if (!keep_media)
++    UpdateRunningGame(media_filename.c_str(), media.get());
+ 
+   if (media && header.version >= 51)
+   {
+@@ -1099,11 +1144,14 @@ bool DoLoadState(ByteStream* state, bool force_software_renderer, bool update_di
+   }
+   else
+   {
+-    g_cdrom.Reset();
+-    if (media)
+-      g_cdrom.InsertMedia(std::move(media));
+-    else
+-      g_cdrom.RemoveMedia(false);
++    if (!keep_media)
++    {
++      g_cdrom.Reset();
++      if (media)
++        g_cdrom.InsertMedia(std::move(media));
++      else
++        g_cdrom.RemoveMedia(false);
++    }
+ 
+     // ensure the correct card is loaded
+     if (g_settings.HasAnyPerGameMemoryCards())
+@@ -1120,7 +1168,7 @@ bool DoLoadState(ByteStream* state, bool force_software_renderer, bool update_di
+     return false;
+ 
+   StateWrapper sw(state, StateWrapper::Mode::Read, header.version);
+-  if (!DoState(sw, nullptr, update_display, is_memory_state, apply_input_state))
++  if (!DoState(sw, vram_texture ? &vram_texture : nullptr, update_display, is_memory_state, apply_input_state))
+     return false;
+ 
+   if (s_state == State::Starting)
+@@ -1129,11 +1177,30 @@ bool DoLoadState(ByteStream* state, bool force_software_renderer, bool update_di
+   return true;
+ }
+ 
+-bool SaveState(ByteStream* state, bool include_media_path)
++bool SaveState(ByteStream* state, bool include_media_path, const void* vram_key, uint64_t* vram_token)
+ {
++  if (vram_token)
++    *vram_token = 0;
+   if (IsShutdown())
+     return false;
+ 
++  VRAMStateTexture* kept = nullptr;
++  if (vram_key && vram_token && g_gpu->CanSaveVRAMToTexture())
++  {
++    for (VRAMStateTexture& candidate : s_vram_state_textures)
++    {
++      if (candidate.key == vram_key)
++        kept = &candidate;
++    }
++    if (!kept)
++    {
++      kept = &*std::min_element(s_vram_state_textures.begin(), s_vram_state_textures.end(),
++                                [](const VRAMStateTexture& a, const VRAMStateTexture& b) { return a.token < b.token; });
++      kept->key = vram_key;
++    }
++    kept->token = 0;
++  }
++
+   SAVE_STATE_HEADER header = {};
+ 
+   const uint64_t header_position = state->GetPosition();
+@@ -1167,7 +1234,10 @@ bool SaveState(ByteStream* state, bool include_media_path)
+     g_gpu->RestoreGraphicsAPIState();
+ 
+     StateWrapper sw(state, StateWrapper::Mode::Write, SAVE_STATE_VERSION);
+-    const bool result = DoState(sw, nullptr, false, false);
++    HostDisplayTexture* texture = kept ? kept->texture.release() : nullptr;
++    const bool result = DoState(sw, kept ? &texture : nullptr, false, false);
++    if (kept)
++      kept->texture.reset(texture);
+ 
+     g_gpu->ResetGraphicsAPIState();
+ 
+@@ -1186,9 +1256,20 @@ bool SaveState(ByteStream* state, bool include_media_path)
+     return false;
+   }
+ 
++  if (kept)
++  {
++    kept->token = ++s_vram_state_tokens;
++    *vram_token = kept->token;
++  }
+   return true;
+ }
+ 
++void ClearVRAMStateTextures()
++{
++  for (VRAMStateTexture& kept : s_vram_state_textures)
++    kept = {};
++}
++
+ void DoRunFrame()
+ {
+   g_gpu->RestoreGraphicsAPIState();
+diff --git a/src/core/system.h b/src/core/system.h
+index 61c8845..959f259 100644
+--- a/src/core/system.h
++++ b/src/core/system.h
+@@ -95,12 +95,19 @@ void Shutdown();
+ /// Otherwise, a failed load resets the system so partially loaded state cannot run.
+ /// media_path, when set, replaces the media named in the state.
+ /// apply_input_state also restores the controllers' buttons and analog mode (Pad::DoState).
++/// vram_token, when not 0, names the texture SaveState kept the state's VRAM in.
+ bool LoadState(ByteStream* state, bool is_memory_state = false, bool restore_on_failure = false,
+                const char* media_path = nullptr, uint32_t media_subimage_index = 0,
+-               bool apply_input_state = false);
++               bool apply_input_state = false, uint64_t vram_token = 0);
+ /// Without include_media_path the state names neither the game title nor the media file, so it holds nothing of
+ /// this machine's files; whoever loads it names the media (LoadState's media_path).
+-bool SaveState(ByteStream* state, bool include_media_path = true);
++/// With vram_key, for a state only this instance will load, a hardware renderer keeps VRAM in a GPU texture kept for
++/// vram_key instead of reading it back into the state, as DuckStation's memory states do; *vram_token then names
++/// it for LoadState, and is 0 when VRAM is in the state. Each key keeps the texture of its newest state only, and
++/// at most MAX_VRAM_STATE_TEXTURES keys keep one: the one saved longest ago gives its texture up first.
++bool SaveState(ByteStream* state, bool include_media_path = true, const void* vram_key = nullptr,
++               uint64_t* vram_token = nullptr);
++inline constexpr uint32_t MAX_VRAM_STATE_TEXTURES = 16;
+ 
+ /// Recreates the GPU component, saving/loading the state so it is preserved. Call when the GPU renderer changes.
+ bool RecreateGPU(GPURenderer renderer, bool update_display = true);
+diff --git a/src/libretro/libretro_host_interface.cpp b/src/libretro/libretro_host_interface.cpp
+index f30f253..7b22d07 100644
+--- a/src/libretro/libretro_host_interface.cpp
++++ b/src/libretro/libretro_host_interface.cpp
+@@ -48,6 +48,10 @@ constexpr uint32_t DISK_STATE_CONTAINER = 4;
+ /* The state names no path: index alone picks the disc in the frontend's list. A netplay state is loaded on another
+  * machine, where the same disc is elsewhere, and must not tell that machine where this one keeps its files. */
+ constexpr uint32_t DISK_STATE_PATHLESS = 8;
++/* The state's VRAM stayed on the GPU (System::SaveState's vram_key) and the 8 bytes after the path name it. Only a
++ * same-instance state, which never leaves this process, does this: it saves the read back from the GPU that made
++ * every runahead or rollback state cost a stall. */
++constexpr uint32_t DISK_STATE_GPU_VRAM = 16;
+ 
+ struct DiskStateHeader
+ {
+@@ -1006,8 +1010,10 @@ bool HostInterface::retro_serialize(void* data, size_t size)
+   if (!g_retro_environment_callback(RETRO_ENVIRONMENT_GET_SAVESTATE_CONTEXT, &ctx))
+     ctx = RETRO_SAVESTATE_CONTEXT_NORMAL;
+   const bool pathless = ctx == RETRO_SAVESTATE_CONTEXT_ROLLBACK_NETPLAY;
++  const bool same_instance = ctx == RETRO_SAVESTATE_CONTEXT_RUNAHEAD_SAME_INSTANCE;
+   std::unique_ptr<ByteStream> stream = ByteStream_CreateMemoryStream(data, static_cast<uint32_t>(size));
+-  if (!System::SaveState(stream.get(), !pathless))
++  uint64_t vram_token = 0;
++  if (!System::SaveState(stream.get(), !pathless, same_instance ? data : nullptr, &vram_token))
+     return false;
+ 
+   const DiskControlInfo& info = m_disk_control_info;
+@@ -1015,9 +1021,11 @@ bool HostInterface::retro_serialize(void* data, size_t size)
+   const std::string path = (no_disc || pathless) ? std::string() : info.image_paths[info.image_index];
+   const DiskStateHeader header{DISK_STATE_MAGIC, DISK_STATE_VERSION,
+                                (System::IsMediaTrayOpen() ? DISK_STATE_EJECTED : 0u) | (no_disc ? DISK_STATE_NO_DISC : 0u) |
+-                                 (info.has_sub_images ? DISK_STATE_CONTAINER : 0u) | (pathless ? DISK_STATE_PATHLESS : 0u),
++                                 (info.has_sub_images ? DISK_STATE_CONTAINER : 0u) | (pathless ? DISK_STATE_PATHLESS : 0u) |
++                                 (vram_token ? DISK_STATE_GPU_VRAM : 0u),
+                                info.image_index, static_cast<uint32_t>(path.size())};
+-  return stream->Write2(&header, sizeof(header)) && stream->Write2(path.data(), header.path_length);
++  return stream->Write2(&header, sizeof(header)) && stream->Write2(path.data(), header.path_length) &&
++         (!vram_token || stream->Write2(&vram_token, sizeof(vram_token)));
+ }
+ 
+ bool HostInterface::retro_unserialize(const void* data, size_t size)
+@@ -1039,6 +1047,7 @@ bool HostInterface::retro_unserialize(const void* data, size_t size)
+   std::string media_path;
+   const char* media_override = nullptr;
+   uint32_t media_subimage_index = 0;
++  uint64_t vram_token = 0;
+   uint64_t trailer_magic = 0;
+   if (size - data_end >= sizeof(trailer_magic))
+     std::memcpy(&trailer_magic, static_cast<const uint8_t*>(data) + data_end, sizeof(trailer_magic));
+@@ -1050,11 +1059,19 @@ bool HostInterface::retro_unserialize(const void* data, size_t size)
+       return false;
+     DiskStateHeader header;
+     std::memcpy(&header, static_cast<const uint8_t*>(data) + data_end, sizeof(header));
+-    if (header.version != DISK_STATE_VERSION || (header.flags & ~15u) != 0 ||
+-        header.path_length > size - data_end - sizeof(header))
++    const uint64_t token_size = (header.flags & DISK_STATE_GPU_VRAM) ? sizeof(vram_token) : 0;
++    if (header.version != DISK_STATE_VERSION || (header.flags & ~31u) != 0 ||
++        static_cast<uint64_t>(header.path_length) + token_size > size - data_end - sizeof(header))
+       return false;
+ 
+     std::string path(reinterpret_cast<const char*>(data) + data_end + sizeof(header), header.path_length);
++    if (token_size)
++    {
++      std::memcpy(&vram_token, static_cast<const uint8_t*>(data) + data_end + sizeof(header) + header.path_length,
++                  sizeof(vram_token));
++      if (vram_token == 0)
++        return false;
++    }
+     const bool no_disc = (header.flags & DISK_STATE_NO_DISC) != 0;
+     const bool ejected = (header.flags & DISK_STATE_EJECTED) != 0;
+     const bool pathless = (header.flags & DISK_STATE_PATHLESS) != 0;
+@@ -1136,6 +1153,9 @@ bool HostInterface::retro_unserialize(const void* data, size_t size)
+     is_memory_state = (ctx == RETRO_SAVESTATE_CONTEXT_RUNAHEAD_SAME_INSTANCE ||
+                        ctx == RETRO_SAVESTATE_CONTEXT_RUNAHEAD_SAME_BINARY);
+   }
++  /* VRAM kept on this process's GPU means nothing anywhere else. */
++  if (vram_token && ctx != RETRO_SAVESTATE_CONTEXT_RUNAHEAD_SAME_INSTANCE)
++    return false;
+ 
+   /* Normal state loads preserve the running state on failure. Runahead and netplay skip the per-load backup
+    * because they can happen every frame; LoadState resets the system if one of those states is rejected. */
+@@ -1154,7 +1174,7 @@ bool HostInterface::retro_unserialize(const void* data, size_t size)
+ 
+   std::unique_ptr<ByteStream> stream = ByteStream_CreateReadOnlyMemoryStream(data, static_cast<uint32_t>(size));
+   if (!System::LoadState(stream.get(), is_memory_state, restore_on_failure, media_override, media_subimage_index,
+-                         apply_input_state))
++                         apply_input_state, vram_token))
+     return false;
+ 
+   info.image_index = selected_index;
