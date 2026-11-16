@@ -392,6 +392,12 @@ check frame may be run several times between two frames of play.
 
 **What others do.**
 
+Read at GGPO [7ddadef](https://github.com/pond3r/ggpo/tree/7ddadef8546a7d99ff0b3530c6056bc8ee4b9c0a),
+GGRS [25bd998](https://github.com/gschup/ggrs/tree/25bd9983dee3ecb0677be03b9e2e23d2bd6d29cb),
+RetroArch [08a6f54](https://github.com/libretro/RetroArch/blob/08a6f540cbdf9c0554bf7459076b654bb92ed06f/network/netplay/netplay_frontend.c)
+and DuckStation's netplay fork [2cce4a4](https://github.com/HeatXD/duckstation-netplay/blob/2cce4a404b7a80a9cba56388654ccb93a9ec70af/src/core/netplay.cpp)
+(`GenerateChecksumForFrame`, `NpSaveFrameCb`):
+
 - **GGPO** asks the game for a checksum with every state it saves
   (`save_game_state`'s `checksum`); its sync test session runs each frame
   again and compares them, and its peer-to-peer session sends none. Its
@@ -422,9 +428,11 @@ check frame may be run several times between two frames of play.
   (`3rdparty/xxHash`, 0.8.3); SwanStation builds the same library in for its
   own use.
 - **What is compared is the launcher's choice.** The launcher compares main
-  RAM (`sync.ram`), as RetroArch's lockstep does: the state may hold video
+  RAM (`sync.ram`), as RetroArch's lockstep does, and should set
+  `lockstep.state` `false` (it does not yet: launcher work to come): the state may hold video
   memory a GPU rounds differently, and only reading it back gives it to the
-  host, which on hosted macOS's virtual GPU took 70 ms a check. With
+  host, which on hosted macOS's virtual GPU took about 64 ms a check
+  ("What a rollback costs"). With
   `lockstep.state` `false`, a `sync` has no state hash and the host does not
   serialize the core for it; RAM and the picture cost a fraction of a
   millisecond. The tests keep the state, since it holds everything the
@@ -441,10 +449,12 @@ check frame may be run several times between two frames of play.
   keep video memory on the GPU), and copying the RAM at every run would cost
   about what hashing it does.
 - **Versioned.** The hashes change with the algorithm, so a host with the
-  new one lists capability `syncXxh3` (protocol.md "Capabilities"); two
-  players' launchers play together only when both hosts list it or neither
-  does, so a host of each kind refuses a match before it starts instead of
-  reporting a desync at its first check.
+  new one lists capability `syncXxh3` (protocol.md "Capabilities"). The
+  contract is that two players' launchers play together only when both hosts
+  list it or neither does, so a host of each kind is refused before the match
+  starts instead of reporting a desync at its first check. The launcher does
+  not check it yet (it compares `hostVersion`, which a release with
+  `syncXxh3` changes); that check is launcher work to come.
 
 ## Core build identity
 
@@ -604,7 +614,8 @@ Built now:
   players must match the reference's, RAM, picture and state, after dozens of
   rollbacks each; the frames run again may add at most one picture per
   rollback. A second phase checks every frame with `lockstep.state` `false`,
-  as the launcher asks (RAM and picture must match, and no state is hashed),
+  as a launcher comparing only RAM asks (RAM and picture must match, no state
+  is hashed, and the test core counts that it was not serialized for netplay),
   and a third every 60 frames, as in a match. Each prints the cost of a
   rollback: loading the state, and each frame run again. With the test
   core it also checks predictions that come true (no rollback), the
@@ -629,8 +640,10 @@ around each part), which found where the time went:
   about a third of it. Every `sync` cleared the whole buffer and ran FNV-1a
   over all of it a byte at a time: 13 ms of a frame with a check, two thirds
   of the host's time in a run checking every frame. The host now clears only
-  what the last state used and hashes the zero tail as one power of the FNV
-  prime, which gives the same hash (`src/hash.cpp`, `hash_test`).
+  what the last state used and hashed the zero tail as one power of the FNV
+  prime, which gave the same hash; since `syncXxh3` the state's hash is
+  seeded with the buffer's size and reads no zero tail at all ("The checks'
+  own cost" below).
 - **Video memory read back from the GPU.** A state saved under a GPU read the
   console's video memory back from it, a stall on every save; on hosted
   macOS's virtual GPU, most of the 63 ms of a frame run again. A rollback
@@ -687,8 +700,9 @@ macOS 25 to 39 ms), so a 16 ms budget failed on a slow run; before these
 changes a whole rollback was about 32 ms on Ubuntu 24.04 (6.8 ms and about 4
 frames of 5.9 ms) and about 270 ms on hosted macOS. A 6-frame rollback can still take longer than a frame; the test
 prints the longest. On hosted macOS the load got slower (the texture copy on
-its virtual GPU) and a check still reads video memory back, as a `sync`'s
-state hash needs it, so checking every frame stays at 77 ms there. Whether
+its virtual GPU) and a check with the state still reads video memory back,
+as a `sync`'s state hash needs it, so checking every frame with the state
+stays at about 70 ms there (without it, about 4 ms: "The checks' own cost"). Whether
 video memory came back right is checked by that hash: in the first phase
 every frame's `sync.state`, which holds all of video memory read back, must
 equal the lockstep reference's after dozens of rollbacks whose loads came
@@ -699,10 +713,47 @@ test programs.
 
 The disc and the arrays were changed together and not measured apart; the
 profile put the load's time outside its own copies (waiting), and the arrays
-at half of a save's work in the core. A check every 60 frames is still a
-spike of its own: main RAM (2 MiB) and the state (about 4 MiB) are hashed
-byte by byte, FNV-1a having no faster form; on the desktop PC a frame run
-again with a check after it took about 12 ms against 3 ms without.
+at half of a save's work in the core.
+
+**The checks' own cost.** After those changes a check was still a spike of
+its own: main RAM (2 MiB), the state (about 4 MiB) and every picture were
+hashed with FNV-1a a byte at a time, and the state's serialization read
+video memory back from the GPU. Checking every frame, a frame run again cost
+8.9 ms on Windows against 1.6 ms without a check, 12.7 to 14.8 ms on Ubuntu
+against 2.6 to 3.2, and about 70 ms on hosted macOS against about 4. The
+hashes are now XXH3-64 (capability `syncXxh3`), and `lockstep.state` `false`
+leaves the state, and so the serialization, out ("Desync checks" above).
+`rollback_test.py`'s whole rollback, the range of the two players' averages
+(and the longest of either), in real-core run 43796871007 (before, on 7b769cd) against run
+43801358387 (after, on b1ea5ef):
+
+| Runner | Checking every frame, the state included | Checking every frame, no state (new) | Checking every 60 frames |
+| --- | --- | --- | --- |
+| Windows Server 2022 (software rendering) | 37.8 to 39.7 (59.5) → 11.8 to 12.0 ms (24.7) | 8.1 to 8.6 ms (14.1) | 7.5 to 8.0 (17.0) → 7.4 to 7.6 ms (11.8) |
+| Ubuntu 22.04 (Mesa) | 61.8 to 64.9 (101) → 24.9 to 25.3 ms (48.2) | 11.4 to 11.9 ms (19.9) | 14.9 to 15.8 (29.0) → 10.4 to 10.6 ms (17.3) |
+| Ubuntu 24.04 (Mesa) | 53.6 to 56.0 (82.7) → 19.7 to 19.9 ms (40.7) | 9.2 to 9.4 ms (15.6) | 12.2 to 12.7 (23.9) → 8.3 ms (14.0) |
+| hosted macOS (virtual GPU) | 299 to 314 (553) → 290 to 297 ms (547) | 24.4 to 24.5 ms (35.6) | 26.7 to 30.4 (100) → 24.9 to 30.2 ms (93.0) |
+
+A rollback ran about 4 frames again on average and at most 6 in every
+phase. With the state, a frame run again still pays for the state's
+serialization (on Ubuntu 2.5 to 3.2 ms of its 4.4 to 5.7 ms: video memory
+is read back from Mesa) and on hosted macOS for the read-back from its virtual
+GPU, about 64 ms, which no hash makes cheaper; without it every runner's
+frame run again costs what it does with no check at all (1.6 to 3.7 ms
+against 1.5 to 5.1 ms checking every 60 frames). So a launcher that
+compares only RAM and sets `state` `false` checks every frame for about
+what one check every 60 frames cost. The longest rollback on Linux, 29 ms before
+when checking every 60 frames, was 17 ms checking every 60 frames and 20 ms
+checking every frame without the state. The longest rollbacks on hosted macOS checking
+every 60 frames (93 ms) are the ones that ran a check frame with the state;
+`state` `false` leaves those out too.
+
+`real-core` holds each phase's average to a budget (`rollback_test.py`
+`--state-budget-ms`, `--ram-budget-ms`, `--budget-ms`): with the state,
+24 ms on Windows and 36 ms on Linux, which every runner exceeded before;
+without it, 24 ms on Windows and Linux and 50 ms on hosted macOS (about 300
+ms there before); every 60 frames as before, 24 and 80 ms. Hosted macOS has
+no budget with the state, whose read-back is the virtual GPU's.
 
 - The core build identity: `host_test.py`'s `core_identity` test runs the
   test core with several `library_version` values and checks `status.core`
@@ -719,6 +770,9 @@ again with a check after it took about 12 ms against 3 ms without.
 
 Next, for the launcher:
 
+- Set `lockstep.state` `false` (it compares only `sync.ram`), and refuse a
+  friend whose host differs from its own in listing `syncXxh3` ("Desync
+  checks").
 - The frame clock of a match follows `status.timing.fps` (the launcher's
   rollback clock is fixed at 60 Hz until then), and the input delay and the
   rollback window are counted in frames of that length.

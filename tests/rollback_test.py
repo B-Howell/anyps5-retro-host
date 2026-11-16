@@ -211,6 +211,15 @@ def checked_length(start, frames):
     return frames // 60 * 60 + (1 - start) % 60
 
 
+def netplay_serializes(match):
+    """How many times the test core was serialized for netplay (a sync's state hash) since the test
+    began, or None with the real core."""
+    if match.real:
+        return None
+    counted = Path(match.paths['system']) / 'fake-netplay-serialized'
+    return counted.stat().st_size if counted.exists() else 0
+
+
 def network(options, match):
     """Phase 1 compares every frame with lockstep: RAM, picture and state. Phase 2 checks every frame
     without the state (lockstep's state false), as a launcher that compares only RAM asks: no check
@@ -221,6 +230,8 @@ def network(options, match):
     start = frames + later
     last = checked_length(start, options.frames // 2)
     script = held_script(start + last, 7)
+    if not match.real:
+        (Path(match.paths['system']) / 'fake-count-netplay').write_bytes(b'')
     reference = match.peer('reference')
     first, second = match.peer('player1'), match.peer('player2')
     reference.call('start', match.start_args('reference', lockstep=True))
@@ -244,6 +255,9 @@ def network(options, match):
     print(f'rollback: two players with up to {options.delay} frames of delay and jitter, {tick * 1000:.0f} ms a '
           f'frame, {elapsed:.1f} s')
 
+    serialized = netplay_serializes(match)
+    if serialized == 0:
+        raise c.Failed('checking every frame with the state never serialized the core for netplay')
     reset((reference, first, second))
     for peer in (reference, first, second):
         args = rollback_args(1, False) if peer is not reference else {'check': 1, 'paced': False, 'state': False}
@@ -264,6 +278,8 @@ def network(options, match):
               f'frames match lockstep in RAM and picture; {summary}')
         if match.real:
             within(peer, 'checking every frame without the state', whole, options.ram_budget_ms)
+    if netplay_serializes(match) != serialized:
+        raise c.Failed('a check without the state serialized the core')
 
     reset((reference, first, second))
     for peer in (reference, first, second):

@@ -1000,10 +1000,10 @@ gives the 64-bit FNV-1a hash of the same bytes:
 | --- | --- |
 | `ram` | The console's main RAM (`RETRO_MEMORY_SYSTEM_RAM`) after the frame |
 | `video` | The last picture published by this frame or an earlier one: its width and height as two 32-bit little-endian integers, then the red, green and blue bytes of each pixel, top row first, whichever pixel format the ring has. `null` before the first picture |
-| `state` | The core's `retro_serialize` data after the frame, in a buffer of `retro_serialize_size` bytes that starts zeroed. With `syncXxh3`: the buffer up to its last byte that is not zero, with `retro_serialize_size` as the XXH3 seed, which two buffers of one size give alike exactly when they are equal. `null` when `lockstep.state` is `false` |
+| `state` | The core's `retro_serialize` data after the frame, in a buffer of `retro_serialize_size` bytes that starts zeroed. With `syncXxh3`: the buffer up to its last byte that is not zero, with `retro_serialize_size` as the XXH3 seed: two equal buffers give the same hash, and two that differ in any byte or in size differ but for a chance 64-bit collision. `null` when `lockstep.state` is `false` |
 
 The two hashes of the same bytes differ, so the hashes of a host with
-`syncXxh3` and of one without it never match: two players' launchers compare
+`syncXxh3` and of one without it do not match (but by chance): two players' launchers compare
 them only when both hosts list `syncXxh3` or neither does, and a launcher
 whose friend's host differs in this refuses the match before it starts, as it
 does for a different core build, rather than finding a desync at the first

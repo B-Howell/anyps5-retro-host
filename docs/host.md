@@ -259,7 +259,10 @@ network left to the launcher.
   `fake_region` option at `pal` runs at 50 frames a second and answers
   `RETRO_REGION_PAL`, and a `fake-refresh-50` file makes an NTSC game switch
   to 50 through `SET_SYSTEM_AV_INFO` after a frame, as SwanStation does when a
-  game changes its video mode.
+  game changes its video mode. With a `fake-count-netplay` file, each
+  serialization in the netplay context adds a byte to
+  `fake-netplay-serialized`, so `rollback_test.py` can see that a check with
+  `lockstep.state` `false` serializes nothing.
 - [`tests/host_test.py`](../tests/host_test.py) covers what the fixtures do
   not: a stuck core (the stall limit, then `release` replying and the host
   exiting), a core that is not a library and a missing disc (each ending the
@@ -323,7 +326,8 @@ network left to the launcher.
   and the players may show at most one picture more than the reference for
   each rollback (frames run again show only their newest picture). A second
   phase checks every frame with `lockstep.state` `false` against a reference
-  doing the same: RAM and picture must match and no `sync` may hold a state.
+  doing the same: RAM and picture must match, no `sync` may hold a state, and
+  with the test core no check may serialize it.
   A third checks every 60th frame, as a match would. Each phase prints what a
   rollback cost: the load, each frame run again, and the whole rollback,
   whose average the real core holds to `--state-budget-ms` (every frame, the

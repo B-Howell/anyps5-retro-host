@@ -56,14 +56,14 @@ jobs:
             python: python3
             opengl: --expect-opengl
             budget: --budget-ms 16
-            rollback_budget: --budget-ms 24
+            rollback_budget: --budget-ms 24 --state-budget-ms 36 --ram-budget-ms 24
           - os: ubuntu-24.04
             core: swanstation/build/swanstation_libretro.so
             host: build/anyps5-retro-host
             python: python3
             opengl: --expect-opengl
             budget: --budget-ms 16
-            rollback_budget: --budget-ms 24
+            rollback_budget: --budget-ms 24 --state-budget-ms 36 --ram-budget-ms 24
           - os: macos-latest
             core: swanstation/build/swanstation_libretro.dylib
             host: build/anyps5-retro-host
@@ -73,16 +73,20 @@ jobs:
             # state took 73 ms there (docs/netplay.md), so a slot's time is printed but not held
             # to the budget. A rollback state keeps its video memory on the GPU (SwanStation
             # patch 7): a whole rollback took 25 to 39 ms there, against about 270 ms before, so
-            # it is held to 80 ms, which still fails without the patch.
+            # it is held to 80 ms, which still fails without the patch. Checking every frame
+            # without the state (lockstep.state false) reads no video memory back, so that is held
+            # to 50 ms (about 24 ms on b1ea5ef, about 300 ms with the state); checking every frame
+            # with the state is not held, since each check reads video memory back (docs/netplay.md
+            # "The checks' own cost").
             budget: ''
-            rollback_budget: --budget-ms 80
+            rollback_budget: --budget-ms 80 --ram-budget-ms 50
           - os: windows-2022
             core: swanstation/build/swanstation_libretro.dll
             host: build/Release/anyps5-retro-host.exe
             python: python
             opengl: ''
             budget: --budget-ms 16
-            rollback_budget: --budget-ms 24
+            rollback_budget: --budget-ms 24 --state-budget-ms 24 --ram-budget-ms 24
     runs-on: ${{ matrix.os }}
     defaults:
       run:
