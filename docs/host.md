@@ -23,7 +23,7 @@ through kqueue. On Windows a thread waits on the launcher's process handle.
 | [`src/main.cpp`](../src/main.cpp) | The command line, the process setup, then the host |
 | [`src/host.cpp`](../src/host.cpp) | The protocol: `hello`, the order rules, every method's argument checks and replies, and the limits |
 | [`src/game.cpp`](../src/game.cpp) | One loaded game: the libretro callbacks, core options, disc control, the memory card, input, rumble, pixel conversion, and lockstep: the queue of steps, the `sync` hashes, the state files of `saveState` and `loadState`, and the 8 in-memory states, each a buffer kept for the game and reused, so a save allocates nothing after the first; and rollback (see "Rollback" below) |
-| [`src/hash.cpp`](../src/hash.cpp) | FNV-1a, and the two shortcuts that give the same hash of a state at a fraction of the cost: a run of zero bytes as one power of the prime, and the length of a buffer before its zero tail |
+| [`src/hash.h`](../src/hash.h), [`src/hash.cpp`](../src/hash.cpp) | FNV-1a, and the two shortcuts that give the same hash of a state at a fraction of the cost: a run of zero bytes as one power of the prime, and the length of a buffer before its zero tail |
 | [`cores/patches`](../cores/patches), [`cores/apply-swanstation-patches.sh`](../cores/apply-swanstation-patches.sh) | The host's SwanStation patches and the script the workflows apply them with (see "SwanStation patches" below) |
 | [`src/resolution.cpp`](../src/resolution.cpp) | Which internal resolutions a GPU game is offered (see "Resolution limits" below) |
 | [`src/ring.cpp`](../src/ring.cpp) | The frame ring writer: the header from protocol.md's byte table, slot choice, and capped doubling when a frame needs more room |
@@ -211,7 +211,8 @@ network left to the launcher.
 ## Tests
 
 - `json_test` checks the JSON and path rules.
-- `hash_test` checks [`src/hash.cpp`](../src/hash.cpp): FNV-1a's published
+- `hash_test` ([`tests/hash_test.cpp`](../tests/hash_test.cpp)) checks
+  [`src/hash.cpp`](../src/hash.cpp): FNV-1a's published
   values, that a run of zeros hashes as it does byte by byte, and that the
   used length plus the zero run gives the hash of the whole buffer, for every
   length and end up to 40 bytes and for a buffer the size of a state.
@@ -315,7 +316,8 @@ network left to the launcher.
   and the players may show at most one picture more than the reference for
   each rollback (frames run again show only their newest picture). A second
   phase checks every 60th frame, as a match would, and prints what a rollback
-  cost: the load, and each frame run again. With the test core it also checks
+  cost: the load, each frame run again, and the whole rollback, whose average
+  `--budget-ms` holds to a budget with the real core. With the test core it also checks
   that a rollback whose last frames repeat an earlier picture leaves the
   newest picture made again in the frame ring, read pixel by pixel as a
   launcher reads it (the core's `fake-port2-picture` mode), with at most one
@@ -416,7 +418,7 @@ identity; the seventh makes the states a rollback saves and loads cheap
 | [`swanstation-4-spu-sample-event-restore`](../cores/patches/swanstation-4-spu-sample-event-restore.patch) | Loading a state no longer reschedules the sound unit's always-active sample event, which ran the sample ticks of the timeline being discarded against the loaded sound unit (its tick carry, and so its timing, changed); the event's saved timing is restored with the other timing events. The AnyPS5 Desktop launcher's integrated builds carry the same change (`tool/patches/swanstation-spu-checkpoint.patch`), found by its PS1 determinism harness. Without it, `lockstep_test.py` on the pad program fails its memory-state run at the first frame (the state hash differs after a load) |
 | [`swanstation-5-port-change-keeps-other-controllers`](../cores/patches/swanstation-5-port-change-keeps-other-controllers.patch) | A port whose controller type changes gets a new controller; the other ports keep theirs. Stock SwanStation made every port's controller anew whenever any port's type changed, so plugging in port 2 (a friend joining) put port 1 back in digital mode and dropped the game's lock on it, which a real console does not do. Without it, `pad_test.py` fails at the frame port 2 is unplugged |
 | [`swanstation-6-core-build-identity`](../cores/patches/swanstation-6-core-build-identity.patch) | When the checkout holds the `anyps5-core-source.txt` the patch script writes (the SwanStation commit and each patch's SHA-256), CMake adds the build options that change what the core computes (`MSB_FIRST`), writes the whole as `anyps5-core-manifest.txt` in the build folder, and the core's `library_version` becomes `anyps5-1-<SHA-256 of it>`, the core build identity the host reports in `status.core` ([netplay.md](netplay.md) "Core build identity"). Without the file the core keeps SwanStation's own `library_version` |
-| [`swanstation-7-rollback-memory-states`](../cores/patches/swanstation-7-rollback-memory-states.patch) | As DuckStation's own memory states do: a state saved with `RETRO_SAVESTATE_CONTEXT_RUNAHEAD_SAME_INSTANCE` under a hardware renderer keeps video memory in a GPU texture instead of reading it back. The texture belongs to the buffer the state was saved into (at most 16 buffers, the one saved longest ago giving its texture up first) and is named by a token in the disc trailer (flag 16); such a state loads only in the same context, and only while that buffer holds no newer state. A load of a memory state (`RUNAHEAD_SAME_INSTANCE` or `RUNAHEAD_SAME_BINARY`) of the disc already in the drive no longer takes the disc out and puts it back, which read its system area and waited on the CD reader's thread every time: the CD unit's own state restores the drive. Arrays of integers in a state are written in one copy instead of one stream call per element (the bytes are the same; memory card and CD sector buffers made a save cost twice its copies). Without it, `rollback_test.py` on hosted macOS fails its 16 ms budget (a state read video memory back from the virtual GPU) |
+| [`swanstation-7-rollback-memory-states`](../cores/patches/swanstation-7-rollback-memory-states.patch) | As DuckStation's own memory states do: a state saved with `RETRO_SAVESTATE_CONTEXT_RUNAHEAD_SAME_INSTANCE` under a hardware renderer keeps video memory in a GPU texture instead of reading it back. The texture belongs to the buffer the state was saved into (at most 16 buffers, the one saved longest ago giving its texture up first) and is named by a token in the disc trailer (flag 16); such a state loads only in the same context, and only while that buffer holds no newer state. A load of a memory state (`RUNAHEAD_SAME_INSTANCE` or `RUNAHEAD_SAME_BINARY`) of the disc already in the drive no longer takes the disc out and puts it back, which read its system area and waited on the CD reader's thread every time: the CD unit's own state restores the drive. Arrays of integers in a state are written in one copy instead of one stream call per element (the bytes are the same; memory card and CD sector buffers made a save cost twice its copies). Without it, `rollback_test.py` on hosted macOS fails its 40 ms budget for a whole rollback (about 270 ms before: each state read video memory back from the virtual GPU) |
 
 States of the patched core are version 58, which stock SwanStation does not
 load; the host only ever runs the core of its own release.

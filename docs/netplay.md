@@ -597,8 +597,32 @@ for the two players). With the same changes `lockstep_test.py`'s slots, saved
 in memory and loaded before every frame, took 1.4 to 1.9 ms to save in three
 of the four runs (one Windows run took 4.2 ms, one save in it 68 ms; 2.6 to
 3.2 ms before) and 1.3 to 1.8 ms to load (4.2 to 12 ms before).
-`real-core` holds a rollback to 16 ms for loading the state and for each
-frame run again, on average, on every system, hosted macOS included.
+
+In CI, real-core run 43755458414 (before) against run 43792444819 (after,
+on 098cc0a):
+
+| Runner | Loading the state | Each frame run again | A whole rollback (after) | Each frame run again, checking every frame |
+| --- | --- | --- | --- | --- |
+| Windows Server 2022 (software rendering) | 3.1 → 1.2 ms | 3.1 → 1.8 ms | 8.4 ms | 22 to 27 → 9.0 ms |
+| Ubuntu 22.04 (Mesa) | 6.0 → 0.8 ms | 4.3 → 1.6 ms | 7.5 ms | 22 to 27 → 9.6 ms |
+| Ubuntu 24.04 (Mesa) | 6.8 → 1.3 ms | 5.9 → 2.6 ms | 12.1 to 12.5 ms | 22 to 27 → 12.7 ms |
+| hosted macOS (virtual GPU) | 5.9 → 10.0 ms | 63 → 4.5 ms | 28 to 30 ms | 77 ms |
+
+A whole rollback there ran about 4 frames again on average and at most 6.
+`rollback_test.py --budget-ms` holds the average whole rollback (the load
+and every frame it ran again) to the budget: `real-core` gives 16 ms on
+Windows and Linux and 40 ms on hosted macOS, where about 270 ms before patch
+7 fails it. A 6-frame rollback can still take longer than a frame; the test
+prints the longest. On hosted macOS the load got slower (the texture copy on
+its virtual GPU) and a check still reads video memory back, as a `sync`'s
+state hash needs it, so checking every frame stays at 77 ms there. Whether
+video memory came back right is checked by that hash: in the first phase
+every frame's `sync.state`, which holds all of video memory read back, must
+equal the lockstep reference's after dozens of rollbacks whose loads came
+from GPU textures, and the pad program draws what it reads from the
+controllers, so a stale texture shows. Persistent video memory a game draws
+once and keeps, and a disc being read during a rollback, are not in the
+test programs.
 
 The disc and the arrays were changed together and not measured apart; the
 profile put the load's time outside its own copies (waiting), and the arrays
