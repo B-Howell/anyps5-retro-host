@@ -16,12 +16,14 @@ on:
       - tools/package_release.py
       - tools/core_identity.py
       - cores/**
+      - 3rdparty/**
   pull_request:
     paths:
       - .github/workflows/release.yml
       - tools/package_release.py
       - tools/core_identity.py
       - cores/**
+      - 3rdparty/**
   workflow_dispatch:
 permissions:
   contents: read

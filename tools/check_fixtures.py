@@ -229,6 +229,8 @@ def lockstep_args(args, name='lockstep args'):
     integer(args.get('check'), 1, 3600, f'{name}.check')
     if 'paced' in args:
         boolean(args['paced'], f'{name}.paced')
+    if 'state' in args:
+        boolean(args['state'], f'{name}.state')
     if 'rollback' in args:
         rollback = obj(args['rollback'], f'{name}.rollback')
         integer(rollback.get('frames'), 1, ROLLBACK_FRAMES, f'{name}.rollback.frames')

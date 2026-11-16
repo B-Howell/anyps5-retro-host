@@ -383,6 +383,69 @@ What keeps two hosts alike, and what is known to break it:
   host player's card over the friend's own (protocol.md "saveState and
   loadState").
 
+## Desync checks
+
+Determinism is checked in play by comparing hashes of what confirmed frames
+left behind: a `sync` every `check` frames (protocol.md "sync"). Which hash,
+over which bytes and how often decide what a check costs, and in rollback a
+check frame may be run several times between two frames of play.
+
+**What others do.**
+
+- **GGPO** asks the game for a checksum with every state it saves
+  (`save_game_state`'s `checksum`); its sync test session runs each frame
+  again and compares them, and its peer-to-peer session sends none. Its
+  VectorWar example uses Fletcher-32 over the whole game state.
+- **GGRS**, GGPO's Rust port, takes an optional checksum with each saved
+  state and, with `DesyncDetection::On { interval }`, sends the checksum of
+  a confirmed frame every `interval` frames and reports a mismatch.
+- **RetroArch** checks every `netplay_check_frames` frames (600 by default):
+  zlib's CRC-32 over the serialized state of a confirmed check frame, taken
+  from the state it already keeps for every frame; the server sends its CRC,
+  and a client whose CRC differs asks it for a state. Its lockstep mode
+  hashes the core's system RAM instead, which "costs no serialize" and leaves
+  out bookkeeping that may differ between peers (`netplay_frontend.c`,
+  `netplay_lockstep_take_crc`).
+- **DuckStation's former netplay** (its GGPO fork) computed XXH32 with every
+  save, over a 16 KiB window of the memory state that moves with the frame
+  number, and sent confirmed frames' checksums with the input.
+
+**What the host does.**
+
+- **XXH3-64, exact.** Every byte compared is hashed, unlike DuckStation's
+  window, which can miss a changed byte for as many frames as the state has
+  windows. XXH3 reads memory 64 bytes at a time and gives the same value on
+  every system and byte order; FNV-1a, which version 1 used, multiplies once
+  per byte, each multiplication waiting for the last, so 2 MiB of RAM and a
+  4 MiB state took milliseconds a check. The hash is 64 bits, where
+  RetroArch's CRC-32 is 32. The host builds it in from the xxHash submodule
+  (`3rdparty/xxHash`, 0.8.3); SwanStation builds the same library in for its
+  own use.
+- **What is compared is the launcher's choice.** The launcher compares main
+  RAM (`sync.ram`), as RetroArch's lockstep does: the state may hold video
+  memory a GPU rounds differently, and only reading it back gives it to the
+  host, which on hosted macOS's virtual GPU took 70 ms a check. With
+  `lockstep.state` `false`, a `sync` has no state hash and the host does not
+  serialize the core for it; RAM and the picture cost a fraction of a
+  millisecond. The tests keep the state, since it holds everything the
+  console is, and run the real core with both.
+- **How often is the launcher's choice too** (`check`): every frame in plain
+  lockstep, where each `sync` also tells the launcher a frame was run, and
+  every 60th frame in rollback, a tenth of RetroArch's default.
+- **Frames run again are hashed again.** A check frame is hashed each time it
+  runs, as GGPO and GGRS take a checksum with every save: before it is
+  confirmed, the host cannot know which run will be the last, and its
+  hashes must be of the last. RetroArch can wait for the confirmation
+  because it keeps a serialized state of every frame; the host's rollback
+  states are not comparable between machines (they name the disc's path and
+  keep video memory on the GPU), and copying the RAM at every run would cost
+  about what hashing it does.
+- **Versioned.** The hashes change with the algorithm, so a host with the
+  new one lists capability `syncXxh3` (protocol.md "Capabilities"); two
+  players' launchers play together only when both hosts list it or neither
+  does, so a host of each kind refuses a match before it starts instead of
+  reporting a desync at its first check.
+
 ## Core build identity
 
 Two players' hosts stay alike only if their cores compute alike. A Windows
@@ -540,8 +603,10 @@ Built now:
   wrong, and port 2 is unplugged for 20 frames. Every frame's `sync` from both
   players must match the reference's, RAM, picture and state, after dozens of
   rollbacks each; the frames run again may add at most one picture per
-  rollback; and a second phase with a check every 60 frames prints the cost
-  of a rollback: loading the state, and each frame run again. With the test
+  rollback. A second phase checks every frame with `lockstep.state` `false`,
+  as the launcher asks (RAM and picture must match, and no state is hashed),
+  and a third every 60 frames, as in a match. Each prints the cost of a
+  rollback: loading the state, and each frame run again. With the test
   core it also checks predictions that come true (no rollback), the
   refusals, and the protocol errors. CI runs it with the test core on every
   system and under ThreadSanitizer, and with the real core on the pad program

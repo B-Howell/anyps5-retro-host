@@ -53,6 +53,7 @@ against it rather than SwanStation, which needs a BIOS and a game.
 | The host (`src/`, `tests/`, `CMakeLists.txt`) | GPL-2.0-or-later ([LICENSES/GPL-2.0-or-later.txt](LICENSES/GPL-2.0-or-later.txt)) |
 | `3rdparty/libretro-common` | MIT, submodule of [libretro/libretro-common](https://github.com/libretro/libretro-common) (only `libretro.h` is used) |
 | `3rdparty/miniaudio` | Public domain or MIT-0, submodule of [mackron/miniaudio](https://github.com/mackron/miniaudio) at 0.11.26 |
+| `3rdparty/xxHash` | BSD-2-Clause (its `LICENSE`, which each release zip carries as `licenses/xxHash-BSD-2-Clause.txt`), submodule of [Cyan4973/xxHash](https://github.com/Cyan4973/xxHash) at 0.8.3 (only `xxhash.h` is used, for the `sync` hashes) |
 | `cores/patches` | GPL-3.0-only ([LICENSES/GPL-3.0-only.txt](LICENSES/GPL-3.0-only.txt)), patches to [libretro/swanstation](https://github.com/libretro/swanstation) that the host's SwanStation is built with ([docs/host.md](docs/host.md) "SwanStation patches") |
 | `cores/apply-swanstation-patches.sh` | MIT |
 

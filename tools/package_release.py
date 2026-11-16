@@ -8,7 +8,8 @@
         --swanstation-commit <sha> --host-commit <sha> --out <folder>
 
 writes anyps5-retro-host-<version>-<system>.zip and anyps5-retro-host-<version>-<system>.files into
-<folder>. The zip holds the host, SwanStation, the two licences, SOURCE.txt and, with --core-notices,
+<folder>. The zip holds the host, SwanStation, their licences and xxHash's (the host builds xxHash in,
+from the 3rdparty/xxHash submodule), SOURCE.txt and, with --core-notices,
 every licence, copying, copyright or notice file under that folder (the libraries SwanStation
 builds in) as licenses/swanstation-dep/<path with - for />, and each --notice NAME=PATH as
 licenses/NAME; the .files lists
@@ -71,17 +72,20 @@ def source_text(version, system, host_commit, swanstation_commit):
         '\n'
         'The complete source of both, with their submodules, is published beside this zip in the\n'
         f'release as anyps5-retro-host-{version}-source.tar.gz. licenses/ holds the licences of the\n'
-        'host, of SwanStation and of the libraries SwanStation builds in.\n'
+        'host and of xxHash, which the host builds in, of SwanStation and of the libraries\n'
+        'SwanStation builds in.\n'
     )
 
 
 def release_files(args):
     host_name, core_name = SYSTEMS[args.system]
     host_licence = ROOT / 'LICENSES' / 'GPL-2.0-or-later.txt'
+    xxhash_licence = ROOT / '3rdparty' / 'xxHash' / 'LICENSE'
     return [
         (host_name, Path(args.host).read_bytes(), EXECUTABLE),
         (core_name, Path(args.core).read_bytes(), PLAIN),
         ('licenses/anyps5-retro-host-GPL-2.0-or-later.txt', host_licence.read_bytes(), PLAIN),
+        ('licenses/xxHash-BSD-2-Clause.txt', xxhash_licence.read_bytes(), PLAIN),
         ('licenses/swanstation-GPL-3.0.txt', Path(args.core_licence).read_bytes(), PLAIN),
         ('SOURCE.txt',
          source_text(args.version, args.system, args.host_commit, args.swanstation_commit).encode('utf-8'),

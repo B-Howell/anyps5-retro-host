@@ -448,6 +448,7 @@ a method whose capability the host did not list.
 | `ps1Rollback` | [Rollback](#rollback), with `ps1Lockstep`: `lockstep.rollback`, `null` ports in `step`, and the messages `correct` and `rollback` |
 | `coreIdentity` | `core` in [`status`](#status): the loaded core's name and build identity, which two players' launchers compare before a match |
 | `gameTiming` | `timing` in [`status`](#status): the frame rate the host paces the game to and the game's region, which a launcher's frame clock follows in [rollback](#rollback) |
+| `syncXxh3` | With `ps1Lockstep`: the hashes in [`sync`](#sync) are XXH3-64, not FNV-1a, and `lockstep.state` can leave the state out of them. Two players' launchers compare `sync` hashes only when both hosts list it or neither does, and a launcher refuses a match otherwise (see [sync](#sync)) |
 
 Later versions add capabilities such as PS2 and PS3.
 
@@ -845,7 +846,8 @@ run for a step, so:
 ### lockstep
 
 Argument: `{"check":<integer 1 to 3600>,"paced":<boolean, optional>,
-"rollback":{"frames":<integer 1 to 8>}}`, where `rollback` is optional
+"state":<boolean, optional>,"rollback":{"frames":<integer 1 to 8>}}`, where
+`state` is optional (capability `syncXxh3`) and `rollback` is optional
 (capability `ps1Rollback`), or `false`.
 
 - With an object, the game enters lockstep, or, when it already is in
@@ -853,7 +855,11 @@ Argument: `{"check":<integer 1 to 3600>,"paced":<boolean, optional>,
   often a `sync` is sent: after every frame whose number is a multiple of it.
   `paced` (default `true`) keeps the game to its core's frame rate
   (`status.timing.fps`) even when steps queue up; `false` runs queued steps as fast as the machine can, as a
-  player catching up does. With `rollback`, the game runs in
+  player catching up does. `state` (default `true`) says whether a `sync`
+  hashes the core's state; with `false` its `state` is `null` and the host
+  does not serialize the core for a check, which under a GPU would read the
+  console's video memory back, so a check costs the RAM's hash and little
+  more. A launcher that compares only `ram` sets it to `false`. With `rollback`, the game runs in
   [rollback](#rollback), with at most `frames` frames stepped beyond the last
   confirmed one; without it, in plain lockstep. The change takes effect
   between two frames: the host waits for the frame being run to end before it
@@ -983,14 +989,25 @@ loaded, while the game is not in lockstep, for any other frame, or as the
 
 Sent after each lockstep frame whose number is a multiple of `check`, in
 frame order, exactly once. In [rollback](#rollback) it is sent once the frame
-is confirmed, with what the frame left behind the last time it was run. Each hash is the 64-bit FNV-1a hash of some bytes, as 16
-lowercase hexadecimal digits, or `null` when the core cannot give them:
+is confirmed, with what the frame left behind the last time it was run. Each
+hash is a 64-bit hash of some bytes, as 16 lowercase hexadecimal digits, or
+`null` when the core cannot give them. A host with capability `syncXxh3`
+gives the XXH3-64 hash ([xxHash](https://github.com/Cyan4973/xxHash) 0.8's
+`XXH3_64bits`, seed 0 unless the table says otherwise); a host without it
+gives the 64-bit FNV-1a hash of the same bytes:
 
 | Field | The hash of |
 | --- | --- |
 | `ram` | The console's main RAM (`RETRO_MEMORY_SYSTEM_RAM`) after the frame |
 | `video` | The last picture published by this frame or an earlier one: its width and height as two 32-bit little-endian integers, then the red, green and blue bytes of each pixel, top row first, whichever pixel format the ring has. `null` before the first picture |
-| `state` | The core's `retro_serialize` data after the frame, in a buffer of `retro_serialize_size` bytes that starts zeroed |
+| `state` | The core's `retro_serialize` data after the frame, in a buffer of `retro_serialize_size` bytes that starts zeroed. With `syncXxh3`: the buffer up to its last byte that is not zero, with `retro_serialize_size` as the XXH3 seed, which two buffers of one size give alike exactly when they are equal. `null` when `lockstep.state` is `false` |
+
+The two hashes of the same bytes differ, so the hashes of a host with
+`syncXxh3` and of one without it never match: two players' launchers compare
+them only when both hosts list `syncXxh3` or neither does, and a launcher
+whose friend's host differs in this refuses the match before it starts, as it
+does for a different core build, rather than finding a desync at the first
+`sync`.
 
 Two hosts that ran the same steps from the same start have the same `ram`
 and `state`, wherever each keeps the disc: the state is saved for netplay, so

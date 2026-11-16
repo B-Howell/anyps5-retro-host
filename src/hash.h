@@ -8,22 +8,25 @@
 
 namespace retro_host {
 
-inline constexpr uint64_t kFnvOffset = 14695981039346656037ULL;
-inline constexpr uint64_t kFnvPrime = 1099511628211ULL;
+// The hashes of a sync (protocol.md "sync", capability syncXxh3): XXH3-64 from the xxHash submodule,
+// which is the same on every system and byte order and reads memory many bytes at a time.
 
-// 64-bit FNV-1a over size bytes, continuing from hash.
-inline uint64_t Fnv(const void* data, size_t size, uint64_t hash = kFnvOffset) {
-  const auto* bytes = static_cast<const uint8_t*>(data);
-  for (size_t i = 0; i < size; ++i) hash = (hash ^ bytes[i]) * kFnvPrime;
-  return hash;
-}
+// XXH3-64 of size bytes with seed 0: the console's main RAM.
+uint64_t Hash(const void* data, size_t size);
 
-// The same as Fnv over count zero bytes: each one only multiplies by the prime, so the run costs a
-// power of the prime (mod 2^64) instead of a byte at a time.
-uint64_t FnvZeros(uint64_t count, uint64_t hash = kFnvOffset);
+// A serialized state in a buffer of size bytes that started zeroed, whose first used bytes hold
+// every non-zero byte: XXH3-64 of those used bytes, seeded with size. Two such buffers of the same
+// size are equal exactly when their used bytes are, so this stands for the whole buffer without
+// reading its zero tail.
+uint64_t StateHash(const void* data, size_t used, size_t size);
 
-// How many bytes from the start of data hold every non-zero byte (0 when all are zero). Fnv over
-// those, then FnvZeros over the rest, is Fnv over all of data.
+// A picture of width by height pixels of 4 bytes each, red, green and blue at offsets red, 1 and
+// blue (the fourth byte is not hashed): XXH3-64 of the width and height as two 32-bit
+// little-endian integers, then the red, green and blue bytes of each pixel, top row first. The
+// same for an rgba8 and a bgra8 copy of one picture.
+uint64_t PictureHash(const uint8_t* pixels, uint32_t width, uint32_t height, size_t red, size_t blue);
+
+// How many bytes from the start of data hold every non-zero byte (0 when all are zero).
 size_t UsedLength(const void* data, size_t size);
 
 }  // namespace retro_host

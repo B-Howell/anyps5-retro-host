@@ -91,6 +91,10 @@ LockstepConfig NeedLockstep(const Json& args, const std::string& where) {
     Need(paced->IsBool(), where + ".paced must be true or false.");
     config.paced = paced->AsBool();
   }
+  if (const Json* state = args.Find("state")) {
+    Need(state->IsBool(), where + ".state must be true or false.");
+    config.state = state->AsBool();
+  }
   if (const Json* rollback = args.Find("rollback")) {
     const std::string frames_error = where + ".rollback.frames must be an integer from 1 to " +
                                      std::to_string(kMaxRollbackFrames) + ".";
@@ -185,7 +189,7 @@ Host::Outcome Host::Hello(const Json& message) {
                        {"version", 1},
                        {"pid", ProcessId()},
                        {"hostVersion", ANYPS5_RETRO_HOST_VERSION},
-                       {"capabilities", JsonArray{"ps1", "ps1Lockstep", "ps1Rollback", "coreIdentity", "gameTiming"}},
+                       {"capabilities", JsonArray{"ps1", "ps1Lockstep", "ps1Rollback", "coreIdentity", "gameTiming", "syncXxh3"}},
                        {"pixelFormat", format_name}}));
   return Outcome::kContinue;
 }

@@ -1,0 +1,24 @@
+{
+  "description": "The running game enters rollback as a launcher that compares only main RAM asks: a sync every frame, its state left out, so no check serializes the core. Capability syncXxh3.",
+  "from": "launcher",
+  "message": {
+    "type": "call",
+    "id": 11,
+    "method": "lockstep",
+    "args": {
+      "check": 1,
+      "paced": false,
+      "state": false,
+      "rollback": {
+        "frames": 8
+      }
+    }
+  },
+  "reply": {
+    "type": "reply",
+    "id": 11,
+    "result": {
+      "frame": 0
+    }
+  }
+}

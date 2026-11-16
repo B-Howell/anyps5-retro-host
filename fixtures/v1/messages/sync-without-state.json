@@ -1,0 +1,15 @@
+{
+  "description": "What lockstep frame 121 left behind in a game whose lockstep has state false: main RAM and the picture, as XXH3-64 hashes in hexadecimal, and no state.",
+  "from": "host",
+  "message": {
+    "type": "sync",
+    "frame": 121,
+    "ram": "5d0e8c1b7a3f2e49",
+    "video": "c3a19f0e6b2d7584",
+    "state": null
+  },
+  "anyValueFor": [
+    "ram",
+    "video"
+  ]
+}

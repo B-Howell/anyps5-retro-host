@@ -858,18 +858,8 @@ void Game::Video(const void* data, unsigned width, unsigned height, size_t pitch
 void Game::Publish(uint32_t width, uint32_t height) {
   if (step_input_) {
     // The picture in RGB order, whichever pixel format the ring has, so peers can compare it.
-    const uint32_t size[2] = {width, height};
-    uint64_t hash = Fnv(size, sizeof size);
     const bool bgra = format_ == PixelFormat::kBgra8;
-    const size_t red = bgra ? 2 : 0;
-    const size_t blue = bgra ? 0 : 2;
-    const uint8_t* pixels = converted_.data();
-    for (size_t at = 0, end = converted_.size(); at < end; at += 4) {
-      hash = (hash ^ pixels[at + red]) * kFnvPrime;
-      hash = (hash ^ pixels[at + 1]) * kFnvPrime;
-      hash = (hash ^ pixels[at + blue]) * kFnvPrime;
-    }
-    video_hash_ = hash;
+    video_hash_ = PictureHash(converted_.data(), width, height, bgra ? 2 : 0, bgra ? 0 : 2);
   }
   if (resimulating_) {
     held_picture_ = std::make_pair(width, height);
@@ -1442,20 +1432,22 @@ void Game::FinishStep(uint64_t frame) {
 }
 
 std::optional<SyncPoint> Game::Measure(uint64_t frame) {
+  bool with_state = true;
   {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!lockstep_ || frame % lockstep_->check != 0) return std::nullopt;
+    with_state = lockstep_->state;
   }
   SyncPoint point;
   point.frame = frame;
   point.video = video_hash_;
   const auto ram = Get<void* (*)(unsigned)>("retro_get_memory_data")(RETRO_MEMORY_SYSTEM_RAM);
   const size_t ram_size = Get<size_t (*)(unsigned)>("retro_get_memory_size")(RETRO_MEMORY_SYSTEM_RAM);
-  if (ram && ram_size) point.ram = Fnv(ram, ram_size);
+  if (ram && ram_size) point.ram = Hash(ram, ram_size);
+  // Without the state the core is not serialized at all, so a GPU game's video memory is not read back.
+  if (!with_state) return point;
   savestate_context_ = RETRO_SAVESTATE_CONTEXT_ROLLBACK_NETPLAY;
-  if (const std::string* state = Serialize()) {
-    point.state = FnvZeros(state->size() - serialized_used_, Fnv(state->data(), serialized_used_));
-  }
+  if (const std::string* state = Serialize()) point.state = StateHash(state->data(), serialized_used_, state->size());
   savestate_context_ = RETRO_SAVESTATE_CONTEXT_NORMAL;
   return point;
 }

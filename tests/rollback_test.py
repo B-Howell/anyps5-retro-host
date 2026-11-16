@@ -8,8 +8,9 @@ Each player steps every frame as soon as the rollback window lets it, leaving th
 host predicts it), and sends each late input as a correction. Wrong predictions make the host load the
 state from before the frame and run the frames again. Every frame's sync, sent once the frame is confirmed,
 must match the reference's: main RAM, picture and state. The players also unplug and plug in port 2 on the
-way. The test counts the rollbacks, checks that the frames run again showed only their newest picture, and
-prints what a rollback cost per frame run again.
+way. Then they check every frame without the state (lockstep's state false: RAM and picture must match, and
+no state is hashed), and last every 60 frames, as a match does. The test counts the rollbacks, checks that the
+frames run again showed only their newest picture, and prints what a rollback cost in each phase.
 
 With the test core it also checks the protocol errors and refusals of rollback. With --bios it runs the
 real SwanStation core on make_test_disc.py's pad program, which reads both controllers, acts on the analog
@@ -90,8 +91,8 @@ class Player:
         self.next += 1
 
 
-def rollback_args(check=1):
-    return {'check': check, 'paced': False, 'rollback': {'frames': WINDOW}}
+def rollback_args(check=1, state=True):
+    return {'check': check, 'paced': False, 'state': state, 'rollback': {'frames': WINDOW}}
 
 
 def frame_seconds(options, reference, frames, elapsed):
@@ -175,14 +176,51 @@ def check_rollbacks(peer, reports, pictures, reference_pictures):
             f'average, {longest:.2f} ms at most'), whole
 
 
+def within(peer, what, whole, budget):
+    """A rollback's load and frames run again all happen between two frames of play. The average is held
+    to the budget; the longest is printed, since a 6-frame rollback may exceed a frame where 2 do not."""
+    if budget is not None and whole > budget:
+        raise c.Failed(f'{peer.name}: a whole rollback {what} took {whole:.2f} ms on average, over the '
+                       f'{budget} ms budget')
+
+
+def same_ram(name, ours, theirs):
+    """Fails at the first frame whose RAM or picture differs from lockstep's, or that has a state hash
+    though lockstep was told to leave the state out. Returns how many frames were compared."""
+    if len(ours) != len(theirs):
+        raise c.Failed(f'{name}: {len(ours)} frames against {len(theirs)}')
+    for mine, other in zip(ours, theirs):
+        if (mine['frame'], mine['ram'], mine['video']) != (other['frame'], other['ram'], other['video']):
+            raise c.Failed(f'{name}: frame {mine["frame"]} differs: {mine} against {other}')
+        if mine['ram'] is None or mine['state'] is not None:
+            raise c.Failed(f'{name}: frame {mine["frame"]} should have a RAM hash and no state hash: {mine}')
+    return len(ours)
+
+
+def reset(peers):
+    for peer in peers:
+        peer.syncs.clear()
+        peer.log.clear()
+        peer.rollbacks.clear()
+        peer.pictures = 0
+
+
+def checked_length(start, frames):
+    """About frames frames from start, ending on a frame a check every 60 frames is due after, so every
+    picture has come with its sync."""
+    return frames // 60 * 60 + (1 - start) % 60
+
+
 def network(options, match):
-    """Phase 1 compares every frame with lockstep. Phase 2 checks every 60th frame, as a match would, so a
-    frame run again costs what it does in play, and prints that cost."""
+    """Phase 1 compares every frame with lockstep: RAM, picture and state. Phase 2 checks every frame
+    without the state (lockstep's state false), as a launcher that compares only RAM asks: no check
+    serializes the core. Phase 3 checks every 60th frame, as a match would. Each prints what a rollback
+    cost and, with the real core, holds it to its budget."""
     frames = options.frames
-    # About half as many again, ending on a frame a check is due after, so every picture has come with
-    # its sync.
-    later = options.frames // 2 // 60 * 60 + (1 - frames) % 60
-    script = held_script(frames + later, 7)
+    later = options.frames // 2
+    start = frames + later
+    last = checked_length(start, options.frames // 2)
+    script = held_script(start + last, 7)
     reference = match.peer('reference')
     first, second = match.peer('player1'), match.peer('player2')
     reference.call('start', match.start_args('reference', lockstep=True))
@@ -199,26 +237,46 @@ def network(options, match):
         if peer.log != list(range(frames)):
             raise c.Failed(f'{peer.name}: syncs came for frames {peer.log[:20]}..., not each frame once in order')
         compared = ls.same(f'{peer.name} against lockstep', [peer.syncs[f] for f in range(frames)], expected)
-        summary, _ = check_rollbacks(peer, peer.rollbacks, peer.pictures, reference.pictures)
+        summary, whole = check_rollbacks(peer, peer.rollbacks, peer.pictures, reference.pictures)
         print(f'{peer.name}: {compared} frames match lockstep in RAM, picture and state; {summary}')
+        if match.real:
+            within(peer, 'checking every frame', whole, options.state_budget_ms)
     print(f'rollback: two players with up to {options.delay} frames of delay and jitter, {tick * 1000:.0f} ms a '
           f'frame, {elapsed:.1f} s')
 
+    reset((reference, first, second))
     for peer in (reference, first, second):
-        peer.syncs.clear()
-        peer.log.clear()
-        peer.rollbacks.clear()
-        peer.pictures = 0
-        args = rollback_args(60) if peer is not reference else {'check': 60, 'paced': False}
+        args = rollback_args(1, False) if peer is not reference else {'check': 1, 'paced': False, 'state': False}
         if peer.call('lockstep', args) != {'frame': frames}:
-            raise c.Failed(f'{peer.name}: lockstep with a check every 60 frames did not keep the frame count')
-    checked = [frame for frame in range(frames, frames + later) if frame % 60 == 0]
+            raise c.Failed(f'{peer.name}: lockstep without the state did not keep the frame count')
     began = time.monotonic()
-    for frame in range(frames, frames + later):
-        reference.step(frame, script[frame])
-    wait_for_sync([reference], checked[-1])
+    expected = ls.advance([reference], frames, later, lambda peer, frame: script[frame])['reference']
     tick = frame_seconds(options, reference, later, time.monotonic() - began)
     play_phase(tick, players, frames, later)
+    wait_for_sync(peers, start - 1)
+    for peer in peers:
+        if peer.log != list(range(frames, start)):
+            raise c.Failed(f'{peer.name}: syncs came for frames {peer.log[:20]}..., not each frame once in order')
+        compared = same_ram(f'{peer.name} without the state', [peer.syncs[f] for f in range(frames, start)],
+                            expected)
+        summary, whole = check_rollbacks(peer, peer.rollbacks, peer.pictures, reference.pictures)
+        print(f'{peer.name}, checking every frame without the state ({tick * 1000:.0f} ms a frame): {compared} '
+              f'frames match lockstep in RAM and picture; {summary}')
+        if match.real:
+            within(peer, 'checking every frame without the state', whole, options.ram_budget_ms)
+
+    reset((reference, first, second))
+    for peer in (reference, first, second):
+        args = rollback_args(60) if peer is not reference else {'check': 60, 'paced': False}
+        if peer.call('lockstep', args) != {'frame': start}:
+            raise c.Failed(f'{peer.name}: lockstep with a check every 60 frames did not keep the frame count')
+    checked = [frame for frame in range(start, start + last) if frame % 60 == 0]
+    began = time.monotonic()
+    for frame in range(start, start + last):
+        reference.step(frame, script[frame])
+    wait_for_sync([reference], checked[-1])
+    tick = frame_seconds(options, reference, last, time.monotonic() - began)
+    play_phase(tick, players, start, last)
     wait_for_sync(peers, checked[-1])
     for peer in peers:
         if peer.log != checked:
@@ -227,11 +285,8 @@ def network(options, match):
                 [reference.syncs[f] for f in checked])
         summary, whole = check_rollbacks(peer, peer.rollbacks, peer.pictures, reference.pictures)
         print(f'{peer.name}, checking every 60 frames ({tick * 1000:.0f} ms a frame): {summary}')
-        # A rollback's load and frames run again all happen between two frames of play. The average is held to
-        # the budget; the longest is printed, since a 6-frame rollback may exceed a frame where 2 do not.
-        if match.real and options.budget_ms is not None and whole > options.budget_ms:
-            raise c.Failed(f'{peer.name}: a whole rollback took {whole:.2f} ms on average, over the '
-                           f'{options.budget_ms} ms budget')
+        if match.real:
+            within(peer, 'checking every 60 frames', whole, options.budget_ms)
     return players
 
 
@@ -480,6 +535,10 @@ def main():
     parser.add_argument('--budget-ms', type=float,
                         help='With the real core, the most a whole rollback (the load and every frame run '
                         'again) may take on average, while checking every 60 frames')
+    parser.add_argument('--state-budget-ms', type=float,
+                        help='The same while checking every frame, the state included')
+    parser.add_argument('--ram-budget-ms', type=float,
+                        help='The same while checking every frame without the state')
     parser.add_argument('--tick', type=float, default=0.004,
                         help='Seconds each simulated frame lasts at least, for the hosts to run what they were '
                         'sent; longer on a host slower than that')
