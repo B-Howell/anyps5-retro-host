@@ -164,8 +164,8 @@ def game_timing(program, core, log):
     """status.timing gives the frame rate the host paces the game to and the core's region: the fake
     core's NTSC game at 60, its PAL game at 50, and a game that switches to 50 through
     SET_SYSTEM_AV_INFO while it runs. A paced game, on its own or in lockstep, publishes no more frames
-    a second than that; timing is null for a core that did not load and known before a game started
-    in lockstep runs its first step."""
+    a second than that; timing is known before a game started in lockstep runs its first step, follows
+    a loaded state's rate, and is null for a core that did not load."""
     pal = {'fps': 50.0, 'region': 'pal'}
     session = Session(program, core, log)
     try:
@@ -203,15 +203,44 @@ def game_timing(program, core, log):
         if status['timing'] != pal or status['ready']:
             raise c.Failed(f'a PAL game waiting for its first step gave {status}')
         steps = 100
+        began = time.monotonic()
         for frame in range(steps):
             session.host.send_message({'type': 'step', 'frame': frame, 'ports': [
                 {'buttons': 0, 'leftX': 0, 'leftY': 0, 'rightX': 0, 'rightY': 0}]})
-        began = time.monotonic()
         session.read(lambda m: m.get('type') == 'sync' and m['frame'] == steps - 1, 30)
         took = time.monotonic() - began
         print(f'      {steps} paced lockstep steps of a PAL game: {took:.2f} s')
         if took < 0.95 * (steps - 1) / 50:
             raise c.Failed(f'{steps} paced lockstep steps of a 50 Hz game took {took:.2f} s')
+        session.call('stop')
+        session.wait(lambda s: s['ended'], 5)
+        session.call('release')
+
+        # A loaded state brings back the rate it was saved at, as SwanStation's video timings come
+        # back with its state: the host takes it after the next frame.
+        def run(first, count):
+            for frame in range(first, first + count):
+                session.host.send_message({'type': 'step', 'frame': frame, 'ports': [
+                    {'buttons': 0, 'leftX': 0, 'leftY': 0, 'rightX': 0, 'rightY': 0}]})
+            session.read(lambda m: m.get('type') == 'sync' and m['frame'] == first + count - 1, 30)
+
+        refresh = Path(session.paths['system']) / 'fake-refresh-50'
+        session.start(None, {'check': 1, 'paced': False})
+        run(0, 10)
+        if session.call('saveState', {'slot': 0}) is False:
+            raise c.Failed('saveState in a slot was refused')
+        refresh.write_bytes(b'')
+        run(10, 10)
+        refresh.unlink()
+        status = session.call('status')
+        if status['timing'] != {'fps': 50.0, 'region': 'ntsc'}:
+            raise c.Failed(f'a lockstep game that switched to 50 Hz gave timing {status["timing"]!r}')
+        if session.call('loadState', {'slot': 0}) is False:
+            raise c.Failed('loadState from a slot was refused')
+        run(10, 3)
+        status = session.call('status')
+        if status['timing'] != {'fps': 60.0, 'region': 'ntsc'}:
+            raise c.Failed(f'a state saved at 60 Hz, loaded, gave timing {status["timing"]!r}')
         session.call('stop')
         session.wait(lambda s: s['ended'], 5)
         session.call('release')

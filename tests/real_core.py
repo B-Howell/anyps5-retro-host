@@ -7,7 +7,8 @@ that is not black and keeps changing, stops and exits cleanly. With --expect-cor
 checks the core build identity in status.core (docs/netplay.md "Core build identity") and can write
 it to a file, so CI can compare the identity each system's build reports. It checks status.timing (the
 frame rate the host paces the game to and the console's region) on an auto-detected console and on a
-PAL one, and that the game publishes no more frames a second than that rate.
+PAL console running a program that sets a PAL video mode, and that the game publishes no more frames a
+second than that rate.
 The renderer is whichever the machine allows: with no OpenGL context the host must say why a scale
 above 1x does not apply."""
 
@@ -51,6 +52,10 @@ corner = work / 'corner.exe'
 corner.write_bytes(make_test_disc.corner_program())
 corner_disc = work / 'corner.cue'
 make_test_disc.build(corner, corner_disc.with_suffix('.bin'), corner_disc)
+pal_corner = work / 'pal-corner.exe'
+pal_corner.write_bytes(make_test_disc.corner_program(pal=True))
+pal_disc = work / 'pal-corner.cue'
+make_test_disc.build(pal_corner, pal_disc.with_suffix('.bin'), pal_disc)
 log = open(options.log, 'wb')
 host = (c.WindowsHost if c.WINDOWS else c.PosixHost)(host_path, log)
 ids = iter(range(1, 1 << 30))
@@ -181,13 +186,15 @@ def check_timing(status, region=None):
     return timing
 
 
-def paced(seconds, what):
+def paced(seconds, what, pal=False):
     """Counts the frames published over seconds and checks they are no more than the frame rate in
-    status.timing allows."""
+    status.timing allows; with pal, that the rate is PAL's, about 50."""
     before = state['frames']
     drain(seconds)
     shown = state['frames'] - before
-    fps = check_timing(call('status'))['fps']
+    fps = check_timing(call('status'), 'pal' if pal else None)['fps']
+    if pal and not 48 < fps < 52:
+        raise c.Failed(f'a PAL video mode gave status.timing.fps {fps!r}, not about 50')
     print(f'{what}: {shown} frames in {seconds} s at {fps:.3f} frames a second')
     if shown > fps * seconds * 1.05:
         raise c.Failed(f'{shown} frames in {seconds} s is faster than {fps:.3f} frames a second')
@@ -277,9 +284,10 @@ try:
     if not is_corner_picture(seen):
         raise c.Failed('the corner program is not red at the top-left only: the picture is flipped or its colours are wrong')
     stop()
-    # A PAL console: the region is PAL whatever video mode the program sets.
-    start(disc, 'PAL')
-    if paced(5, 'PAL console') < 50:
+    # A PAL console whose program sets a PAL video mode: SwanStation gives the new rate after a frame.
+    start(pal_disc, 'PAL')
+    drain(1)
+    if paced(5, 'PAL console in a PAL mode', pal=True) < 50:
         raise c.Failed('fewer than 50 frames in 5 s on a PAL console')
     stop()
     host.send_message({'type': 'shutdown'})

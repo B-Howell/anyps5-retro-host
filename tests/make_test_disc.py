@@ -95,9 +95,10 @@ def text(value, length):
     return value.encode('ascii').ljust(length, b' ')
 
 
-def corner_program():
+def corner_program(pal=False):
     """A PS-EXE that fills the 320x240 screen blue and the 64x32 block at its top-left corner red,
-    then waits forever, so a test can tell which way up a picture is. Each GPU port write (GP1 at
+    then waits forever, so a test can tell which way up a picture is. With pal it sets a PAL video
+    mode (GP1(08h) bit 3), so the console runs at PAL's 50 frames a second. Each GPU port write (GP1 at
     0x1F801814, GP0 at 0x1F801810) is followed by a short wait, as the GPU takes one command at a
     time."""
     code = []
@@ -116,8 +117,8 @@ def corner_program():
 
     word(0x0F, 0, 8, 0x1F80)  # lui $t0, 0x1F80
     word(0x0D, 8, 8, 0x1810)  # ori $t0, $t0, 0x1810
-    # GP1: reset, 320x240 NTSC 15-bit, display start 0,0, standard ranges, display on.
-    for value in (0x00000000, 0x08000001, 0x05000000, 0x06C60260, 0x07040010, 0x03000000):
+    # GP1: reset, 320x240 NTSC (or PAL) 15-bit, display start 0,0, standard ranges, display on.
+    for value in (0x00000000, 0x08000009 if pal else 0x08000001, 0x05000000, 0x06C60260, 0x07040010, 0x03000000):
         write(value, 4)
     # GP0 fill rectangle: colour (0x02BBGGRR), top-left (y << 16 | x), size (h << 16 | w).
     for value in (0x02FF0000, 0x00000000, 0x00F00140, 0x020000FF, 0x00000000, 0x00200040):

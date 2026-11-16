@@ -33,7 +33,8 @@
  * SwanStation gives for a PAL console; otherwise it runs at 60 and is NTSC. While the system
  * directory holds fake-refresh-50, an NTSC game switches to 50 frames a second through
  * RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO after a frame, as SwanStation does when a game changes its
- * video mode, keeping its region. */
+ * video mode, keeping its region. The rate is part of its state, and a loaded state with another rate
+ * reports it after the next frame, as SwanStation's video timings come back with its state. */
 
 #include <libretro.h>
 
@@ -87,6 +88,7 @@ static bool gpu_ready;
 static unsigned scale = 1;
 static bool pal;
 static double fps = 60.0;
+static bool refresh_changed;
 static struct retro_hw_render_callback hw;
 static void(GL_CALL* gl_bind_framebuffer)(unsigned, unsigned);
 static void(GL_CALL* gl_viewport)(int, int, int, int);
@@ -223,6 +225,7 @@ RETRO_API void retro_init(void) {
   scale = 1;
   pal = false;
   fps = 60.0;
+  refresh_changed = false;
   memset(&hw, 0, sizeof hw);
   memset(offered, 0, sizeof offered);
   memcpy(offered, definitions, count * sizeof definitions[0]);
@@ -429,8 +432,12 @@ RETRO_API void retro_run(void) {
   ++frame_count;
   memory[0] = frame_count;
   if (fps != 50.0 && in_system_directory("fake-refresh-50")) {
-    struct retro_system_av_info info;
     fps = 50.0;
+    refresh_changed = true;
+  }
+  if (refresh_changed) {
+    struct retro_system_av_info info;
+    refresh_changed = false;
     retro_get_system_av_info(&info);
     environment(RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO, &info);
   }
@@ -439,7 +446,7 @@ RETRO_API void retro_run(void) {
 RETRO_API size_t retro_serialize_size(void) { return STATE_BYTES; }
 RETRO_API bool retro_serialize(void* data, size_t size) {
   unsigned char* out = data;
-  const uint32_t words[6] = {frame_count, memory[1], memory[2], memory[3], rumbling, 0};
+  const uint32_t words[6] = {frame_count, memory[1], memory[2], memory[3], rumbling, fps == 50.0 ? 1u : 0u};
   if (size < STATE_BYTES) return false;
   memcpy(out, STATE_MAGIC, 8);
   memcpy(out + 8, words, sizeof words);
@@ -457,6 +464,8 @@ RETRO_API bool retro_unserialize(const void* data, size_t size) {
   memory[2] = words[2];
   memory[3] = words[3];
   rumbling = words[4];
+  refresh_changed = (words[5] ? 50.0 : 60.0) != fps;
+  fps = words[5] ? 50.0 : 60.0;
   memcpy(card, in + 8 + sizeof words, CARD_BYTES);
   return true;
 }
