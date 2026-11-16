@@ -196,11 +196,28 @@ itself.
 If any check fails, the launcher does not start the host and shows that the
 emulator needs to be downloaded again.
 
-A release launcher only ever runs the SwanStation library from the signed
-host release. It never runs a core the player picks. Debug builds of the
-launcher MAY run the host named by the environment variable
-`ANYPS5_RETRO_HOST`, and any core, without the checks. Release builds ignore
-that variable.
+A launcher is built in one of three ways, and only a release is published:
+
+- **A release** is what players download. It only ever runs the SwanStation
+  library from the signed host release, after the checks above, and never a
+  core the player picks. It ignores the environment variable
+  `ANYPS5_RETRO_HOST`. A build that is optimized like a release but not
+  published (the Flutter launcher's profile build) is a release here too.
+- **A debug build** MAY run the host named by `ANYPS5_RETRO_HOST`, and any
+  core, without the checks.
+- **A test build** is compiled like a release, with the release's runtime
+  libraries, and MAY do what a debug build does. It exists to hand a tester a
+  host they built, since a debug build can need runtime libraries that may not
+  be given away (Microsoft's debug C++ runtime on Windows). It is made a test
+  build when it is compiled, never by a setting, file, argument or
+  environment variable of the running launcher, and it MUST NOT be published
+  as a release. The Flutter launcher's test build is
+  `flutter build <windows or linux> --release
+  --dart-define=ANYPS5_UNCHECKED_RETRO_HOST_BUILD=true` (its
+  `docs/RETRO_HOST_CLIENT.md`, "Debug and test builds").
+
+A debug or test build that runs an unchecked host SHOULD say so where the
+player sees the emulator, so a tester can tell it from a release.
 
 **macOS signing.** The host is signed with Developer ID, the hardened runtime
 and library validation, and notarized. The SwanStation library in a macOS
