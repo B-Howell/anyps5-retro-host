@@ -84,6 +84,8 @@ remotes = [
     ('IPv6 https', 'https://[2001:db8::1]:8443/team/host.git', 'https://[2001:db8::1]:8443/team/host'),
     ('IPv6 ssh', 'ssh://git@[2001:db8::1]/team/host', 'https://[2001:db8::1]/team/host'),
     ('a port that is no number', 'https://github.com:http/team/host', None),
+    ('an ssh port that is no number', 'ssh://git@github.com:http/team/host', None),
+    ('an IPv6 host without its closing bracket', 'https://[2001:db8::1/team/host', None),
 ]
 for name, remote, want in remotes:
     check(f'public URL of {name}', p.public_url(remote), want)

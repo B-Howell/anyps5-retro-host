@@ -77,11 +77,13 @@ def public_url(remote):
     if '://' not in remote and scp:
         host, path, port = scp.group(1), scp.group(2), None
     else:
-        parts = urlsplit(remote)
         try:
-            port = parts.port if parts.scheme == 'https' else None
+            parts = urlsplit(remote)
+            port = parts.port
         except ValueError:
             return None
+        if parts.scheme != 'https':
+            port = None
         if parts.scheme not in ('https', 'ssh', 'git', 'git+ssh', 'ssh+git') or not parts.hostname:
             return None
         host, path = parts.hostname, parts.path
