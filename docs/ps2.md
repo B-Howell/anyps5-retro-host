@@ -97,8 +97,11 @@ Configuring the host with `-DANYPS5_RETRO_HOST_LRPS2=ON` builds it
    and checks the files out (so the LF patches also apply where git writes
    CRLF), and writes `anyps5-core-source.txt` there: the LRPS2 commit and
    each patch's SHA-256 and name. The submodule itself is never changed. A
-   build runs it again before building and leaves a copy whose manifest still
-   matches as it is.
+   build runs it again before building and keeps the copy only while it is
+   exactly that source (its commit; its index the tree the patches make of
+   that commit, worked out again in an index of its own; its files the
+   index's; no other file but the manifest), and otherwise makes it again, so
+   an edit in the copy cannot be built under the identity.
 2. LRPS2's own CMake builds `pcsx2_libretro` in `lrps2-build` with
    `-DCMAKE_BUILD_TYPE=Release -DC89_EMITTER=ON -DDISABLE_ADVANCE_SIMD=ON
    -DUSE_OPENGL=ON -DUSE_VULKAN=ON`, the generator and compilers of the host's

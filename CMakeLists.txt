@@ -108,7 +108,7 @@ if(ANYPS5_RETRO_HOST_LRPS2)
   elseif(APPLE)
     set(lrps2_library "${lrps2_build}/libretro${lrps2_config_folder}/pcsx2_libretro.dylib")
   else()
-    set(lrps2_library "${lrps2_build}/bin/pcsx2_libretro.so")
+    set(lrps2_library "${lrps2_build}/bin${lrps2_config_folder}/pcsx2_libretro.so")
   endif()
   set(lrps2_arguments -DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_VERSION_MINIMUM=3.18 -DC89_EMITTER=ON
       -DDISABLE_ADVANCE_SIMD=ON -DUSE_OPENGL=ON -DUSE_VULKAN=ON)
