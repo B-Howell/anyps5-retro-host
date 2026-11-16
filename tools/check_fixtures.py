@@ -143,6 +143,13 @@ def start_args(args, name=None):
     obj(args, 'start args')
     for field in ('core', 'disc', 'system', 'saves'):
         path(args.get(field), f'start.{field}')
+    ps2 = args.get('console', 'ps1') == 'ps2'
+    need(args.get('console', 'ps1') in ('ps1', 'ps2'), 'start.console must be "ps1" or "ps2"')
+    if ps2:
+        need('lockstep' not in args, 'start.lockstep is only for a PS1 game')
+        need('initialDisc' not in args, 'start.initialDisc is only for a PS1 game')
+        need(extension(args['disc'], '.iso', '.chd', '.cso', '.zso', '.cue', '.elf'),
+             'a PS2 game\'s start.disc is a .iso, .chd, .cso, .zso, .cue or .elf')
     if 'options' in args:
         for key, value in obj(args['options'], 'start.options').items():
             string(value, f'start.options.{key}')
@@ -152,7 +159,7 @@ def start_args(args, name=None):
     if 'initialDisc' in args:
         integer(args['initialDisc'], 0, 127, 'start.initialDisc')
         need(extension(args['disc'], '.m3u') or args['disc'] == '${playlist}', 'initialDisc needs an .m3u disc')
-    elif args['disc'] not in ('${disc}', '${playlist}', '${disc1}', '${disc2}'):
+    elif not ps2 and args['disc'] not in ('${disc}', '${playlist}', '${disc1}', '${disc2}'):
         need(extension(args['disc'], '.cue', '.chd', '.pbp', '.m3u'), 'start.disc is a .cue, .chd, .pbp or .m3u')
 
 
@@ -192,6 +199,8 @@ def status_result(value, name=None, report=False):
             string(text, f'status.core.{field}')
             need(len(text) <= 256 and all(' ' <= letter <= '~' for letter in text),
                  f'status.core.{field} is printable ASCII of at most 256 bytes')
+    if 'console' in value:
+        need(value['console'] in ('ps1', 'ps2'), 'status.console must be "ps1" or "ps2"')
     if value.get('timing') is not None:
         timing = obj(value['timing'], 'status.timing')
         need(is_number(timing.get('fps')) and 1 < timing['fps'] < 1000,

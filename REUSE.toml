@@ -17,3 +17,8 @@ SPDX-FileCopyrightText = "2026 AnyPS5 Desktop contributors"
 path = "cores/patches/swanstation-*.patch"
 SPDX-License-Identifier = "GPL-3.0-only"
 SPDX-FileCopyrightText = "2026 AnyPS5 Desktop contributors; SwanStation and DuckStation contributors"
+
+[[annotations]]
+path = "cores/patches/lrps2-*.patch"
+SPDX-License-Identifier = "GPL-3.0-only"
+SPDX-FileCopyrightText = "2026 AnyPS5 Desktop contributors; LRPS2 and PCSX2 contributors"

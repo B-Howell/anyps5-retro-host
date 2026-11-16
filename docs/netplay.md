@@ -11,7 +11,8 @@ tested. Lockstep and rollback are built: [protocol.md](protocol.md)
 [`tests/lockstep_test.py`](../tests/lockstep_test.py) runs two real SwanStation
 hosts frame for frame alike, and [`tests/rollback_test.py`](../tests/rollback_test.py)
 runs two players' hosts in rollback, with delayed input and wrong predictions,
-to the same frames as a host in lockstep.
+to the same frames as a host in lockstep. PS2 games have none of this yet;
+[ps2.md](ps2.md) "What stops PS2 online play" says why.
 
 ## What already exists
 

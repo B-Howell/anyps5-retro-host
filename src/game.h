@@ -44,7 +44,12 @@ struct LockstepConfig {
 // The most frames lockstep.rollback.frames allows (protocol.md "lockstep").
 constexpr unsigned kMaxRollbackFrames = 8;
 
+// The console a game is for (protocol.md "start", console): PS1 on SwanStation, or, with the
+// capability ps2, PS2 on LRPS2 (docs/ps2.md).
+enum class Console { kPs1, kPs2 };
+
 struct GameConfig {
+  Console console = Console::kPs1;
   std::string core;
   std::string disc;
   std::string system;
@@ -137,6 +142,7 @@ class Game {
   void Begin();
 
   Json Status() const;
+  Console console() const { return config_.console; }
   void Pause(bool paused);
   bool SetConnectedPorts(unsigned count);
   bool ChangeDisc(unsigned index);
@@ -323,6 +329,11 @@ class Game {
   // SwanStation could not open the disc and boots the BIOS with no disc instead.
   bool disc_missing_ = false;
   bool UsesBios() const;
+  // The libretro device a controller port with a controller in is given.
+  unsigned PadDevice() const;
+  // LRPS2 said it found no PS2 BIOS in its folder of the system directory (docs/ps2.md "The
+  // BIOS"). It may log from threads of its own.
+  std::atomic<bool> ps2_bios_missing_{false};
   std::string card_;
   struct DiscControl;
   std::unique_ptr<DiscControl> disc_control_;

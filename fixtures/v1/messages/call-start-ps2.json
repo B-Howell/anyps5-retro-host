@@ -1,0 +1,26 @@
+{
+  "description": "Start a PS2 game (capability ps2): its disc image, with the system directory LRPS2 finds its BIOS in, under pcsx2/bios.",
+  "from": "launcher",
+  "message": {
+    "type": "call",
+    "id": 2,
+    "method": "start",
+    "args": {
+      "console": "ps2",
+      "core": "${core}",
+      "disc": "/games/ps2/Homebrew.iso",
+      "system": "${system}",
+      "saves": "${saves}",
+      "options": {
+        "pcsx2_upscale_multiplier": "2x"
+      }
+    }
+  },
+  "reply": {
+    "type": "reply",
+    "id": 2,
+    "result": {
+      "epoch": 1
+    }
+  }
+}

@@ -15,8 +15,9 @@ online play: a game that runs one frame per input the launcher hands it, and
 can save and load its state, so two players' hosts stay frame for frame alike
 (see [Lockstep](#lockstep) and [netplay.md](netplay.md)). The `ps1Rollback`
 capability lets a game in lockstep run ahead on predicted input and run frames
-again when a prediction was wrong (see [Rollback](#rollback)). PS2 and PS3
-are later capabilities (see [Capabilities](#capabilities)).
+again when a prediction was wrong (see [Rollback](#rollback)). The `ps2`
+capability runs PS2 games on LRPS2 for local players, without lockstep
+([ps2.md](ps2.md)). PS3 is a later capability (see [Capabilities](#capabilities)).
 
 The words MUST, MUST NOT and SHOULD are used as in RFC 2119.
 
@@ -26,7 +27,8 @@ The words MUST, MUST NOT and SHOULD are used as in RFC 2119.
 | --- | --- |
 | This document, the fixtures and the fixture checker | MIT |
 | `anyps5-retro-host` | GPL-2.0-or-later |
-| SwanStation (the only core version 1 loads) | GPL-3.0, [libretro/swanstation](https://github.com/libretro/swanstation), with the host's patches in [`cores/patches`](../cores/patches) |
+| SwanStation (the PS1 core) | GPL-3.0, [libretro/swanstation](https://github.com/libretro/swanstation), with the host's patches in [`cores/patches`](../cores/patches) |
+| LRPS2 (the PS2 core, capability `ps2`) | GPL-3.0, [libretro/parallel-ps2](https://github.com/libretro/parallel-ps2), the `cores/lrps2` submodule, with the host's patches in [`cores/patches`](../cores/patches) ([ps2.md](ps2.md) "The core") |
 
 The launcher never links the host or a core, and shares no code with the
 host. A launcher MAY copy code from this document or the fixtures. Each host
@@ -449,8 +451,9 @@ a method whose capability the host did not list.
 | `coreIdentity` | `core` in [`status`](#status): the loaded core's name and build identity, which two players' launchers compare before a match |
 | `gameTiming` | `timing` in [`status`](#status): the frame rate the host paces the game to and the game's region, which a launcher's frame clock follows in [rollback](#rollback) |
 | `syncXxh3` | With `ps1Lockstep`: the hashes in [`sync`](#sync) are XXH3-64, not FNV-1a, and `lockstep.state` can leave the state out of them. Two players' launchers compare `sync` hashes only when both hosts list it or neither does, and a launcher refuses a match otherwise (see [sync](#sync)) |
+| `ps2` | PS2 games on LRPS2: `start.console` and `status.console`, with the methods below for local play ([ps2.md](ps2.md)). Lockstep and states are PS1 only: for a PS2 game `start.lockstep` is an `argument` error and `lockstep`, `saveState` and `loadState` return `false` |
 
-Later versions add capabilities such as PS2 and PS3.
+Later versions add capabilities such as PS3.
 
 ### call and reply
 
@@ -597,7 +600,8 @@ launcher does not have input focus, the launcher does not forward `rumble`.
 ## Methods
 
 All methods below have the `ps1` capability, except `lockstep`, `saveState`
-and `loadState`, which have `ps1Lockstep`. A call whose argument has the wrong
+and `loadState`, which have `ps1Lockstep`. With the `ps2` capability they also
+serve a PS2 game, except those three (see [Capabilities](#capabilities)). A call whose argument has the wrong
 type, or a value outside the range given below, is an `argument` error
 whether or not a game is loaded. With a valid argument and no game loaded,
 `status` returns `null`; `pause`, `stop` and `release` do nothing and return
@@ -605,7 +609,8 @@ whether or not a game is loaded. With a valid argument and no game loaded,
 
 ### start
 
-Loads and starts a PS1 game.
+Loads and starts a PS1 game, or with `console` `"ps2"` (capability `ps2`) a PS2
+game.
 
 ```json
 {"core":"C:\\Users\\p\\AppData\\Roaming\\AnyPS5\\retro-host\\swanstation_libretro.dll",
@@ -618,13 +623,21 @@ Loads and starts a PS1 game.
 
 | Field | Type | Meaning |
 | --- | --- | --- |
-| `core` | path | The SwanStation library the launcher checked |
-| `disc` | path | A `.cue`, `.chd`, `.pbp` or `.m3u` file |
-| `system` | path | The core's system directory (BIOS files) |
+| `console` | string, optional | Capability `ps2`: `"ps1"` (the default) or `"ps2"`, the console the game is for. A launcher sends it only to a host that lists `ps2` |
+| `core` | path | The SwanStation library the launcher checked, or for a PS2 game the LRPS2 library |
+| `disc` | path | A `.cue`, `.chd`, `.pbp` or `.m3u` file; for a PS2 game a `.iso`, `.chd`, `.cso`, `.zso`, `.cue` or `.elf` file |
+| `system` | path | The core's system directory (BIOS files). LRPS2 looks for a PS2 BIOS in its `pcsx2/bios` folder and keeps folders of its own beside it ([ps2.md](ps2.md) "The BIOS") |
 | `saves` | path | Where memory cards are kept; the host creates it if needed. Memory card 1 is the file `<disc's name without its extension>.srm` in it, as libretro frontends name it, and is checked for changes every 5 seconds between frames, also while paused, and written whenever the game ends. A card file the host cannot read is left as it is and never written over |
 | `options` | object of strings, optional | Core option values saved by the player, by key, including the internal resolution (`swanstation_GPU_ResolutionScale`). Unknown keys and values are ignored |
-| `initialDisc` | integer 0 to 127, optional | Only for an `.m3u`: the index of the playlist entry to insert at boot. With any other `disc` it is an `argument` error |
-| `lockstep` | object, optional | Capability `ps1Lockstep`: the game starts in [lockstep](#lockstep), as the `lockstep` method's argument says, and runs not even its first frame before a `step` |
+| `initialDisc` | integer 0 to 127, optional | Only for an `.m3u`: the index of the playlist entry to insert at boot. With any other `disc`, or for a PS2 game, it is an `argument` error |
+| `lockstep` | object, optional | Capability `ps1Lockstep`: the game starts in [lockstep](#lockstep), as the `lockstep` method's argument says, and runs not even its first frame before a `step`. For a PS2 game it is an `argument` error |
+
+For a PS2 game, memory card 1 is `<disc's name without its extension>.ps2` in
+`saves`, which LRPS2 reads and writes itself (and creates, formatted, when it is
+missing); there is no card 2. The host gives LRPS2 its own values for
+`pcsx2_shared_memory_cards` (`disabled`), `pcsx2_renderer` (`Auto`) and
+`pcsx2_multitap` (`disabled`), whatever `options` says, and does not list them
+in `status` ([ps2.md](ps2.md) "What the protocol gains").
 
 The result is `{"epoch":<integer>}`. The epoch identifies this game's frames
 in the ring (see [Frame ring](#frame-ring)). It is 1 for the host's first
@@ -646,7 +659,8 @@ Errors:
 The host replies before it opens the core or the disc, so a reply always comes
 within the time limit. A core that cannot be loaded, or that is not a libretro
 version 1 core, ends the game with `errorCode` `core`; a disc file that cannot
-be opened ends it with `errorCode` `disc`.
+be opened ends it with `errorCode` `disc`. A PS2 game that LRPS2 does not
+load ends with `errorCode` `bios` when it found no BIOS, and `core` otherwise.
 
 ### status
 
@@ -675,6 +689,7 @@ No argument. Returns `null` when no game is loaded, or:
 | `progressLabel` | string or null | What is loading right now, while there is something to show |
 | `progressPercent` | integer 0 to 100, or null | How far it is, when known |
 | `options` | object | Each core option the player can change now, by key |
+| `console` | string | Capability `ps2`: the console the game was started as, `"ps1"` or `"ps2"` |
 | `core` | object or null | Capability `coreIdentity`: the core the game loaded, or `null` until it is loaded and when it could not be (`errorCode` `core`). It stays once the game has ended. See below |
 | `timing` | object or null | Capability `gameTiming`: the game's frame rate and region, or `null` until the core has loaded the game and when it did not (a game that ended with `bios`, `disc` or `core` before its first frame). It stays once the game has ended. See below |
 | `discs` | object, optional | Present for multi-disc games |
@@ -682,7 +697,7 @@ No argument. Returns `null` when no game is loaded, or:
 | `errorCode` | Meaning |
 | --- | --- |
 | `""` | The game has not ended, or ended without an error (it was stopped) |
-| `bios` | No BIOS was found in `system`, the way the core looks for one. A file the core takes as a BIOS but that is damaged shows as `didNotStart` instead |
+| `bios` | No BIOS was found in `system`, the way the core looks for one. A file the core takes as a BIOS but that is damaged shows as `didNotStart` instead, or for a PS2 game as `core` |
 | `disc` | The disc, or a file it names, could not be read |
 | `core` | The core could not be loaded, or failed while loading or running the game |
 | `stalled` | The game stopped producing frames (see [Timeouts](#timeouts)) |
@@ -693,8 +708,8 @@ No argument. Returns `null` when no game is loaded, or:
 | `hostHung` | Only the launcher's client reports it: the host missed one of the launcher's time limits and the launcher closed it (see [Host failure](#host-failure)) |
 
 The host always sends every field above (`discs` only for a multi-disc
-game, `core` only with the `coreIdentity` capability, `timing` only with
-`gameTiming`), including for a game
+game, `console` only with the `ps2` capability, `core` only with the
+`coreIdentity` capability, `timing` only with `gameTiming`), including for a game
 that ended before its first frame. The shorter
 form in [Host failure](#host-failure) is never sent by a host; only the
 launcher's client reports it.
@@ -706,7 +721,9 @@ otherwise. The host's SwanStation builds report `SwanStation` and
 `anyps5-1-<64 lowercase hex digits>`, the core build identity
 [netplay.md](netplay.md) "Core build identity" defines: the same on Windows,
 Linux and macOS for a core built from the same SwanStation commit, with the
-same patches and emulation build options. A Debug build reports another
+same patches and emulation build options. The host's LRPS2 reports
+`ParaLLEl PS2` and an identity of the same form, from the `cores/lrps2`
+commit and the host's LRPS2 patches ([ps2.md](ps2.md) "The core"). A Debug build reports another
 `name` (`SwanStation Debug`), and a core built without the host's patch
 script keeps SwanStation's own `version` (`1.0.0 ` and a git description).
 Before a match each launcher compares both strings with its friend's, and
@@ -865,15 +882,16 @@ Argument: `{"check":<integer 1 to 3600>,"paced":<boolean, optional>,
   between two frames: the host waits for the frame being run to end before it
   replies. Returns `{"frame":<integer>}`, the frame the next `step` is for,
   which is 0 when the game has just entered lockstep. Returns `false` when the
-  game has ended, when the frame being run did not end within 4 seconds, or
-  when the call would turn rollback on or off, or change its `frames`, while
-  a frame is not confirmed.
+  game has ended, when the frame being run did not end within 4 seconds, when
+  the call would turn rollback on or off, or change its `frames`, while
+  a frame is not confirmed, or for a PS2 game.
 - With `false`, the game leaves lockstep and drops the steps it has not run,
   and in rollback the corrections it has not taken: frames it ran on
   predicted input stay as they ran. It then runs on its own, with the input of the last `input` messages, and
   with as many connected ports as the last step it ran had. It too takes
   effect between two frames. Returns `true`, or `false` when the game has
-  ended or the frame being run did not end within 4 seconds.
+  ended, the frame being run did not end within 4 seconds, or the game is a
+  PS2 game.
 
 `start.lockstep` takes the same object.
 

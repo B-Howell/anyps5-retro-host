@@ -4,7 +4,9 @@
 # How the host is put together
 
 The host implements [protocol version 1](protocol.md) with the `ps1`,
-`ps1Lockstep`, `ps1Rollback`, `coreIdentity` and `gameTiming` capabilities. It is a small C++17 program with three threads:
+`ps1Lockstep`, `ps1Rollback`, `coreIdentity`, `gameTiming`, `syncXxh3` and
+`ps2` capabilities: PS1 games on SwanStation, and PS2 games on LRPS2
+([ps2.md](ps2.md)). It is a small C++17 program with three threads:
 
 | Thread | Does |
 | --- | --- |
@@ -22,9 +24,10 @@ through kqueue. On Windows a thread waits on the launcher's process handle.
 | --- | --- |
 | [`src/main.cpp`](../src/main.cpp) | The command line, the process setup, then the host |
 | [`src/host.cpp`](../src/host.cpp) | The protocol: `hello`, the order rules, every method's argument checks and replies, and the limits |
-| [`src/game.cpp`](../src/game.cpp) | One loaded game: the libretro callbacks, core options, disc control, the memory card, input, rumble, pixel conversion, and lockstep: the queue of steps, the `sync` hashes, the state files of `saveState` and `loadState`, and the 8 in-memory states, each a buffer kept for the game and reused, so a save allocates nothing after the first; and rollback (see "Rollback" below) |
+| [`src/game.cpp`](../src/game.cpp) | One loaded game: the libretro callbacks, core options (the SwanStation options the host fixes, and for a PS2 game the LRPS2 options it sets itself, `kPs2ForcedOptions`), the missing BIOS as each core logs it, the controller device each core takes, disc control, the memory card, input, rumble, pixel conversion, and lockstep: the queue of steps, the `sync` hashes, the state files of `saveState` and `loadState`, and the 8 in-memory states, each a buffer kept for the game and reused, so a save allocates nothing after the first; and rollback (see "Rollback" below) |
 | [`src/hash.h`](../src/hash.h), [`src/hash.cpp`](../src/hash.cpp) | The `sync` hashes (capability `syncXxh3`): XXH3-64 from the [xxHash](https://github.com/Cyan4973/xxHash) submodule (`3rdparty/xxHash`, 0.8.3, built in with `XXH_INLINE_ALL`) over main RAM, over a picture's RGB bytes taken a few thousand pixels at a time from either ring order, and over a state up to its last non-zero byte seeded with the buffer's size; and the used length of a state buffer, found from its end 64 bytes at a time |
 | [`cores/patches`](../cores/patches), [`cores/apply-swanstation-patches.sh`](../cores/apply-swanstation-patches.sh) | The host's SwanStation patches and the script the workflows apply them with (see "SwanStation patches" below) |
+| `cores/lrps2`, [`cores/prepare-lrps2.cmake`](../cores/prepare-lrps2.cmake) | LRPS2, the PS2 core, as a submodule, and the script that makes the patched copy the host's CMake builds with `-DANYPS5_RETRO_HOST_LRPS2=ON` ([ps2.md](ps2.md) "The core") |
 | [`src/resolution.cpp`](../src/resolution.cpp) | Which internal resolutions a GPU game is offered (see "Resolution limits" below) |
 | [`src/ring.cpp`](../src/ring.cpp) | The frame ring writer: the header from protocol.md's byte table, slot choice, and capped doubling when a frame needs more room |
 | [`src/json.cpp`](../src/json.cpp) | A strict JSON reader (duplicate keys, lone surrogates, invalid UTF-8 and non-finite numbers are errors) and writer |
@@ -33,7 +36,7 @@ through kqueue. On Windows a thread waits on the launcher's process handle.
 | [`src/platform_posix.cpp`](../src/platform_posix.cpp), [`src/platform_windows.cpp`](../src/platform_windows.cpp) | The control stream, process setup, watching the launcher, shared memory, loading the core and files |
 | [`src/audio.cpp`](../src/audio.cpp) | Sound output through miniaudio, with the volume, mute and pause |
 | [`tools/package_release.py`](../tools/package_release.py) | Packs, lists and checks a release (see "Releases" below) |
-| [`tools/core_identity.py`](../tools/core_identity.py) | Computes the core build identity from the SwanStation commit and `cores/patches` without a build, and compares what each system's core reported ([netplay.md](netplay.md) "Core build identity") |
+| [`tools/core_identity.py`](../tools/core_identity.py) | Computes the core build identity from the SwanStation commit (`--swanstation-commit`) or the `cores/lrps2` commit (`--lrps2-commit`) and `cores/patches` without a build, and compares what each system's core reported ([netplay.md](netplay.md) "Core build identity") |
 
 ## Rollback
 
@@ -262,7 +265,14 @@ network left to the launcher.
   game changes its video mode. With a `fake-count-netplay` file, each
   serialization in the netplay context adds a byte to
   `fake-netplay-serialized`, so `rollback_test.py` can see that a check with
-  `lockstep.state` `false` serializes nothing.
+  `lockstep.state` `false` serializes nothing. With a `fake-ps2` file it also
+  offers LRPS2's `pcsx2_shared_memory_cards`, `pcsx2_renderer` and
+  `pcsx2_multitap` options and writes each controller port's device to
+  `fake-ps2-ports.txt`; a `.iso` or `.elf` disc is then a PS2 game, which,
+  as LRPS2 does, fails to load after logging LRPS2's missing-BIOS message
+  unless `pcsx2/bios/fake-ps2-bios.bin` is there, fails without it while
+  `fake-ps2-fail` is there, and otherwise writes the values it read for those
+  options to `fake-ps2-options.txt`.
 - [`tests/host_test.py`](../tests/host_test.py) covers what the fixtures do
   not: a stuck core (the stall limit, then `release` replying and the host
   exiting), a core that is not a library and a missing disc (each ending the
@@ -277,7 +287,16 @@ network left to the launcher.
   that rate by more than 5%; known before the first step of a PAL game
   started in lockstep, whose 100 paced steps must take 99 frames of 20 ms;
   and `null` for a core that did not load), and eight games in a row with
-  `volume`, `pause` and `stop` calls in between, and the resolution limits
+  `volume`, `pause` and `stop` calls in between, a PS2 game (`ps2_game`:
+  `start` refuses an unknown `console`, a PS1 disc, a playlist,
+  `initialDisc` and `lockstep` for it, and a PS2 disc for PS1; a missing BIOS
+  ends it with `bios` and `No PS2 BIOS was found.`, `console` `ps2`, the core
+  and a `null` timing; another failed load with `core`; a running one lists
+  `console` `ps2` and none of the LRPS2 options the host sets, gives the core
+  `disabled`, `Auto` and `disabled` for them although `start.options` asked
+  for others, sets each port with a controller to `RETRO_DEVICE_JOYPAD`, and
+  answers `lockstep` and `saveState` with `false`; a PS1 game then gets
+  `console` `ps1` and the analog controller), and the resolution limits
   (`gpu_limits`): the fake core started at 16x must start at 8x, offer 1x to
   8x, explain itself in `resolutionError`, draw 5120-wide frames, refuse 16x
   through `option`, take 2x and clear `resolutionError`; then, with 2x chosen
@@ -431,6 +450,20 @@ network left to the launcher.
   OpenGL context in the same host. The test then checks a clean `stop` and
   exit, and keeps the last picture (`--picture`) as a workflow artifact. No
   Sony BIOS or game is used.
+- [`tests/ps2_core.py`](../tests/ps2_core.py) runs the real LRPS2 through
+  the host as a PS2 game with no BIOS, since there is no free one and LRPS2
+  boots nothing without one ([ps2.md](ps2.md) "The BIOS"): `welcome` must
+  list `ps2` and `coreIdentity`; a system directory with no `pcsx2` folder,
+  then one whose `pcsx2/bios` holds a 4 MiB file that is not a BIOS, must
+  each end the game before a first frame with `errorCode` `bios`, `error`
+  `No PS2 BIOS was found.`, `console` `ps2`, `hardware` `false`, `timing`
+  `null` and `status.core` named `ParaLLEl PS2`; the core must load again
+  for a third game; and the host must exit with 0. The game is a looping
+  ELF the test writes. With `--expect-core-version` the version must be the
+  identity `core_identity.py --lrps2-commit` computes, and
+  `--core-identity-out` writes it for `real-core.yml`'s `same-ps2-core` job,
+  which compares Windows and both Linux runners. The workflow's `ps2` jobs
+  build LRPS2 with the host (`-DANYPS5_RETRO_HOST_LRPS2=ON`) on those three.
 - CI runs everything on Linux (Ubuntu 22.04, the oldest the launcher
   supports, and 24.04), macOS (arm64) and Windows, and the Linux tests again
   under ThreadSanitizer (on 24.04). GCC 11's ThreadSanitizer reports a false
@@ -513,7 +546,8 @@ release can be packed and checked by hand the same way.
   change the workflow or the packer run it too, and `workflow_dispatch` runs it
   by hand.
 - **Source.** The `source` job packs the host and SwanStation at the released
-  commits, with all their submodules, the host's SwanStation patches applied,
+  commits, with all their submodules but `cores/lrps2` (the zips hold no PS2
+  core yet, [ps2.md](ps2.md) "Releases"), the host's SwanStation patches applied,
   and without `.git`, into
   `anyps5-retro-host-<version>-source.tar.gz` (sorted, with fixed times and
   owners). It is the complete corresponding source the GPL asks for, and is

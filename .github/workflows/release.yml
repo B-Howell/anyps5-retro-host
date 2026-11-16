@@ -200,7 +200,8 @@ jobs:
 
   # The complete corresponding source of what the zips hold (GPL-2.0 and GPL-3.0): the host and
   # SwanStation at the released commits, with their submodules and the host's SwanStation patches
-  # applied, published beside the zips.
+  # applied, published beside the zips. The zips hold no PS2 core yet (docs/ps2.md "Releases"), so
+  # the LRPS2 submodule is left out until they do.
   source:
     needs: version
     runs-on: ubuntu-24.04
@@ -225,7 +226,7 @@ jobs:
           curl -fsSL "$APACHE_URL" -o "$stem/swanstation-vulkan-headers-Apache-2.0.txt"
           echo "$APACHE_SHA256  $stem/swanstation-vulkan-headers-Apache-2.0.txt" | sha256sum -c -
           mv host swanstation "$stem/"
-          tar --exclude=.git --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -cf - "$stem"             | gzip -9n > "release/$stem.tar.gz"
+          tar --exclude=.git --exclude="$stem/host/cores/lrps2" --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -cf - "$stem"             | gzip -9n > "release/$stem.tar.gz"
       - uses: actions/upload-artifact@v4
         with:
           name: release-source

@@ -2,7 +2,8 @@
 # SPDX-FileCopyrightText: 2026 AnyPS5 Desktop contributors
 
 """Host behaviour the fixtures do not cover: a stuck core, many start, volume and stop calls
-in a row, the internal resolutions a GPU game is offered, and the frame rate a game is paced to."""
+in a row, the internal resolutions a GPU game is offered, the frame rate a game is paced to, and a
+PS2 game (capability ps2, docs/ps2.md) as the host runs LRPS2."""
 
 import argparse
 import shutil
@@ -50,6 +51,14 @@ class Session:
         if 'error' in reply:
             raise c.Failed(f'{method} failed: {reply["error"]}')
         return reply['result']
+
+    def error(self, method, args=None):
+        """The error code of a call that must fail."""
+        ident = self.send(method, args)
+        reply = self.read(lambda m: m.get('type') == 'reply' and m.get('id') == ident, 6)
+        if 'error' not in reply:
+            raise c.Failed(f'{method} {args} did not fail: {reply}')
+        return reply['error']['code']
 
     def start(self, options=None, lockstep=None):
         args = {'core': self.paths['core'], 'disc': self.paths['disc'], 'system': self.paths['system'],
@@ -380,6 +389,86 @@ def many_games(program, core, log):
         session.close()
 
 
+def ps2_game(program, core, log):
+    """A PS2 game (protocol.md "start", console): the host takes only PS2 discs for it, reports the
+    console, a missing BIOS as errorCode bios the way LRPS2 says it found none, and any other failed
+    load as core; it gives the core LRPS2's DualShock 2 and its own memory card, renderer and
+    multitap values whatever the launcher asks, keeps them out of status, and keeps a PS2 game out
+    of lockstep and states."""
+    session = Session(program, core, log)
+    try:
+        work = session.work
+        system = Path(session.paths['system'])
+        (system / 'fake-ps2').write_bytes(b'')
+        iso = work / 'discs' / 'game.iso'
+        iso.write_bytes(b'\0' * 2048)
+        ps2 = {'console': 'ps2', 'core': session.paths['core'], 'disc': str(iso), 'system': str(system),
+               'saves': session.paths['saves']}
+        asked = {'pcsx2_shared_memory_cards': 'enabled', 'pcsx2_renderer': 'Vulkan', 'pcsx2_multitap': 'port 1'}
+
+        refused = [dict(ps2, console='ps3'), dict(ps2, console=2), dict(ps2, disc=str(work / 'discs' / 'game.pbp')),
+                   dict(ps2, disc=session.paths['playlist']), dict(ps2, lockstep={'check': 1}),
+                   dict(ps2, disc=session.paths['playlist'], initialDisc=0), dict(ps2, console='ps1', disc=str(iso))]
+        for args in refused:
+            if session.error('start', args) != 'argument':
+                raise c.Failed(f'start {args} was not an argument error')
+
+        def ended(args):
+            session.call('start', args)
+            status = session.wait(lambda s: s and s['ended'], 10)
+            session.call('release')
+            return status
+
+        status = ended(dict(ps2, options=asked))
+        if (status['errorCode'] != 'bios' or status['error'] != 'No PS2 BIOS was found.' or status['ready'] or
+                status.get('console') != 'ps2' or status.get('core') != {'name': 'fake', 'version': '1'} or
+                status.get('timing', 'missing') is not None):
+            raise c.Failed(f'a PS2 game with no BIOS gave {status}')
+        (system / 'fake-ps2-fail').write_bytes(b'')
+        status = ended(ps2)
+        if status['errorCode'] != 'core' or status.get('console') != 'ps2':
+            raise c.Failed(f'a PS2 game the core could not load gave {status}')
+        (system / 'fake-ps2-fail').unlink()
+
+        (system / 'pcsx2' / 'bios').mkdir(parents=True)
+        (system / 'pcsx2' / 'bios' / 'fake-ps2-bios.bin').write_bytes(b'')
+        ports = system / 'fake-ps2-ports.txt'
+        if ports.exists():
+            ports.unlink()
+        session.call('start', dict(ps2, options=asked))
+        status = session.wait(lambda s: s and s['ready'], 10)
+        if status.get('console') != 'ps2' or set(asked) & set(status['options']):
+            raise c.Failed(f'a running PS2 game gave {status}')
+        given = (system / 'fake-ps2-options.txt').read_text(encoding='utf-8').split()
+        if given != ['pcsx2_shared_memory_cards=disabled', 'pcsx2_renderer=Auto', 'pcsx2_multitap=disabled']:
+            raise c.Failed(f'the core was given {given}')
+        if session.call('connectedPorts', 2) is not True:
+            raise c.Failed('a PS2 game did not take a second controller')
+        session.wait(lambda s: ports.exists() and '1 1' in ports.read_text(encoding='utf-8').splitlines(), 5)
+        devices = ports.read_text(encoding='utf-8').splitlines()
+        if devices[0] != '0 1' or '1 0' not in devices:
+            raise c.Failed(f'the PS2 controller ports were set to {devices}, not the DualShock 2 (1)')
+        if session.call('lockstep', {'check': 1}) is not False or session.call('lockstep', False) is not False:
+            raise c.Failed('a PS2 game went into lockstep')
+        if session.call('saveState', {'slot': 0}) is not False:
+            raise c.Failed('a PS2 game saved a lockstep state')
+        session.call('stop')
+        session.wait(lambda s: s['ended'], 5)
+        session.call('release')
+
+        ports.unlink()
+        session.call('start', {'console': 'ps1', 'core': session.paths['core'], 'disc': session.paths['disc'],
+                               'system': str(system), 'saves': session.paths['saves']})
+        status = session.wait(lambda s: s and s['ready'], 10)
+        if status.get('console') != 'ps1' or ports.read_text(encoding='utf-8').splitlines()[0] != '0 261':
+            raise c.Failed(f'a PS1 game gave {status} and ports {ports.read_text(encoding="utf-8")!r}')
+        session.call('stop')
+        session.wait(lambda s: s['ended'], 5)
+        session.call('release')
+    finally:
+        session.close()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--host', required=True, type=Path)
@@ -393,7 +482,7 @@ def main():
     failures = 0
     tests = {'stuck_core': stuck_core, 'unloadable': unloadable, 'core_identity': core_identity,
              'game_timing': game_timing, 'restart_option': restart_option,
-             'many_games': many_games,
+             'many_games': many_games, 'ps2_game': ps2_game,
              'gpu_limits': lambda program, core, log: gpu_limits(program, core, log, options.require_gpu)}
     chosen = [(name, test) for name, test in tests.items() if not options.names or name in options.names]
     for name, test in chosen:

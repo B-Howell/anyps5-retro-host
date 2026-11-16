@@ -189,7 +189,8 @@ Host::Outcome Host::Hello(const Json& message) {
                        {"version", 1},
                        {"pid", ProcessId()},
                        {"hostVersion", ANYPS5_RETRO_HOST_VERSION},
-                       {"capabilities", JsonArray{"ps1", "ps1Lockstep", "ps1Rollback", "coreIdentity", "gameTiming", "syncXxh3"}},
+                       {"capabilities",
+                        JsonArray{"ps1", "ps1Lockstep", "ps1Rollback", "coreIdentity", "gameTiming", "syncXxh3", "ps2"}},
                        {"pixelFormat", format_name}}));
   return Outcome::kContinue;
 }
@@ -311,9 +312,10 @@ Host::Reply Host::Dispatch(const std::string& method, const Json& args) {
     return Result(Json(nullptr));
   }
   if (method == "lockstep") {
-    if (args.IsBool() && !args.AsBool()) return Result(Json(game ? game->LeaveLockstep() : false));
+    const bool ps1 = game && game->console() == Console::kPs1;
+    if (args.IsBool() && !args.AsBool()) return Result(Json(ps1 ? game->LeaveLockstep() : false));
     const LockstepConfig config = NeedLockstep(args, "lockstep");
-    const auto frame = game ? game->Lockstep(config) : std::nullopt;
+    const auto frame = ps1 ? game->Lockstep(config) : std::nullopt;
     return Result(frame ? Json(JsonObject{{"frame", *frame}}) : Json(false));
   }
   if (method == "saveState" || method == "loadState") return State(method == "saveState", args);
@@ -348,14 +350,27 @@ Host::Reply Host::Dispatch(const std::string& method, const Json& args) {
 Host::Reply Host::Start(const Json& args) {
   Need(args.IsObject(), "start takes an object.");
   GameConfig config;
+  if (const Json* console = args.Find("console")) {
+    Need(console->IsString() && (console->AsString() == "ps1" || console->AsString() == "ps2"),
+         "start.console must be \"ps1\" or \"ps2\".");
+    if (console->AsString() == "ps2") config.console = Console::kPs2;
+  }
   config.core = NeedPath(args, "core");
   config.disc = NeedPath(args, "disc");
   config.system = NeedPath(args, "system");
   config.saves = NeedPath(args, "saves");
-  const bool playlist = HasExtension(config.disc, ".m3u");
-  Need(playlist || HasExtension(config.disc, ".cue") || HasExtension(config.disc, ".chd") ||
-           HasExtension(config.disc, ".pbp"),
-       "start.disc must be a .cue, .chd, .pbp or .m3u file.");
+  const bool ps2 = config.console == Console::kPs2;
+  const bool playlist = !ps2 && HasExtension(config.disc, ".m3u");
+  if (ps2) {
+    Need(HasExtension(config.disc, ".iso") || HasExtension(config.disc, ".chd") ||
+             HasExtension(config.disc, ".cso") || HasExtension(config.disc, ".zso") ||
+             HasExtension(config.disc, ".cue") || HasExtension(config.disc, ".elf"),
+         "start.disc must be a .iso, .chd, .cso, .zso, .cue or .elf file for a PS2 game.");
+  } else {
+    Need(playlist || HasExtension(config.disc, ".cue") || HasExtension(config.disc, ".chd") ||
+             HasExtension(config.disc, ".pbp"),
+         "start.disc must be a .cue, .chd, .pbp or .m3u file.");
+  }
   if (const Json* options = args.Find("options")) {
     Need(options->IsObject(), "start.options must be an object of strings.");
     for (const auto& [key, value] : options->AsObject()) {
@@ -369,7 +384,10 @@ Host::Reply Host::Start(const Json& args) {
     Need(playlist, "initialDisc needs an .m3u disc.");
     config.initial_disc = static_cast<unsigned>(*index);
   }
-  if (const Json* lockstep = args.Find("lockstep")) config.lockstep = NeedLockstep(*lockstep, "start.lockstep");
+  if (const Json* lockstep = args.Find("lockstep")) {
+    Need(!ps2, "start.lockstep is only for a PS1 game.");
+    config.lockstep = NeedLockstep(*lockstep, "start.lockstep");
+  }
   if (CurrentGame()) return Failure("busy", "A game is already loaded.");
   if (games_started_ >= kMaxId) return Failure("start", "This host has started its last game.");
   config.epoch = games_started_ + 1;
@@ -401,7 +419,7 @@ Host::Reply Host::State(bool save, const Json& args) {
     target.path = NeedPath(args, "path", method);
   }
   const auto game = CurrentGame();
-  if (!game) return Result(Json(false));
+  if (!game || game->console() != Console::kPs1) return Result(Json(false));
   return Result(StateJson(save ? game->SaveState(target, kStateLimitMs) : game->LoadState(target, kStateLimitMs)));
 }
 

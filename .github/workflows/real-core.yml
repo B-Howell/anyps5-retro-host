@@ -6,7 +6,8 @@
 # here from pcsx-redux's nugget (MIT): OpenBIOS and the psyqo "hello" example; the pad, vram and disc
 # programs come from tests/make_test_disc.py. No Sony BIOS or game is used. Each system's core must report the
 # core build identity tools/core_identity.py computes, and the same-core job checks that every
-# system reports the same one (docs/netplay.md "Core build identity").
+# system reports the same one (docs/netplay.md "Core build identity"). The ps2 jobs build LRPS2, the
+# PS2 core, with the host and check what the host reports for it without a BIOS (docs/ps2.md).
 name: real-core
 on: [push, pull_request]
 permissions:
@@ -166,3 +167,72 @@ jobs:
         run: |
           test "$(ls identities/*.json | wc -l)" -eq 4
           python3 tools/core_identity.py --same identities/*.json --swanstation-commit "$SWANSTATION_COMMIT"
+
+  # LRPS2, the PS2 core (docs/ps2.md), built from the cores/lrps2 submodule by the host's own CMake
+  # (ANYPS5_RETRO_HOST_LRPS2) on Windows and Linux. There is no freely licensed PS2 BIOS and LRPS2
+  # boots nothing without one, so tests/ps2_core.py checks that the host loads it, reports its core
+  # build identity, and reports the missing BIOS. same-ps2-core checks that every system's build
+  # reports the identity tools/core_identity.py computes from the submodule's commit.
+  ps2:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            host: build/anyps5-retro-host
+            core: build/cores/pcsx2_libretro.so
+            python: python3
+            configure: -G Ninja
+          - os: ubuntu-24.04
+            host: build/anyps5-retro-host
+            core: build/cores/pcsx2_libretro.so
+            python: python3
+            configure: -G Ninja
+          - os: windows-2022
+            host: build/Release/anyps5-retro-host.exe
+            core: build/cores/pcsx2_libretro.dll
+            python: python
+            configure: ''
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          persist-credentials: false
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ninja-build
+      - name: Build the host and LRPS2
+        run: |
+          cmake -S . -B build ${{ matrix.configure }} -DCMAKE_BUILD_TYPE=Release -DANYPS5_RETRO_HOST_LRPS2=ON
+          cmake --build build --config Release --parallel 4
+      - name: LRPS2 through the host with no BIOS, which must report its core build identity
+        run: |
+          identity="$(${{ matrix.python }} tools/core_identity.py --lrps2-commit "$(git rev-parse HEAD:cores/lrps2)")"
+          ${{ matrix.python }} tests/ps2_core.py --host ${{ matrix.host }} --core ${{ matrix.core }} --log build/ps2-core.log --expect-core-version "$identity" --core-identity-out "build/ps2-core-identity-${{ matrix.os }}.json"
+      - if: failure()
+        run: tail -200 build/ps2-core.log || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ps2-core-identity-${{ matrix.os }}
+          path: build/ps2-core-identity-${{ matrix.os }}.json
+          if-no-files-found: error
+
+  same-ps2-core:
+    needs: ps2
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: ps2-core-identity-*
+          path: identities
+          merge-multiple: true
+      - name: Windows and Linux builds of LRPS2 report the same core build identity
+        run: |
+          test "$(ls identities/*.json | wc -l)" -eq 3
+          python3 tools/core_identity.py --same identities/*.json --lrps2-commit "$(git rev-parse HEAD:cores/lrps2)"

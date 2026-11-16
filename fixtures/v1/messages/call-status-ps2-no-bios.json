@@ -1,0 +1,32 @@
+{
+  "description": "Status of a PS2 game whose system directory holds no BIOS LRPS2 takes: it ended before its first frame, with the core loaded.",
+  "from": "launcher",
+  "message": {
+    "type": "call",
+    "id": 3,
+    "method": "status"
+  },
+  "reply": {
+    "type": "reply",
+    "id": 3,
+    "result": {
+      "ready": false,
+      "ended": true,
+      "error": "No PS2 BIOS was found.",
+      "errorCode": "bios",
+      "aspect": 1.3333333333333333,
+      "hardware": false,
+      "resolutionError": "",
+      "graphicsPending": false,
+      "progressLabel": null,
+      "progressPercent": null,
+      "options": {},
+      "console": "ps2",
+      "core": {
+        "name": "ParaLLEl PS2",
+        "version": "anyps5-1-0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "timing": null
+    }
+  }
+}

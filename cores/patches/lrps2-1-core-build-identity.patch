@@ -1,0 +1,85 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index cdaa5b0c6..e5042222a 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -58,6 +58,32 @@ include(GNUInstallDirs)
+ include(BuildParameters)
+ include(SearchForStuff)
+ 
++# AnyPS5 core build identity (anyps5-retro-host docs/netplay.md "Core build identity", docs/ps2.md).
++# The host's cores/prepare-lrps2.cmake writes anyps5-core-source.txt beside this file: the LRPS2
++# commit and the SHA-256 of each patch it applied, in order. The build options that change what
++# the core computes or which renderers it has are added to it here, and library_version becomes
++# anyps5-1-<SHA-256 of the whole>, the same for the same emulation on every system. Without that
++# file the core keeps LRPS2's own library_version.
++set(ANYPS5_CORE_IDENTITY "")
++set(ANYPS5_CORE_SOURCE "${CMAKE_SOURCE_DIR}/anyps5-core-source.txt")
++if(EXISTS "${ANYPS5_CORE_SOURCE}")
++	set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${ANYPS5_CORE_SOURCE}")
++	file(READ "${ANYPS5_CORE_SOURCE}" ANYPS5_CORE_MANIFEST)
++	foreach(ANYPS5_OPTION C89_EMITTER DISABLE_ADVANCE_SIMD USE_OPENGL USE_VULKAN)
++		if(${ANYPS5_OPTION})
++			string(APPEND ANYPS5_CORE_MANIFEST "option ${ANYPS5_OPTION}=ON\n")
++		else()
++			string(APPEND ANYPS5_CORE_MANIFEST "option ${ANYPS5_OPTION}=OFF\n")
++		endif()
++	endforeach()
++	file(WRITE "${CMAKE_BINARY_DIR}/anyps5-core-manifest.txt" "${ANYPS5_CORE_MANIFEST}")
++	string(SHA256 ANYPS5_CORE_DIGEST "${ANYPS5_CORE_MANIFEST}")
++	set(ANYPS5_CORE_IDENTITY "anyps5-1-${ANYPS5_CORE_DIGEST}")
++	message("AnyPS5 core build identity: ${ANYPS5_CORE_IDENTITY}")
++endif()
++configure_file("${CMAKE_SOURCE_DIR}/libretro/anyps5_core_identity.h.in"
++               "${CMAKE_BINARY_DIR}/anyps5/anyps5_core_identity.h" @ONLY)
++
+ # make common
+ add_subdirectory(common)
+ 
+diff --git a/libretro/CMakeLists.txt b/libretro/CMakeLists.txt
+index fc2a20f56..3adbeee11 100644
+--- a/libretro/CMakeLists.txt
++++ b/libretro/CMakeLists.txt
+@@ -124,6 +124,7 @@ target_include_directories(common INTERFACE
+ )
+ 
+ target_include_directories(pcsx2_libretro PRIVATE
++	"${CMAKE_BINARY_DIR}/anyps5"
+ 	"${CMAKE_SOURCE_DIR}"
+ 	"${CMAKE_SOURCE_DIR}/libretro/libretro-common/include"
+ 	"${CMAKE_SOURCE_DIR}/common/include"
+diff --git a/libretro/anyps5_core_identity.h.in b/libretro/anyps5_core_identity.h.in
+new file mode 100644
+index 000000000..db1e1695d
+--- /dev/null
++++ b/libretro/anyps5_core_identity.h.in
+@@ -0,0 +1,6 @@
++#ifndef ANYPS5_CORE_IDENTITY_H
++#define ANYPS5_CORE_IDENTITY_H
++
++#define ANYPS5_CORE_IDENTITY "@ANYPS5_CORE_IDENTITY@"
++
++#endif
+diff --git a/libretro/main.c b/libretro/main.c
+index e8077df5c..59a55d151 100644
+--- a/libretro/main.c
++++ b/libretro/main.c
+@@ -48,6 +48,7 @@
+ #include "../pcsx2/VUmicro.h"
+ #include "../pcsx2/vtlb.h"
+ #include "../pcsx2/Host.h"
++#include "anyps5_core_identity.h"
+ 
+ #include "HostFS.h"
+ 
+@@ -1838,7 +1839,10 @@ void retro_get_system_info(struct retro_system_info* info)
+ #endif
+ 	memset(info, 0, sizeof(*info));
+ 	/* the version is checked by retroachievements, it should be semver */
+-	info->library_version  = "v2.0.0-" GIT_VERSION;
++	if (ANYPS5_CORE_IDENTITY[0] != '\0')
++		info->library_version = ANYPS5_CORE_IDENTITY;
++	else
++		info->library_version = "v2.0.0-" GIT_VERSION;
+ 	info->library_name     = "ParaLLEl PS2";
+ 	info->valid_extensions = "elf|iso|ciso|cue|gz|chd|cso|zso|m3u|py1|py2";
+ 	info->need_fullpath    = true;

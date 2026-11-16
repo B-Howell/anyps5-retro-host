@@ -34,7 +34,8 @@
           "ps1Rollback",
           "coreIdentity",
           "gameTiming",
-          "syncXxh3"
+          "syncXxh3",
+          "ps2"
         ],
         "pixelFormat": "rgba8"
       },
