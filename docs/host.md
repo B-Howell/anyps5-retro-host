@@ -37,6 +37,7 @@ through kqueue. On Windows a thread waits on the launcher's process handle.
 | [`src/audio.cpp`](../src/audio.cpp) | Sound output through miniaudio, with the volume, mute and pause |
 | [`tools/package_release.py`](../tools/package_release.py) | Packs, lists and checks a release (see "Releases" below) |
 | [`tools/core_identity.py`](../tools/core_identity.py) | Computes the core build identity from the SwanStation commit (`--swanstation-commit`) or the `cores/lrps2` commit (`--lrps2-commit`) and `cores/patches` without a build, and compares what each system's core reported ([netplay.md](netplay.md) "Core build identity") |
+| [`tests/package_release_test.py`](../tests/package_release_test.py) | Checks which repository and commit the packer names in `SOURCE.txt` ("Releases", "Which source") |
 
 ## Rollback
 
@@ -530,11 +531,30 @@ release can be packed and checked by hand the same way.
   (`licenses/xxHash-BSD-2-Clause.txt`, from the `3rdparty/xxHash` submodule), the Apache-2.0 text for SwanStation's
   Vulkan headers (`licenses/swanstation-vulkan-headers-Apache-2.0.txt`: the
   headers name the licence only by URL, so the workflow fetches SPDX's copy at
-  a fixed tag and checks its sha256), and `SOURCE.txt` naming the host commit,
-  the SwanStation commit and the source archive. Everything sits at the
+  a fixed tag and checks its sha256), and `SOURCE.txt` naming the repository
+  and commit the host is built from, the SwanStation commit and the source
+  archive. Everything sits at the
   top of the zip except the licences. The zip is the same bytes for the same
   inputs (entries sorted by name, one fixed time, fixed permissions), so a
   rebuild can be compared with a release.
+- **Which source.** `SOURCE.txt` names the source that was really built, so a
+  fork's package names the fork, not this repository. The packer reads it
+  from the checkout it runs in, as release tools such as GoReleaser do: the
+  commit is `HEAD`, and the repository is the remote the checked-out branch
+  tracks (or `origin`), written as a public `https://` URL with any user
+  name, password or token left out (`git@host:owner/repo.git` becomes
+  `https://host/owner/repo`). It refuses a checkout whose tracked files have
+  changes that are not committed, a checkout git fails to read, and a remote
+  that is a local path, which would name a folder on the build machine.
+  Packed from a folder with no `.git` of its own (an unpacked source
+  archive), it takes GitHub Actions' `GITHUB_SERVER_URL`/`GITHUB_REPOSITORY`
+  at `GITHUB_SHA`, and
+  elsewhere needs `--host-repository` and `--host-commit`.
+  `--host-repository` also names a repository when the remote is a mirror.
+  The workflow checks that each unpacked `SOURCE.txt` names
+  `$GITHUB_REPOSITORY` at `$GITHUB_SHA`, and
+  [`tests/package_release_test.py`](../tests/package_release_test.py) checks
+  the rules in throwaway git repositories (CI runs it on every system).
 - **Tested with.** `SWANSTATION_COMMIT` in `release.yml` must be the one
   `real-core.yml` tests, and the workflow fails otherwise. Each system's zip
   is unpacked again on its own runner and boots OpenBIOS and the `hello`

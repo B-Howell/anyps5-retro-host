@@ -25,6 +25,7 @@ jobs:
       - run: cmake --build build
       - run: ctest --test-dir build --output-on-failure
       - run: python3 tests/framing_test.py
+      - run: python3 tests/package_release_test.py
       - name: Conformance sessions, with the host's network calls traced
         run: python3 tests/conformance.py --host build/anyps5-retro-host --core build/fake_core.so --log build/host.log --strace build/network.trace
       - name: Host tests, with Mesa's OpenGL for the resolution limits
@@ -76,6 +77,7 @@ jobs:
       - run: cmake --build build
       - run: ctest --test-dir build --output-on-failure
       - run: python3 tests/framing_test.py
+      - run: python3 tests/package_release_test.py
       - run: python3 tests/conformance.py --host build/anyps5-retro-host --core build/fake_core.so --log build/host.log
       - run: python3 tests/host_test.py --host build/anyps5-retro-host --core build/fake_core.so --log build/host.log
       - run: python3 tests/lockstep_test.py --host build/anyps5-retro-host --core build/fake_core.so --log build/host.log
@@ -94,6 +96,7 @@ jobs:
       - run: cmake --build build --config Release
       - run: ctest --test-dir build -C Release --output-on-failure
       - run: python tests/framing_test.py
+      - run: python tests/package_release_test.py
       - run: python tests/conformance.py --host build/Release/anyps5-retro-host.exe --core build/Release/fake_core.dll --log build/host.log
       - run: python tests/host_test.py --host build/Release/anyps5-retro-host.exe --core build/Release/fake_core.dll --log build/host.log
       - run: python tests/lockstep_test.py --host build/Release/anyps5-retro-host.exe --core build/Release/fake_core.dll --log build/host.log
