@@ -211,7 +211,9 @@ runs each step as it comes, `paced` `false`), so that clock must run at the
 game's own rate. A PS1 game does not always run at 60 frames a second:
 SwanStation gives the vertical frequency of the video mode the game set,
 about 60 for NTSC and 50 for PAL (a European game sets PAL), and gives a new
-one when the game changes its mode. A clock fixed at 60 would run a PAL game
+one when the game changes its mode. At 631f0fb `real_core.py` measured
+59.817 for a progressive NTSC mode and 49.747 for a PAL mode, the same on
+Windows, Linux and macOS (release run 43790112529). A clock fixed at 60 would run a PAL game
 a fifth too fast, and an NTSC game slightly off its console's rate.
 
 RetroArch paces its main loop to the core's `retro_system_av_info`
