@@ -511,10 +511,11 @@ release can be packed and checked by hand the same way.
   tracks (or `origin`), written as a public `https://` URL with any user
   name, password or token left out (`git@host:owner/repo.git` becomes
   `https://host/owner/repo`). It refuses a checkout whose tracked files have
-  changes that are not committed, and a remote that is a local path, which
-  would name a folder on the build machine. Packed from a folder that is not
-  a git checkout of its own (an unpacked source archive), it takes GitHub
-  Actions' `GITHUB_SERVER_URL`/`GITHUB_REPOSITORY` at `GITHUB_SHA`, and
+  changes that are not committed, a checkout git fails to read, and a remote
+  that is a local path, which would name a folder on the build machine.
+  Packed from a folder with no `.git` of its own (an unpacked source
+  archive), it takes GitHub Actions' `GITHUB_SERVER_URL`/`GITHUB_REPOSITORY`
+  at `GITHUB_SHA`, and
   elsewhere needs `--host-repository` and `--host-commit`.
   `--host-repository` also names a repository when the remote is a mirror.
   The workflow checks that each unpacked `SOURCE.txt` names

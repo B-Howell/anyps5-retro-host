@@ -20,11 +20,11 @@ time, and fixed permissions.
 SOURCE.txt names the repository and the commit the host is built from, read from this checkout:
 the commit is HEAD, and the repository is the URL of the remote the checked-out branch tracks (or
 of origin), written as a public https URL without any user name or password. A checkout whose
-tracked files differ from HEAD is refused, since its source is no commit. When this folder is not
-the top of a git checkout (an unpacked source archive, even inside another repository), they come
-from GitHub Actions (GITHUB_SERVER_URL/GITHUB_REPOSITORY at GITHUB_SHA). --host-repository
-names the repository instead (for a remote that is a mirror), and --host-commit names the commit
-when there is no checkout; with a checkout it must be HEAD.
+tracked files differ from HEAD is refused, since its source is no commit, and so is one git fails
+to read. When this folder has no .git of its own (an unpacked source archive, even inside another
+repository), they come from GitHub Actions (GITHUB_SERVER_URL/GITHUB_REPOSITORY at GITHUB_SHA).
+--host-repository names the repository instead (for a remote that is a mirror), and --host-commit
+names the commit when there is no checkout; with a checkout it must be HEAD.
 
     python3 tools/package_release.py --sums <folder> <file>...
 
@@ -79,10 +79,15 @@ def public_url(remote):
         host, path, port = scp.group(1), scp.group(2), None
     else:
         parts = urlsplit(remote)
+        try:
+            port = parts.port if parts.scheme == 'https' else None
+        except ValueError:
+            return None
         if parts.scheme not in ('https', 'ssh', 'git', 'git+ssh', 'ssh+git') or not parts.hostname:
             return None
         host, path = parts.hostname, parts.path
-        port = parts.port if parts.scheme == 'https' else None
+        if ':' in host:
+            host = f'[{host}]'
     path = path.strip('/')
     if path.endswith('.git'):
         path = path[:-4]
@@ -91,18 +96,24 @@ def public_url(remote):
     return f'https://{host.lower()}{f":{port}" if port else ""}/{path}'
 
 
-def git(root, *arguments):
+def git(root, *arguments, unset=False):
+    """What git prints for the checkout at root. A failure stops the packing, so a checkout git
+    cannot read is never taken for a clean one; with unset, exit status 1 (nothing set) is None."""
     try:
         result = subprocess.run(['git', '-C', str(root), *arguments], capture_output=True, text=True)
-    except OSError:
+    except OSError as error:
+        raise SystemExit(f'the host is packed from a git checkout, but git cannot be run: {error}')
+    if unset and result.returncode == 1:
         return None
-    return result.stdout.strip() if result.returncode == 0 else None
+    if result.returncode != 0:
+        raise SystemExit(f'git {" ".join(arguments)} failed in the checkout: {result.stderr.strip()}')
+    return result.stdout.strip()
 
 
 def checkout_remote(root):
-    branch = git(root, 'symbolic-ref', '-q', '--short', 'HEAD')
-    remotes = (git(root, 'remote') or '').split()
-    tracked = git(root, 'config', f'branch.{branch}.remote') if branch else None
+    branch = git(root, 'symbolic-ref', '-q', '--short', 'HEAD', unset=True)
+    remotes = git(root, 'remote').split()
+    tracked = git(root, 'config', f'branch.{branch}.remote', unset=True) if branch else None
     for name in (tracked, 'origin', remotes[0] if len(remotes) == 1 else None):
         if name and name in remotes:
             return git(root, 'remote', 'get-url', name)
@@ -111,9 +122,11 @@ def checkout_remote(root):
 
 def host_source(root, repository=None, commit=None, environment=os.environ):
     """The repository URL and commit SOURCE.txt names, as the module's docstring says."""
-    top = git(root, 'rev-parse', '--show-toplevel')
-    own = top is not None and os.path.samefile(top, root)
-    head = git(root, 'rev-parse', '--verify', '-q', 'HEAD^{commit}') if own else None
+    head = None
+    if (Path(root) / '.git').exists():
+        if not os.path.samefile(git(root, 'rev-parse', '--show-toplevel'), root):
+            raise SystemExit('git does not read the checkout as the folder it is in')
+        head = git(root, 'rev-parse', '--verify', 'HEAD^{commit}')
     if head:
         if git(root, 'status', '--porcelain', '--untracked-files=no'):
             raise SystemExit('the checkout has changes that are not committed, so its source is no commit')
