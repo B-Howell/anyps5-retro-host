@@ -5,7 +5,7 @@
 
     python3 tools/package_release.py --version 1.0.0 --system windows-x64 --host <host> --core <core>
         --core-licence <SwanStation's LICENSE> [--core-notices <SwanStation's dep folder>]
-        --swanstation-commit <sha> --host-commit <sha> --out <folder>
+        --swanstation-commit <sha> [--host-repository <url>] [--host-commit <sha>] --out <folder>
 
 writes anyps5-retro-host-<version>-<system>.zip and anyps5-retro-host-<version>-<system>.files into
 <folder>. The zip holds the host, SwanStation, their licences and xxHash's (the host builds xxHash in,
@@ -16,6 +16,15 @@ licenses/NAME; the .files lists
 every file in the zip as `shasum -a 256` prints it, `<64 hex digits>  <name>`, with `/` between
 directories. The zip is the same bytes for the same inputs: entries sorted by name, one fixed
 time, and fixed permissions.
+
+SOURCE.txt names the repository and the commit the host is built from, read from this checkout:
+the commit is HEAD, and the repository is the URL of the remote the checked-out branch tracks (or
+of origin), written as a public https URL without any user name or password. A checkout whose
+tracked files differ from HEAD is refused, since its source is no commit. When this folder is not
+the top of a git checkout (an unpacked source archive, even inside another repository), they come
+from GitHub Actions (GITHUB_SERVER_URL/GITHUB_REPOSITORY at GITHUB_SHA). --host-repository
+names the repository instead (for a remote that is a mirror), and --host-commit names the commit
+when there is no checkout; with a checkout it must be HEAD.
 
     python3 tools/package_release.py --sums <folder> <file>...
 
@@ -31,10 +40,13 @@ exactly the files its .files lists, with those digests.
 
 import argparse
 import hashlib
+import os
 import re
+import subprocess
 import sys
 import zipfile
 from pathlib import Path
+from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parent.parent
 SYSTEMS = {
@@ -58,12 +70,83 @@ def sums_text(entries):
     return ''.join(f'{digest}  {name}\n' for name, digest in ordered)
 
 
-def source_text(version, system, host_commit, swanstation_commit):
+def public_url(remote):
+    """The https URL a git remote's repository is published at, or None for one that has none (a
+    local path or file:// remote). A user name, password or token in the remote is left out."""
+    remote = remote.strip()
+    scp = re.match(r'^(?:[^@/:]+@)?([^@/:]{2,}):(?!//)(.+)$', remote)
+    if '://' not in remote and scp:
+        host, path, port = scp.group(1), scp.group(2), None
+    else:
+        parts = urlsplit(remote)
+        if parts.scheme not in ('https', 'ssh', 'git', 'git+ssh', 'ssh+git') or not parts.hostname:
+            return None
+        host, path = parts.hostname, parts.path
+        port = parts.port if parts.scheme == 'https' else None
+    path = path.strip('/')
+    if path.endswith('.git'):
+        path = path[:-4]
+    if not path:
+        return None
+    return f'https://{host.lower()}{f":{port}" if port else ""}/{path}'
+
+
+def git(root, *arguments):
+    try:
+        result = subprocess.run(['git', '-C', str(root), *arguments], capture_output=True, text=True)
+    except OSError:
+        return None
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
+def checkout_remote(root):
+    branch = git(root, 'symbolic-ref', '-q', '--short', 'HEAD')
+    remotes = (git(root, 'remote') or '').split()
+    tracked = git(root, 'config', f'branch.{branch}.remote') if branch else None
+    for name in (tracked, 'origin', remotes[0] if len(remotes) == 1 else None):
+        if name and name in remotes:
+            return git(root, 'remote', 'get-url', name)
+    return None
+
+
+def host_source(root, repository=None, commit=None, environment=os.environ):
+    """The repository URL and commit SOURCE.txt names, as the module's docstring says."""
+    top = git(root, 'rev-parse', '--show-toplevel')
+    own = top is not None and os.path.samefile(top, root)
+    head = git(root, 'rev-parse', '--verify', '-q', 'HEAD^{commit}') if own else None
+    if head:
+        if git(root, 'status', '--porcelain', '--untracked-files=no'):
+            raise SystemExit('the checkout has changes that are not committed, so its source is no commit')
+        if commit and commit != head:
+            raise SystemExit(f"--host-commit {commit} is not the checkout's HEAD, {head}")
+        commit = head
+        if repository is None:
+            remote = checkout_remote(root)
+            repository = public_url(remote) if remote else None
+            if remote and repository is None:
+                raise SystemExit("the checkout's remote is not a published repository; "
+                                 'name it with --host-repository')
+    if environment.get('GITHUB_ACTIONS') == 'true' and environment.get('GITHUB_REPOSITORY'):
+        server = environment.get('GITHUB_SERVER_URL', 'https://github.com').rstrip('/')
+        repository = repository or f'{server}/{environment["GITHUB_REPOSITORY"]}'
+        commit = commit or environment.get('GITHUB_SHA')
+    if repository is not None:
+        repository = public_url(repository)
+    if not repository:
+        raise SystemExit('cannot tell which repository the host is built from; '
+                         'name it with --host-repository')
+    if not commit or not COMMIT.match(commit):
+        raise SystemExit('cannot tell which commit the host is built from; '
+                         'build from a git checkout or name it with --host-commit')
+    return repository, commit
+
+
+def source_text(version, system, host_repository, host_commit, swanstation_commit):
     return (
         f'anyps5-retro-host {version} for {system}\n'
         '\n'
         'anyps5-retro-host (GPL-2.0-or-later) is built from\n'
-        f'https://github.com/AnyTogether/anyps5-retro-host at commit {host_commit}.\n'
+        f'{host_repository} at commit {host_commit}.\n'
         '\n'
         'swanstation_libretro (GPL-3.0) is SwanStation, built from\n'
         f'https://github.com/libretro/swanstation at commit {swanstation_commit},\n'
@@ -77,7 +160,7 @@ def source_text(version, system, host_commit, swanstation_commit):
     )
 
 
-def release_files(args):
+def release_files(args, host_repository, host_commit):
     host_name, core_name = SYSTEMS[args.system]
     host_licence = ROOT / 'LICENSES' / 'GPL-2.0-or-later.txt'
     xxhash_licence = ROOT / '3rdparty' / 'xxHash' / 'LICENSE'
@@ -88,7 +171,8 @@ def release_files(args):
         ('licenses/xxHash-BSD-2-Clause.txt', xxhash_licence.read_bytes(), PLAIN),
         ('licenses/swanstation-GPL-3.0.txt', Path(args.core_licence).read_bytes(), PLAIN),
         ('SOURCE.txt',
-         source_text(args.version, args.system, args.host_commit, args.swanstation_commit).encode('utf-8'),
+         source_text(args.version, args.system, host_repository, host_commit,
+                     args.swanstation_commit).encode('utf-8'),
          PLAIN),
         *dependency_notices(args.core_notices),
         *extra_notices(args.notice),
@@ -135,12 +219,14 @@ def package(args):
     if not VERSION.match(args.version):
         raise SystemExit('--version must be <major>.<minor>.<patch>')
     for name in ('host_commit', 'swanstation_commit'):
-        if not COMMIT.match(getattr(args, name)):
+        value = getattr(args, name)
+        if value is not None and not COMMIT.match(value):
             raise SystemExit(f'--{name.replace("_", "-")} must be a full commit hash')
+    host_repository, host_commit = host_source(ROOT, args.host_repository, args.host_commit)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     stem = f'anyps5-retro-host-{args.version}-{args.system}'
-    files = release_files(args)
+    files = release_files(args, host_repository, host_commit)
     write_zip(out / f'{stem}.zip', files)
     (out / f'{stem}.files').write_bytes(sums_text([(name, sha256(data)) for name, data, _ in files]).encode('utf-8'))
     print(f'{stem}.zip and {stem}.files written to {out}')
@@ -227,6 +313,7 @@ def main():
     parser.add_argument('--core-licence')
     parser.add_argument('--core-notices', metavar='FOLDER')
     parser.add_argument('--notice', action='append', metavar='NAME=PATH')
+    parser.add_argument('--host-repository', metavar='URL')
     parser.add_argument('--host-commit')
     parser.add_argument('--swanstation-commit')
     parser.add_argument('--out')
@@ -238,10 +325,10 @@ def main():
     if args.check:
         check(args.check)
         return
-    missing = [name for name in ('version', 'system', 'host', 'core', 'core_licence', 'host_commit',
+    missing = [name for name in ('version', 'system', 'host', 'core', 'core_licence',
                                  'swanstation_commit', 'out') if getattr(args, name) is None]
     if missing or args.files:
-        parser.error('packing needs --version, --system, --host, --core, --core-licence, --host-commit, '
+        parser.error('packing needs --version, --system, --host, --core, --core-licence, '
                      '--swanstation-commit and --out, and no other file')
     package(args)
 
